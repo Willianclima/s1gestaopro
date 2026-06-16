@@ -1,0 +1,2075 @@
+import React, { useState, useRef } from "react";
+import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser } from "../types";
+import { 
+  FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
+  Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download
+} from "lucide-react";
+import { jsPDF } from "jspdf";
+
+interface ServiceOrdersProps {
+  orders: ServiceOrder[];
+  clients: Client[];
+  categories: string[];
+  professionalsList: Professional[]; // Full list of professionals with specialties
+  onAddOrder: (order: ServiceOrder) => void;
+  onUpdateOrder: (order: ServiceOrder) => void;
+  onDeleteOrder: (id: string) => void;
+  onOpenAiAssistantWithOS?: (os: ServiceOrder) => void;
+  currentUser?: CurrentUser;
+}
+
+// Preset physical problem images for easy testing/illustration
+const PRESET_IMAGES = [
+  { name: "Cabo Rompido", url: "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&q=80&w=400" },
+  { name: "Motor Aquecido", url: "https://images.unsplash.com/photo-1574634534894-89d7576c8259?auto=format&fit=crop&q=80&w=400" },
+  { name: "Placa Carbonizada", url: "https://images.unsplash.com/photo-1601524909162-be87252be298?auto=format&fit=crop&q=80&w=400" },
+  { name: "Vazamento Interno", url: "https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?auto=format&fit=crop&q=80&w=400" }
+];
+
+// Preset images of successfully completed tasks
+const PRESET_COMPLETED_IMAGES = [
+  { name: "Motor Reparado", url: "https://images.unsplash.com/photo-1486006920555-c77dce18193b?auto=format&fit=crop&q=80&w=400" },
+  { name: "Quadro Elétrico Recomposto", url: "https://images.unsplash.com/photo-1558346490-a72e53ae2d4f?auto=format&fit=crop&q=80&w=400" },
+  { name: "Ar Condicionado Higienizado", url: "https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&q=80&w=400" },
+  { name: "Medição de Voltagem OK", url: "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=400" }
+];
+
+export default function ServiceOrders({ 
+  orders, clients, categories, professionalsList, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser
+}: ServiceOrdersProps) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("todos");
+  
+  // Modal controllers
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
+  const [isInitiatingService, setIsInitiatingService] = useState(false);
+  const [isFlaggingMaterial, setIsFlaggingMaterial] = useState(false);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
+  
+  // New States for Completed service flow including photographs
+  const [isCompletingService, setIsCompletingService] = useState(false);
+  const [completionImages, setCompletionImages] = useState<string[]>([]);
+  const [completionImageUrlInput, setCompletionImageUrlInput] = useState("");
+  const completionFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Form Fields
+  const [clientId, setClientId] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [status, setStatus] = useState<OSStatus>("aberto");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
+  const [endDate, setEndDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [previewImages, setPreviewImages] = useState<string[]>([]);
+  const [serviceLocation, setServiceLocation] = useState("");
+  const [locationSearchResults, setLocationSearchResults] = useState<{ id: string; display: string; full: string }[]>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const [cepError, setCepError] = useState("");
+  
+  // Auxiliary image URL input
+  const [imageUrlInput, setImageUrlInput] = useState("");
+
+  // Status Log helpers in details modal (interactive responsiveness before and after initiation)
+  const [newLogComment, setNewLogComment] = useState("");
+  const [responderRole, setResponderRole] = useState<'atendente' | 'profissional'>('atendente');
+
+  // Initiate technical choice states
+  const [selectedProfName, setSelectedProfName] = useState("");
+
+  // Flag material states
+  const [missingMaterialText, setMissingMaterialText] = useState("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const getClientName = (id: string) => {
+    const c = clients.find(cl => cl.id === id);
+    return c ? c.name : "Requisitante Desconhecido";
+  };
+
+  const getClientObj = (id: string) => {
+    return clients.find(cl => cl.id === id);
+  };
+
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+
+  const asciiOnly = (str: string) => {
+    if (!str) return "";
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  };
+
+  const generateOrderPDF = (order: ServiceOrder, client: Client | undefined) => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    // 1. Header (Banner/Logo)
+    doc.setFillColor(15, 23, 42); // slate-900 background for top header
+    doc.rect(0, 0, 210, 38, 'F');
+
+    // App Logo text
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(22);
+    doc.text("REQUISICAOPRO", 15, 16);
+
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(156, 163, 175); // light gray
+    doc.text("SISTEMA DE GESTAO TECNICA INTEGRADA", 15, 22);
+    doc.text("SUSTENTABILIDADE E EFICIENCIA OPERACIONAL", 15, 26);
+
+    // Badge containing OS ID
+    doc.setFillColor(79, 70, 229); // Indigo badge for order ID
+    doc.roundedRect(145, 10, 50, 14, 2, 2, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(`REQUISICAO`, 170, 15, { align: "center" });
+    doc.setFontSize(11);
+    doc.text(`#${order.id}`, 170, 21, { align: "center" });
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text(`Gerado em: ${new Date().toLocaleDateString("pt-BR")} as ${new Date().toLocaleTimeString("pt-BR")}`, 145, 30);
+
+    // 2. Sections Setup
+    let currentY = 48;
+
+    // Title of the report
+    doc.setFillColor(241, 245, 249);
+    doc.rect(15, currentY, 180, 8, 'F');
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(15, currentY, 180, 8, 'S');
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("VIA DE ATENDIMENTO TECNICO / FICHA DE EXECUCAO", 105, currentY + 5.5, { align: "center" });
+
+    currentY += 14;
+
+    // Draw Two-Column Section for Client and Technical details
+    // Left: Requisitante Details
+    doc.setFillColor(248, 250, 252);
+    doc.rect(15, currentY, 87, 44, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(15, currentY, 87, 44, 'S');
+
+    // Title
+    doc.setFillColor(226, 232, 240);
+    doc.rect(15, currentY, 87, 6, 'F');
+    doc.setTextColor(51, 65, 85);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(8);
+    doc.text("DADOS DO REQUISITANTE / GESTOR", 18, currentY + 4);
+
+    // Content
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(8);
+    let detailY = currentY + 11;
+    doc.text(`Nome: ${asciiOnly(client?.name || "Desconhecido")}`, 18, detailY);
+    detailY += 5;
+    doc.text(`Documento: ${asciiOnly(client?.document || "N/A")}`, 18, detailY);
+    detailY += 5;
+    doc.text(`Perfil: ${client?.userType === "gestor" ? "Gestor" : "Requisitante"}`, 18, detailY);
+    detailY += 5;
+    doc.text(`Telefone: ${asciiOnly(client?.phone || "Nao cadastrado")}`, 18, detailY);
+    detailY += 5;
+    const finalAddress = order.location || client?.address || "Nao cadastrado";
+    const addressText = doc.splitTextToSize(`End.: ${asciiOnly(finalAddress)}`, 81);
+    doc.text(addressText, 18, detailY);
+
+    // Right: Operation Details
+    doc.setFillColor(248, 250, 252);
+    doc.rect(108, currentY, 87, 44, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(108, currentY, 87, 44, 'S');
+
+    // Title
+    doc.setFillColor(226, 232, 240);
+    doc.rect(108, currentY, 87, 6, 'F');
+    doc.setTextColor(51, 65, 85);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(8);
+    doc.text("DADOS MESTRES DA OPERACAO", 111, currentY + 4);
+
+    // Content
+    doc.setTextColor(15, 23, 42);
+    detailY = currentY + 11;
+    doc.text(`Categoria: ${asciiOnly(order.category)}`, 111, detailY);
+    detailY += 5;
+    
+    // Status with a nice visual label
+    doc.setFont("Helvetica", "bold");
+    doc.text(`Status Atual:`, 111, detailY);
+    const statusU = order.status.toUpperCase();
+    if (order.status === "concluido") {
+      doc.setTextColor(16, 185, 129); // Emerald
+    } else if (order.status === "em_progresso") {
+      doc.setTextColor(59, 130, 246); // Blue
+    } else if (order.status === "aguardando") {
+      doc.setTextColor(245, 158, 11); // Amber
+    } else {
+      doc.setTextColor(100, 116, 139); // Slate
+    }
+    doc.text(`[ ${statusU} ]`, 130, detailY);
+    
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("Helvetica", "normal");
+    detailY += 5;
+    doc.text(`Atribuido Para:`, 111, detailY);
+    doc.setFont("Helvetica", "bold");
+    doc.setTextColor(79, 70, 229); // Indigo
+    doc.text(`${asciiOnly(order.assignedTo || "Pendente de Alocacao")}`, 132, detailY);
+    
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("Helvetica", "normal");
+    detailY += 5;
+    const blockMat = order.hasMissingMaterial ? "SIM (Falta Material)" : "NAO";
+    doc.text(`Bloqueado: ${blockMat}`, 111, detailY);
+    detailY += 5;
+    const dateFormatted = order.endDate ? new Date(order.endDate).toLocaleDateString("pt-BR") : "Nao agendado";
+    doc.text(`Previsao de Conclusao: ${dateFormatted}`, 111, detailY);
+
+    currentY += 49;
+
+    // 3. Service details (Title, symptom/problem)
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    
+    // Estimate height of service description block
+    const descLines = doc.splitTextToSize(asciiOnly(order.description), 172);
+    const blockHeight = 16 + descLines.length * 4.5 + (order.notes ? 18 : 0);
+    
+    doc.rect(15, currentY, 180, Math.max(25, blockHeight), 'F');
+    doc.rect(15, currentY, 180, Math.max(25, blockHeight), 'S');
+
+    doc.setFillColor(226, 232, 240);
+    doc.rect(15, currentY, 180, 6, 'F');
+    doc.setTextColor(51, 65, 85);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(8);
+    doc.text("SINTOMA INFORMADO / ESCOPO DE SERVICO", 18, currentY + 4);
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(9);
+    doc.setFont("Helvetica", "bold");
+    doc.text(`Titulo: ${asciiOnly(order.title)}`, 18, currentY + 11);
+
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(51, 65, 85);
+    doc.text(descLines, 18, currentY + 16.5);
+
+    if (order.notes) {
+      const notesY = currentY + 16.5 + descLines.length * 4.5 + 2;
+      doc.setFillColor(255, 255, 255);
+      doc.rect(18, notesY, 174, 12, 'F');
+      doc.setDrawColor(241, 245, 249);
+      doc.rect(18, notesY, 174, 12, 'S');
+      doc.setTextColor(100, 116, 139);
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(7.5);
+      doc.text("NOTAS ADICIONAIS DE CAMPO:", 21, notesY + 4);
+      doc.setFont("Helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(51, 65, 85);
+      const splitNotes = doc.splitTextToSize(asciiOnly(order.notes), 168);
+      doc.text(splitNotes, 21, notesY + 8);
+    }
+
+    currentY += Math.max(25, blockHeight) + 8;
+
+    // 4. History / Timeline Log
+    if (order.history && order.history.length > 0) {
+      if (currentY > 210) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      
+      const historyHeight = 8 + order.history.length * 15;
+      
+      doc.rect(15, currentY, 180, historyHeight, 'F');
+      doc.rect(15, currentY, 180, historyHeight, 'S');
+
+      doc.setFillColor(226, 232, 240);
+      doc.rect(15, currentY, 180, 6, 'F');
+      doc.setTextColor(51, 65, 85);
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(8);
+      doc.text("HISTORICO DE ALTERACOES & PARECERES TECNICOS", 18, currentY + 4);
+
+      let logY = currentY + 11;
+      order.history.forEach((h) => {
+        doc.setFont("Helvetica", "bold");
+        doc.setFontSize(8);
+        doc.setTextColor(15, 23, 42);
+        const dateH = new Date(h.date).toLocaleString("pt-BR");
+        doc.text(`[${dateH}] Profissional: ${asciiOnly(h.author)} (Status: ${h.status.toUpperCase()})`, 18, logY);
+        
+        doc.setFont("Helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(71, 85, 105);
+        const commentLines = doc.splitTextToSize(asciiOnly(h.comment), 172);
+        doc.text(commentLines, 18, logY + 4);
+        logY += 5 + commentLines.length * 4;
+      });
+
+      currentY += historyHeight + 8;
+    }
+
+    // 5. Signatures Footer
+    const pageHeight = doc.internal.pageSize.getHeight();
+    if (currentY > pageHeight - 45) {
+      doc.addPage();
+      currentY = 30;
+    }
+    
+    const signatureY = pageHeight - 35;
+    doc.setDrawColor(148, 163, 184); // Slate 400
+    doc.setLineDashPattern([2, 2], 0);
+
+    // Line left
+    doc.line(15, signatureY, 95, signatureY);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${asciiOnly(order.assignedTo || "Tecnico Responsavel")}`, 55, signatureY + 4, { align: "center" });
+    doc.setFont("Helvetica", "normal");
+    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(7.5);
+    doc.text("ASSINATURA DO PROFISSIONAL RESPONSAVEL", 55, signatureY + 8, { align: "center" });
+
+    // Line right
+    doc.line(115, signatureY, 195, signatureY);
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${asciiOnly(client?.name || "Representante do Solicitante")}`, 155, signatureY + 4, { align: "center" });
+    doc.setFont("Helvetica", "normal");
+    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(7.5);
+    doc.text("AUTORIZACAO DO REQUISITANTE / GESTOR", 155, signatureY + 8, { align: "center" });
+
+    return doc;
+  };
+
+  React.useEffect(() => {
+    if (isPrintPreviewOpen && selectedOrder) {
+      const client = getClientObj(selectedOrder.clientId);
+      const doc = generateOrderPDF(selectedOrder, client);
+      const pdfBlob = doc.output("blob");
+      const blobUrl = URL.createObjectURL(pdfBlob);
+      setPdfBlobUrl(blobUrl);
+
+      return () => {
+        URL.revokeObjectURL(blobUrl);
+        setPdfBlobUrl(null);
+      };
+    }
+  }, [isPrintPreviewOpen, selectedOrder]);
+
+  const filteredOrders = orders.filter(os => {
+    const clientName = getClientName(os.clientId).toLowerCase();
+    const osTitle = os.title.toLowerCase();
+    const matchesSearch = osTitle.includes(searchTerm.toLowerCase()) || 
+                          clientName.includes(searchTerm.toLowerCase()) || 
+                          os.id.includes(searchTerm);
+    const matchesStatus = statusFilter === "todos" || os.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  const handleLocationSearch = async (query: string) => {
+    if (!query || query.trim().length < 3) {
+      setLocationSearchResults([]);
+      return;
+    }
+
+    setIsSearchingLocation(true);
+    try {
+      // Direct Brazilian search restricted to Araçatuba, SP
+      const fullQuery = `${query}, Araçatuba, SP, Brasil`;
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullQuery)}&addressdetails=1&countrycodes=br&limit=6`,
+        {
+          headers: {
+            "Accept-Language": "pt-BR,pt;q=0.9"
+          }
+        }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.map((item: any) => {
+          const parts = item.display_name.split(",");
+          // take up to 4 parts to look cleaner in dropdown
+          const shortName = parts.slice(0, 4).join(",").trim();
+          return {
+            id: item.place_id,
+            display: shortName,
+            full: item.display_name
+          };
+        });
+        setLocationSearchResults(results);
+      }
+    } catch (err) {
+      console.error("Erro Nominatim:", err);
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const handleCepLookup = async (cepValue: string) => {
+    const cleanCep = cepValue.replace(/\D/g, "");
+    if (cleanCep.length !== 8) {
+      setCepError("CEP inválido (deve conter 8 dígitos)");
+      return;
+    }
+
+    setIsSearchingLocation(true);
+    setCepError("");
+    try {
+      const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.erro) {
+          setCepError("CEP não localizado");
+        } else {
+          const city = data.localidade || "";
+          const uf = data.uf || "";
+          const addressString = [
+            data.logradouro,
+            data.bairro,
+            city,
+            uf
+          ].filter(Boolean).join(", ");
+          
+          setServiceLocation(addressString);
+          setCepError("");
+
+          if (city.toLowerCase() !== "araçatuba" && city.toLowerCase() !== "aracatuba") {
+            setCepError(`Aviso: CEP de ${city} - ${uf}. Certifique-se que o serviço é em Araçatuba.`);
+          }
+        }
+      } else {
+        setCepError("Falha do webservice ViaCEP");
+      }
+    } catch (err) {
+      console.error("ViaCEP error:", err);
+      setCepError("Erro na busca de CEP");
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const openForm = (os?: ServiceOrder) => {
+    setCepError("");
+    setLocationSearchResults([]);
+    if (os) {
+      setEditingOrder(os);
+      setClientId(os.clientId);
+      setTitle(os.title);
+      setDescription(os.description);
+      setCategory(os.category);
+      setStatus(os.status);
+      setAssignedTo(os.assignedTo);
+      setStartDate(os.startDate);
+      setEndDate(os.endDate);
+      setNotes(os.notes);
+      setPreviewImages(os.images || []);
+      setServiceLocation(os.location || "");
+    } else {
+      setEditingOrder(null);
+      setClientId(currentUser && currentUser.userType === "requisitante" ? currentUser.id : (clients[0]?.id || ""));
+      setTitle("");
+      setDescription("");
+      setCategory(categories[0] || "");
+      setStatus("aberto");
+      setAssignedTo("");
+      setStartDate(new Date().toISOString().split("T")[0]);
+      setEndDate("");
+      setNotes("");
+      setPreviewImages([]);
+      setServiceLocation("");
+    }
+    setIsFormOpen(true);
+  };
+
+  // Base64 File Uploader hook
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach((file: File) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          setPreviewImages(prev => [...prev, reader.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleInsertPresetImage = (url: string) => {
+    setPreviewImages(prev => [...prev, url]);
+  };
+
+  const handleAddImageUrlInput = () => {
+    if (imageUrlInput.trim()) {
+      setPreviewImages(prev => [...prev, imageUrlInput.trim()]);
+      setImageUrlInput("");
+    }
+  };
+
+  const handleRemoveImageIndex = (idx: number) => {
+    setPreviewImages(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientId || !title.trim()) return;
+
+    if (editingOrder) {
+      const updatedOS: ServiceOrder = {
+        ...editingOrder,
+        clientId,
+        title,
+        description,
+        category,
+        status,
+        assignedTo,
+        startDate,
+        endDate: endDate || startDate,
+        notes,
+        location: serviceLocation,
+        images: previewImages
+      };
+      
+      if (editingOrder.status !== status) {
+        updatedOS.history = [
+          ...editingOrder.history,
+          {
+            id: "h-" + Math.random().toString(36).substr(2, 9),
+            status: status,
+            comment: `Status de requisição alterado manualmente na edição para: ${status}`,
+            date: new Date().toISOString(),
+            author: "atendente"
+          }
+        ];
+      }
+      
+      onUpdateOrder(updatedOS);
+    } else {
+      const newOSId = "req-" + (1000 + orders.length + 1);
+      const newOS: ServiceOrder = {
+        id: newOSId,
+        clientId,
+        title,
+        description,
+        category,
+        status: "aberto", // Default is open
+        assignedTo: "", // Start unassigned
+        startDate,
+        endDate: endDate || startDate,
+        notes,
+        location: serviceLocation,
+        createdAt: new Date().toISOString(),
+        images: previewImages,
+        hasMissingMaterial: false,
+        history: [
+          {
+            id: "h-init",
+            status: "aberto",
+            comment: "Requisição cadastrada e aguardando triagem técnico-operacional.",
+            date: new Date().toISOString(),
+            author: "atendente"
+          }
+        ]
+      };
+      onAddOrder(newOS);
+    }
+
+    setIsFormOpen(false);
+    setEditingOrder(null);
+  };
+
+  // Attendant / Professional message reply thread interaction (antes e depois de iniciar)
+  const handleAddResponsiveReply = () => {
+    if (!selectedOrder || !newLogComment.trim()) return;
+
+    const newLog: OSHistoryLog = {
+      id: "h-" + Math.random().toString(36).substr(2, 9),
+      // keep current status or use same
+      status: selectedOrder.status,
+      comment: newLogComment,
+      date: new Date().toISOString(),
+      author: responderRole
+    };
+
+    const isAtendente = responderRole === 'atendente';
+
+    const updatedOrder: ServiceOrder = {
+      ...selectedOrder,
+      history: [...selectedOrder.history, newLog],
+      unreadByClient: isAtendente ? false : true,
+      unreadByProfessional: isAtendente ? (selectedOrder.assignedTo ? true : false) : false
+    };
+
+    onUpdateOrder(updatedOrder);
+    setSelectedOrder(updatedOrder);
+    setNewLogComment("");
+  };
+
+  // INICIAR ATENDIMENTO: List filtered/recommended professionals by specialty compatibility
+  const handleOpenInitiateFlow = () => {
+    if (!selectedOrder) return;
+    // Clear selection so the system forces user to select a professional before starting
+    setSelectedProfName("");
+    setIsInitiatingService(true);
+  };
+
+  const handleConfirmInitiateService = () => {
+    if (!selectedOrder || !selectedProfName) return;
+
+    const updatedOrder: ServiceOrder = {
+      ...selectedOrder,
+      status: "em_progresso",
+      assignedTo: selectedProfName,
+      history: [
+        ...selectedOrder.history,
+        {
+          id: "h-" + Math.random().toString(36).substr(2, 9),
+          status: "em_progresso",
+          comment: `Atendimento iniciado. Profissional designado: ${selectedProfName} (${
+            professionalsList.find(p => p.name === selectedProfName)?.specialty || "Geral"
+          })`,
+          date: new Date().toISOString(),
+          author: "atendente"
+        }
+      ]
+    };
+
+    onUpdateOrder(updatedOrder);
+    setSelectedOrder(updatedOrder);
+    setIsInitiatingService(false);
+  };
+
+  // SINALIZAR FALTA DE MATERIAL DO CLIENTE
+  const handleConfirmMaterialFlag = () => {
+    if (!selectedOrder || !missingMaterialText.trim()) return;
+
+    const updatedOrder: ServiceOrder = {
+      ...selectedOrder,
+      status: "aguardando",
+      hasMissingMaterial: true,
+      missingMaterialDescription: missingMaterialText,
+      history: [
+        ...selectedOrder.history,
+        {
+          id: "h-" + Math.random().toString(36).substr(2, 9),
+          status: "aguardando",
+          comment: `SINALIZAÇÃO DE FALTA DE MATERIAL: O técnico relatou que o cliente não tem o determinado material e deve providenciar: "${missingMaterialText}" para que seja possível finalizar os serviços.`,
+          date: new Date().toISOString(),
+          author: "profissional"
+        }
+      ]
+    };
+
+    onUpdateOrder(updatedOrder);
+    setSelectedOrder(updatedOrder);
+    setIsFlaggingMaterial(false);
+    setMissingMaterialText("");
+  };
+
+  const handleResolveMaterialFlag = () => {
+    if (!selectedOrder) return;
+
+    const updatedOrder: ServiceOrder = {
+      ...selectedOrder,
+      status: "em_progresso",
+      hasMissingMaterial: false,
+      missingMaterialDescription: undefined,
+      history: [
+        ...selectedOrder.history,
+        {
+          id: "h-" + Math.random().toString(36).substr(2, 9),
+          status: "em_progresso",
+          comment: `Material fornecido pelo cliente. Retomando a execução dos serviços.`,
+          date: new Date().toISOString(),
+          author: "atendente"
+        }
+      ]
+    };
+
+    onUpdateOrder(updatedOrder);
+    setSelectedOrder(updatedOrder);
+  };
+
+  const handleMarkAsCompleted = () => {
+    if (!selectedOrder) return;
+    // Open the photo attachment completion sub-section
+    setIsCompletingService(true);
+    setCompletionImages([]); // clean previous
+  };
+
+  const handleCompletionImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach((file: File) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          setCompletionImages(prev => [...prev, reader.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleInsertCompletionPresetImage = (url: string) => {
+    setCompletionImages(prev => [...prev, url]);
+  };
+
+  const handleAddCompletionImageUrlInput = () => {
+    if (completionImageUrlInput.trim()) {
+      setCompletionImages(prev => [...prev, completionImageUrlInput.trim()]);
+      setCompletionImageUrlInput("");
+    }
+  };
+
+  const handleRemoveCompletionImageIndex = (idx: number) => {
+    setCompletionImages(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleConfirmCompletionWithPhoto = () => {
+    if (!selectedOrder) return;
+
+    const updatedOrder: ServiceOrder = {
+      ...selectedOrder,
+      status: "concluido",
+      endDate: new Date().toISOString().split("T")[0],
+      completedImages: completionImages.length > 0 ? completionImages : undefined,
+      history: [
+        ...selectedOrder.history,
+        {
+          id: "h-" + Math.random().toString(36).substr(2, 9),
+          status: "concluido",
+          comment: `Atendimento finalizado com êxito.${completionImages.length > 0 ? " Foto(s) de comprovação técnica do serviço concluído anexada(s)." : " Nenhuma foto de finalização fornecida."}`,
+          date: new Date().toISOString(),
+          author: "profissional"
+        }
+      ]
+    };
+
+    onUpdateOrder(updatedOrder);
+    setSelectedOrder(updatedOrder);
+    setIsCompletingService(false);
+    setCompletionImages([]);
+  };
+
+  const handleCancelService = () => {
+    if (!selectedOrder) return;
+    if (!confirm("Tem certeza que deseja cancelar essa requisição?")) return;
+
+    const updatedOrder: ServiceOrder = {
+      ...selectedOrder,
+      status: "cancelado",
+      history: [
+        ...selectedOrder.history,
+        {
+          id: "h-" + Math.random().toString(36).substr(2, 9),
+          status: "cancelado",
+          comment: "Requisição cancelada por inviabilidade técnica ou solicitação direta do requisitante.",
+          date: new Date().toISOString(),
+          author: "atendente"
+        }
+      ]
+    };
+
+    onUpdateOrder(updatedOrder);
+    setSelectedOrder(updatedOrder);
+  };
+
+  return (
+    <div className="space-y-6">
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #print-area, #print-area * {
+            visibility: visible;
+          }
+          #print-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+          }
+        }
+      `}</style>
+
+      {/* Header controls */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Requisições de Serviço</h1>
+          <p className="text-sm text-slate-500 font-medium">Controle operacional de ordens e chamados técnicos. Sem movimentação financeira.</p>
+        </div>
+
+        <button
+          onClick={() => openForm()}
+          className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider py-3 px-5 rounded-xl shadow-lg shadow-slate-950/5 active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
+        >
+          <Plus className="w-4 h-4 text-emerald-400" />
+          Nova Abrir Requisição
+        </button>
+      </div>
+
+      {/* Filter and Search Bar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs flex flex-col md:flex-row gap-4 items-stretch md:items-center">
+        {/* Search */}
+        <div className="flex-1 relative">
+          <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            className="w-full text-xs border border-slate-200 rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700"
+            placeholder="Buscar por código, chamados técnicos, diagnóstico ou requisitante..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        {/* Status filters */}
+        <div className="flex bg-slate-50 p-1 rounded-xl border border-slate-100 gap-1 overflow-x-auto">
+          {[
+            { id: "todos", label: "Todos os Status" },
+            { id: "aberto", label: "Abertos" },
+            { id: "em_progresso", label: "Em Execução" },
+            { id: "aguardando", label: "Aguardando Material" },
+            { id: "concluido", label: "Concluídos" },
+            { id: "cancelado", label: "Cancelados" }
+          ].map(st => (
+            <button
+              key={st.id}
+              onClick={() => setStatusFilter(st.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                statusFilter === st.id
+                  ? "bg-white text-slate-800 shadow-xs"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {st.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Grid List */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-bold text-[11px] uppercase tracking-wider">
+                <th className="px-6 py-4">ID Requisição</th>
+                <th className="px-6 py-4">Serviço Solicitado / Requisitante</th>
+                <th className="px-6 py-4">Categoria Técnica</th>
+                <th className="px-6 py-4">Status / Alertas</th>
+                <th className="px-6 py-4">Técnico Atribuído</th>
+                <th className="px-6 py-4 text-center">Atendimento</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+              {filteredOrders.length > 0 ? (
+                filteredOrders.map(os => {
+                  const client = clients.find(cl => cl.id === os.clientId);
+                  return (
+                    <tr key={os.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 font-mono text-slate-400 font-bold">
+                        {os.id}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="max-w-[280px]">
+                          <span className="font-bold text-slate-850 text-sm block truncate hover:text-slate-900 duration-150" title={os.title}>
+                            {os.title}
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-medium block truncate mt-0.5">
+                            Requisitante: {client ? client.name : "Desconhecido"}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="px-2.5 py-1 rounded-xl text-[10px] uppercase font-bold bg-slate-100 text-slate-700">
+                          {os.category}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col gap-1 items-start">
+                          <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                            os.status === "concluido" ? "bg-green-100 text-green-800" :
+                            os.status === "em_progresso" ? "bg-blue-100 text-blue-800" :
+                            os.status === "aguardando" ? "bg-amber-100 text-amber-800" :
+                            os.status === "cancelado" ? "bg-red-100 text-red-800" : "bg-slate-100 text-slate-700"
+                          }`}>
+                            {os.status === "concluido" ? "Concluído" :
+                             os.status === "em_progresso" ? "Em Execução" :
+                             os.status === "aguardando" ? "Aguardando Material" :
+                             os.status === "aberto" ? "Aberto / Pendente" : "Cancelado"}
+                          </span>
+
+                          {os.hasMissingMaterial && (
+                            <span className="bg-red-50 text-red-600 border border-red-100 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 animate-pulse">
+                              <AlertTriangle className="w-3 h-3" /> Falta Material do Cliente
+                            </span>
+                          )}
+
+                          {os.unreadByClient && (
+                            <span className="bg-indigo-50 text-indigo-700 border border-indigo-105 border-indigo-150 px-1.5 py-0.5 rounded text-[9px] font-extrabold flex items-center gap-0.5 animate-pulse">
+                              💬 Parecer do Técnico
+                            </span>
+                          )}
+
+                          {os.unreadByProfessional && (
+                            <span className="bg-slate-150 bg-slate-100 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded text-[9px] font-extrabold flex items-center gap-0.5">
+                              💬 Retorno do Gestor
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        {os.assignedTo ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                            <span className="text-slate-700 font-bold">{os.assignedTo}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 italic font-normal">Aguardando alocação técnica</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-2 justify-center">
+                          <button
+                            onClick={() => setSelectedOrder(os)}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                            title="Responder e Ver Histórico"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Interagir</span>
+                          </button>
+
+                          {currentUser?.userType === "gestor" && (
+                            <>
+                              <button
+                                onClick={() => openForm(os)}
+                                className="p-2 hover:bg-slate-150 rounded-lg text-slate-400 hover:text-slate-800 transition-colors"
+                                title="Editar requisição"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  if(confirm(`Remover permanentemente a requisição ${os.id}?`)) {
+                                    onDeleteOrder(os.id);
+                                  }
+                                }}
+                                className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 transition-colors"
+                                title="Deletar permanentemente"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={6} className="text-center py-12 text-slate-400 font-medium">
+                    Nenhuma requisição de serviço registrada ou encontrada com os filtros atuais.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* REQUISITION INTERACTION & RESPONSIVENESS PANEL */}
+      {selectedOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-slate-100 flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="px-6 py-5 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between rounded-t-3xl">
+              <div>
+                <h3 className="font-extrabold text-base tracking-tight">{selectedOrder.title}</h3>
+                <p className="text-xs text-slate-400 font-mono mt-0.5">ID: {selectedOrder.id} | Atribuída: {selectedOrder.assignedTo || 'Não alocado'}</p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {onOpenAiAssistantWithOS && (
+                  <button
+                    onClick={() => {
+                      onOpenAiAssistantWithOS(selectedOrder);
+                      setSelectedOrder(null);
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-200" />
+                    Gerar WhatsApp IA
+                  </button>
+                )}
+
+                <button 
+                  onClick={() => setSelectedOrder(null)}
+                  className="p-2 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Content Pane */}
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 text-slate-700">
+              
+              {/* Notification Banner */}
+              {(selectedOrder.unreadByClient || selectedOrder.unreadByProfessional) && (
+                <div className="bg-amber-50 border border-amber-250 border-amber-200/60 rounded-2xl p-4 flex flex-col gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <span className="p-1 px-2.5 bg-amber-500 text-white rounded-full text-[10px] font-extrabold uppercase shrink-0 animate-pulse">PENDENTE</span>
+                    <div className="text-xs">
+                      {selectedOrder.unreadByClient && (
+                        <div>
+                          <p className="font-extrabold text-slate-900 text-sm">🔔 Resposta técnica aguardando sua visualização para continuidade!</p>
+                          <p className="text-slate-600 mt-1 font-medium">O técnico de campo realizou um parecer/resposta responsiva recente. O gestor ou requisitante precisa conferir para dar prosseguimento ao chamado.</p>
+                        </div>
+                      )}
+                      {selectedOrder.unreadByProfessional && (
+                        <div>
+                          <p className="font-extrabold text-slate-900 text-sm">🔔 Resposta do Gestor/Requisitante aguardando sua visualização profissional!</p>
+                          <p className="text-slate-600 mt-1 font-medium">O gestor central publicou uma mensagem/orientação para o técnico responsável dar continuidade aos trabalhos de campo.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const updated = {
+                        ...selectedOrder,
+                        unreadByClient: false,
+                        unreadByProfessional: false
+                      };
+                      onUpdateOrder(updated);
+                      setSelectedOrder(updated);
+                    }}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] py-1.5 px-3 rounded-lg w-max self-end uppercase tracking-wider transition-colors shadow-sm"
+                  >
+                    Marcar Mensagens como Visualizadas
+                  </button>
+                </div>
+              )}
+              
+              {/* Material shortage Warnings */}
+              {selectedOrder.hasMissingMaterial && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                  <div className="text-xs">
+                    <span className="font-bold text-red-800 block">Sinalização de Falta de Material de responsabilidade do Requisitante</span>
+                    <p className="text-red-700 mt-1 font-medium">{selectedOrder.missingMaterialDescription}</p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={handleResolveMaterialFlag}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded-lg transition-colors text-[10px] uppercase"
+                      >
+                        Material Fornecido (Retomar Chamado)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Ribbon depending on status */}
+              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs font-semibold">
+                  <span>Status Operacional atual: </span>
+                  <span className="font-bold uppercase text-slate-800">{selectedOrder.status}</span>
+                </div>
+
+                <div className="flex gap-2 flex-wrap">
+                  {/* Option 1: Initiate service if Status is 'aberto' */}
+                  {selectedOrder.status === "aberto" && (
+                    <button
+                      onClick={handleOpenInitiateFlow}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5"
+                    >
+                      <Play className="w-3.5 h-3.5 text-emerald-400" />
+                      Iniciar Atendimento
+                    </button>
+                  )}
+
+                  {/* Option 2: Flag missing material if Status is 'em_progresso' */}
+                  {selectedOrder.status === "em_progresso" && (
+                    <>
+                      <button
+                        onClick={() => setIsFlaggingMaterial(true)}
+                        className="bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1.5"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Sinalizar Falta de Material
+                      </button>
+
+                      <button
+                        onClick={handleMarkAsCompleted}
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Concluir Requisição
+                      </button>
+                    </>
+                  )}
+
+                  {/* Cancel button */}
+                  {selectedOrder.status !== "concluido" && selectedOrder.status !== "cancelado" && (
+                    <button
+                      onClick={handleCancelService}
+                      className="bg-white border border-slate-200 text-red-600 hover:bg-red-50 text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 font-bold"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Inviabilizar Chamado
+                    </button>
+                  )}
+
+                  {/* Print Technical Ficha button */}
+                  <button
+                    onClick={() => setIsPrintPreviewOpen(true)}
+                    className="bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                    title="Visualizar e Imprimir Ficha Técnica com dados e profissional responsável"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-600" />
+                    Visualizar e Imprimir
+                  </button>
+                </div>
+              </div>
+
+              {/* INITIATE TECHNICAL CHOICE SUB-SECTION */}
+              {isInitiatingService && (
+                <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 space-y-4 animate-fade-in text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-indigo-900 block uppercase tracking-wider text-[11px]">Selecione o Profissional Técnico Adequado</span>
+                    <button 
+                      type="button"
+                      onClick={() => setIsInitiatingService(false)} 
+                      className="p-1 text-slate-400 hover:text-slate-655 transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <p className="text-indigo-850 bg-indigo-50 border border-indigo-150 p-2.5 rounded-xl font-medium">
+                    A requisição pertence à categoria <strong>{selectedOrder.category}</strong>. Selecione um técnico profissional cadastrado abaixo para liberar a abertura do atendimento:
+                  </p>
+
+                  <div className="space-y-2">
+                    {(() => {
+                      const onlyProfs = professionalsList.filter(p => !p.userType || p.userType === "profissional");
+                      if (onlyProfs.length === 0) {
+                        return (
+                          <div className="p-4 bg-slate-50 border border-slate-200 text-slate-500 rounded-xl text-center font-bold">
+                            Nenhum técnico profissional cadastrado no sistema. Vá até a aba "Equipe & Colaboradores" para cadastrar profissionais.
+                          </div>
+                        );
+                      }
+                      return onlyProfs.map(prof => {
+                        const isRecommended = prof.specialties?.includes(selectedOrder.category) || prof.specialty === selectedOrder.category;
+                        return (
+                          <div 
+                            key={prof.id} 
+                            onClick={() => setSelectedProfName(prof.name)}
+                            className={`p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
+                              selectedProfName === prof.name 
+                                ? "bg-slate-900 border-slate-900 text-white shadow-md ring-2 ring-slate-900/10" 
+                                : "bg-white border-slate-200 hover:border-slate-350 hover:bg-slate-50/20"
+                            }`}
+                          >
+                            <div>
+                              <span className={`font-extrabold block ${selectedProfName === prof.name ? "text-white" : "text-slate-850"}`}>{prof.name}</span>
+                              <span className={`text-[10px] font-semibold block mt-0.5 ${selectedProfName === prof.name ? "text-slate-300" : "text-slate-500"}`}>
+                                {prof.role} | {prof.specialties && prof.specialties.length > 0 ? `Especialidades: ${prof.specialties.join(", ")}` : `Especialidade: ${prof.specialty}`}
+                              </span>
+                            </div>
+
+                            {isRecommended && (
+                              <span className={`font-black text-[9px] px-2 py-0.5 rounded-lg tracking-wider ${
+                                selectedProfName === prof.name 
+                                  ? "bg-emerald-600 border border-emerald-500 text-white" 
+                                  : "bg-indigo-100 border border-indigo-200 text-indigo-700 animate-pulse"
+                              }`}>
+                                💡 RECOMENDADO
+                              </span>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+
+                  <div className="flex gap-2 justify-end pt-2 border-t border-indigo-100">
+                    <button
+                      type="button"
+                      onClick={() => setIsInitiatingService(false)}
+                      className="bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-bold hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmInitiateService}
+                      className={`px-4 py-1.5 rounded-lg font-bold transition-all ${
+                        selectedProfName 
+                          ? "bg-slate-900 hover:bg-slate-800 text-white shadow-md cursor-pointer" 
+                          : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+                      }`}
+                      disabled={!selectedProfName}
+                    >
+                      Alocar Técnico & Iniciar Atendimento
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* FLAGGING MISSING MATERIAL SUB-SECTION */}
+              {isFlaggingMaterial && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3 animate-fade-in text-xs">
+                  <span className="font-extrabold text-amber-900 block uppercase tracking-wider text-[11px]">Sinalizar Falta de Material</span>
+                  <p className="text-amber-800">
+                    Insira abaixo uma descrição do material em falta que o requisitante deve obrigatoriamente comprar para que a equipe possa finalizar o serviço de forma eficaz.
+                  </p>
+
+                  <input
+                    type="text"
+                    className="w-full text-xs border border-amber-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white font-medium text-slate-700"
+                    placeholder="Ex: 5 metros de cabo de rede Cat6, Conectores RJ45 blindados, disjuntor bipolar 32A..."
+                    value={missingMaterialText}
+                    onChange={(e) => setMissingMaterialText(e.target.value)}
+                  />
+
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={() => setIsFlaggingMaterial(false)}
+                      className="bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-bold"
+                    >
+                      Voltar
+                    </button>
+                    <button
+                      onClick={handleConfirmMaterialFlag}
+                      className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded-lg font-bold"
+                      disabled={!missingMaterialText.trim()}
+                    >
+                      Sinalizar & Pausar OS
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* COMPLETING SERVICE PHOTO SUB-SECTION */}
+              {isCompletingService && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-4 animate-fade-in text-xs">
+                  <span className="font-extrabold text-emerald-900 block uppercase tracking-wider text-[11px] flex items-center gap-1">
+                    📷 Anexar Comprovação de Serviço Concluído
+                  </span>
+                  <p className="text-emerald-800">
+                    O atendimento está prestes a ser finalizado. Por favor, acrescente fotos reais da conclusão do trabalho (máquinas reparadas, fiações organizadas, laudo concluído) para registrar como comprovativo documental definitivo.
+                  </p>
+
+                  <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                    {/* Method 1: Local upload */}
+                    <div className="flex flex-col gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => completionFileInputRef.current?.click()}
+                        className="bg-white border border-emerald-205 hover:bg-emerald-100 text-emerald-900 border-emerald-200 px-3.5 py-2.5 rounded-xl flex items-center justify-center gap-1.5 font-bold text-xs shadow-xs"
+                      >
+                        <Upload className="w-4 h-4 text-emerald-500" />
+                        Escolher Foto do meu Aparelho
+                      </button>
+                      <input 
+                        type="file" 
+                        ref={completionFileInputRef}
+                        className="hidden" 
+                        accept="image/*" 
+                        multiple 
+                        onChange={handleCompletionImageUpload} 
+                      />
+                    </div>
+
+                    {/* Method 2: Insert URL */}
+                    <div className="flex-1 flex gap-1">
+                      <input
+                        type="text"
+                        className="flex-1 text-xs border border-emerald-200 rounded-xl px-3 py-2 bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        placeholder="Cole URL da foto concluída..."
+                        value={completionImageUrlInput}
+                        onChange={(e) => setCompletionImageUrlInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddCompletionImageUrlInput}
+                        className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-3 rounded-xl transition-colors"
+                      >
+                        Anexar URL
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preset completed illustration gallery for fast UI demo */}
+                  <div className="pt-1 bg-white/40 p-2 text-slate-700 rounded-lg">
+                    <span className="text-[10px] text-slate-500 font-bold block mb-1">Demonstração Rápida: Clique abaixo para usar simulações de serviço concluído:</span>
+                    <div className="flex gap-2 flex-wrap">
+                      {PRESET_COMPLETED_IMAGES.map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleInsertCompletionPresetImage(p.url)}
+                          className="bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1"
+                        >
+                          <Image className="w-2.5 h-2.5 text-emerald-500" />
+                          {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Attached completed images list preview */}
+                  {completionImages.length > 0 ? (
+                    <div className="grid grid-cols-4 gap-2 pt-2 bg-white p-2.5 rounded-xl border border-slate-200">
+                      {completionImages.map((src, i) => (
+                        <div key={i} className="relative rounded-xl border border-slate-100 aspect-video overflow-hidden bg-slate-50 group">
+                          <img src={src} className="w-full h-full object-cover" alt="Completion Preview" referrerPolicy="no-referrer" />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCompletionImageIndex(i)}
+                            className="absolute inset-0 bg-red-950/40 opacity-0 group-hover:opacity-100 text-white font-bold flex items-center justify-center transition-all rounded-xl"
+                            title="Remover"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-amber-600 bg-amber-50 p-2.5 rounded-xl border border-amber-100 font-bold">
+                      ⚠️ Foto Obrigatória: Por favor, adicione pelo menos uma imagem representando o serviço concluído para poder finalizar o atendimento.
+                    </p>
+                  )}
+
+                  <div className="flex gap-2 justify-end pt-2 border-t border-emerald-100">
+                    <button
+                      onClick={() => {
+                        setIsCompletingService(false);
+                        setCompletionImages([]);
+                      }}
+                      className="bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-bold"
+                    >
+                      Voltar ao Painel
+                    </button>
+                    <button
+                      onClick={handleConfirmCompletionWithPhoto}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-lg font-extrabold flex items-center gap-1 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={completionImages.length === 0}
+                      title={completionImages.length === 0 ? "Adicione pelo menos 1 foto para comprovar" : ""}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Finalizar Atendimento com Fotos ({completionImages.length})
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Client specifications and details */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 rounded-2xl border border-slate-200/50 p-4 text-xs font-semibold">
+                <div>
+                  <h4 className="font-extrabold text-slate-400 text-[10px] uppercase tracking-wider mb-1.5">Tomador do Serviço</h4>
+                  <p className="text-slate-800 font-bold text-sm truncate">{getClientName(selectedOrder.clientId)}</p>
+                  <p className="text-slate-500 font-normal mt-1">
+                    Endereço de atendimento: <span className="text-slate-700 font-bold">{selectedOrder.location || getClientObj(selectedOrder.clientId)?.address || "Não informado"}</span>
+                  </p>
+                  <p className="text-slate-500 font-normal">
+                    Contato: <span className="text-slate-700 font-medium">{getClientObj(selectedOrder.clientId)?.phone || "Sem telefone"}</span>
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-slate-400 text-[10px] uppercase tracking-wider mb-1.5">Prazos e Planejamento</h4>
+                  <p className="text-slate-800">Iniciado em: {selectedOrder.startDate}</p>
+                  <p className="text-slate-500 font-normal mt-1">Previsão estimada de conclusão: <span className="text-slate-700 font-semibold">{selectedOrder.endDate || 'Não predefinido'}</span></p>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="space-y-1.5">
+                <h4 className="font-bold text-slate-400 text-[10px] uppercase tracking-wider">Descrição dos Sintomas do Problema relatados</h4>
+                <div className="bg-slate-50/50 p-4 border border-slate-100 rounded-xl text-sm font-medium leading-relaxed whitespace-pre-wrap text-slate-600">
+                  {selectedOrder.description || "Nenhum detalhe técnico provido no cadastro."}
+                </div>
+              </div>
+
+              {/* Attached Photos */}
+              <div className="space-y-3">
+                <h4 className="font-bold text-slate-400 text-[10px] uppercase tracking-wider">Fotos Ilustrativas do Problema Anexadas</h4>
+                {selectedOrder.images && selectedOrder.images.length > 0 ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {selectedOrder.images.map((imgUrl, i) => (
+                      <div key={i} className="relative group rounded-xl overflow-hidden border border-slate-150 aspect-video bg-slate-50">
+                        <img 
+                          src={imgUrl} 
+                          alt={`Problema Ilustrativo ${i + 1}`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 italic">Nenhuma foto de problemas/entrada anexada a esta requisição.</p>
+                )}
+              </div>
+
+              {/* Completed Service Proof Photos */}
+              {selectedOrder.completedImages && selectedOrder.completedImages.length > 0 && (
+                <div className="space-y-3 bg-emerald-50/30 border border-emerald-100 p-4 rounded-2xl">
+                  <h4 className="font-extrabold text-emerald-800 text-[10px] uppercase tracking-wider flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5 text-emerald-600" /> Fotos do Serviço Concluído / Comprovante Visual
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {selectedOrder.completedImages.map((imgUrl, i) => (
+                      <div key={i} className="relative group rounded-xl overflow-hidden border border-emerald-200 aspect-video bg-white">
+                        <img 
+                          src={imgUrl} 
+                          alt={`Serviço Concluído ${i + 1}`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Dialogue Response board BEFORE & AFTER initiating service */}
+              <div className="space-y-4 border-t border-slate-100 pt-5">
+                <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider">Histórico de Respostas Responsivas & Atualizações</h4>
+                
+                {/* Chat Responsivo Reply box */}
+                {selectedOrder.status !== "concluido" && selectedOrder.status !== "cancelado" && (
+                  <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700 block">Escrever Mensagem Resposta</span>
+                      
+                      {/* Responder toggle selection */}
+                      <div className="flex bg-white border border-slate-200 p-0.5 rounded-lg gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setResponderRole('atendente')}
+                          className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
+                            responderRole === "atendente" 
+                              ? "bg-slate-900 text-white shadow-xs" 
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+                          Atendente
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!selectedOrder.assignedTo}
+                          onClick={() => setResponderRole('profissional')}
+                          className={`px-2 py-1 rounded text-[10px] font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                            responderRole === "profissional" 
+                              ? "bg-slate-900 text-white shadow-xs" 
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                          title={!selectedOrder.assignedTo ? "Atribua um técnico para responder como profissional" : ""}
+                        >
+                          Técnico Responsável
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/15 bg-white font-medium text-slate-700"
+                        placeholder={
+                          responderRole === "atendente"
+                            ? "Escreva resposta de encaminhamento do atendente..."
+                            : `Escreva resposta técnica de ${selectedOrder.assignedTo}...`
+                        }
+                        value={newLogComment}
+                        onChange={(e) => setNewLogComment(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddResponsiveReply();
+                        }}
+                      />
+                      <button
+                        onClick={handleAddResponsiveReply}
+                        className="bg-slate-900 hover:bg-slate-800 text-white p-2.5 rounded-xl transition-colors flex items-center justify-center shrink-0"
+                        disabled={!newLogComment.trim()}
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Response Thread timeline */}
+                <div className="space-y-3 pt-2">
+                  {selectedOrder.history && selectedOrder.history.length > 0 ? (
+                    selectedOrder.history.map((log, idx) => (
+                      <div key={log.id || idx} className={`flex flex-col p-3 rounded-2xl border ${
+                        log.author === "atendente" 
+                          ? "bg-blue-50/40 border-blue-100 mr-8" 
+                          : log.author === "profissional"
+                          ? "bg-green-50/40 border-green-100 ml-8"
+                          : "bg-slate-50/50 border-slate-150"
+                      }`}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                            log.author === "atendente" ? "text-blue-700" : log.author === "profissional" ? "text-green-700" : "text-slate-500"
+                          }`}>
+                            {log.author === 'atendente' ? 'Atendente Respondeu' : log.author === 'profissional' ? 'Técnico Respondeu' : 'Log de Sistema'}
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-mono">
+                            {new Date(log.date).toLocaleString("pt-BR")}
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold leading-relaxed text-slate-700 whitespace-pre-wrap">
+                          {log.comment}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-slate-400 font-normal">Nenhum evento registrado ainda.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-3xl flex justify-end">
+              <button
+                onClick={() => setSelectedOrder(null)}
+                className="bg-white border border-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider py-3 px-6 rounded-xl hover:bg-slate-100 transition-all shadow-sm"
+              >
+                Fechar Detalhes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE & EDIT FORM DIALOG MODAL */}
+      {isFormOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <h3 className="font-extrabold text-base">{editingOrder ? "Editar Dados da Requisição" : "Registrar Nova Requisição de Serviço"}</h3>
+              <button 
+                onClick={() => setIsFormOpen(false)}
+                className="p-1 hover:bg-slate-850 rounded-lg text-slate-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto">
+              <div className="p-6 space-y-4">
+                
+                {/* Client dropdown */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Requisitante Associado *</label>
+                  <select
+                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-semibold text-slate-700 disabled:opacity-75 disabled:bg-slate-100"
+                    required
+                    value={clientId}
+                    onChange={(e) => setClientId(e.target.value)}
+                    disabled={currentUser?.userType === "requisitante"}
+                  >
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name} ({c.document || 'Sem Documento'})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Local do Atendimento / Endereço (Araçatuba - SP) */}
+                <div className="relative">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Local de Atendimento em Araçatuba - SP *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const client = getClientObj(clientId);
+                        if (client && client.address) {
+                          setServiceLocation(client.address);
+                        }
+                      }}
+                      className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold px-2.5 py-1 rounded-lg border border-slate-200 cursor-pointer transition-colors"
+                      title="Copiar endereço cadastrado na ficha do requisitante"
+                    >
+                      Copiar Endereço do Requisitante
+                    </button>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        required
+                        className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold text-slate-700"
+                        placeholder="CEP (Ex: 16015-000) ou digite parte do endereço em Araçatuba..."
+                        value={serviceLocation}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setServiceLocation(val);
+                          handleLocationSearch(val);
+                          // Auto trigger lookup for CEP
+                          const numeric = val.replace(/\D/g, "");
+                          if (numeric.length === 8) {
+                            handleCepLookup(numeric);
+                          }
+                        }}
+                      />
+                      {isSearchingLocation && (
+                        <div className="absolute right-3.5 top-3">
+                          <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const numeric = serviceLocation.replace(/\D/g, "");
+                        if (numeric.length === 8) {
+                          handleCepLookup(numeric);
+                        } else if (serviceLocation.trim().length >= 3) {
+                          handleLocationSearch(serviceLocation);
+                        }
+                      }}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-4 rounded-xl transition-colors cursor-pointer"
+                    >
+                      Buscar
+                    </button>
+                  </div>
+
+                  {cepError && (
+                    <p className="text-[11px] text-red-600 font-bold mt-1 bg-red-50 px-2 py-0.5 rounded border border-red-100">
+                      ⚠️ {cepError}
+                    </p>
+                  )}
+
+                  {/* Nominatim Search Autocomplete List */}
+                  {locationSearchResults.length > 0 && (
+                    <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+                      <div className="bg-slate-50 px-3 py-1.5 text-[9px] text-slate-400 font-bold uppercase tracking-wider border-b border-slate-100">
+                        Resultados de Araçatuba - SP (Selecione):
+                      </div>
+                      {locationSearchResults.map((res) => (
+                        <button
+                          key={res.id}
+                          type="button"
+                          onClick={() => {
+                            setServiceLocation(res.display);
+                            setLocationSearchResults([]);
+                          }}
+                          className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-900 border-b border-slate-100 last:border-b-0 transition-colors font-medium cursor-pointer"
+                        >
+                          📍 {res.display}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Aracatuba Quick Neighborhood recommendations */}
+                  <div className="flex gap-1.5 flex-wrap items-center mt-2">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase mr-1">Sugestões Rápidas:</span>
+                    {["Centro, Araçatuba - SP", "Jd. Alvorada, Araçatuba - SP", "Guanabara, Araçatuba - SP", "Concórdia, Araçatuba - SP"].map((neigh, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setServiceLocation(neigh);
+                          setLocationSearchResults([]);
+                          setCepError("");
+                        }}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-0.5 rounded-lg text-[9px] font-bold transition-all cursor-pointer"
+                      >
+                        + {neigh.split(",")[0]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Title */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Título / Objeto do Serviço *</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold text-slate-700"
+                    placeholder="Ex: Ar condicionado vazando água"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                </div>
+
+                {/* Description details */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Laudo Inicial de Sintoma (Pelo Requisitante / Atendente) *</label>
+                  <textarea
+                    rows={4}
+                    required
+                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-medium text-slate-700"
+                    placeholder="Descreva detalhadamente o chamado comercial, sintomas indicados ou problema físico..."
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </div>
+
+                {/* Category & Date constraints */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Categoria do Serviço</label>
+                    <select
+                      className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-semibold text-slate-700"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                    >
+                      {categories.map((c, idx) => (
+                        <option key={idx} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Data de Abertura / Entrada</label>
+                    <input
+                      type="date"
+                      className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold text-slate-700"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* FOTOGRAFIAS ILUSTRATIVAS */}
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Acrecentar Fotos para Ilustrar o Problema</label>
+                  
+                  <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                    {/* Method 1: Local File upload */}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 font-bold text-xs"
+                    >
+                      <Upload className="w-4 h-4 text-slate-400" />
+                      Escolher do Meu Aparelho
+                    </button>
+                    <input 
+                      type="file" 
+                      ref={fileInputRef}
+                      className="hidden" 
+                      accept="image/*" 
+                      multiple 
+                      onChange={handleImageUpload} 
+                    />
+
+                    {/* Method 2: Insert URL */}
+                    <div className="flex-1 flex gap-1">
+                      <input
+                        type="text"
+                        className="flex-1 text-xs border border-slate-200 rounded-xl px-3 py-1 bg-white font-medium text-slate-700 focus:outline-none"
+                        placeholder="Ou cole endereço/URL de imagem..."
+                        value={imageUrlInput}
+                        onChange={(e) => setImageUrlInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddImageUrlInput}
+                        className="bg-slate-900 text-white font-bold text-xs px-3 rounded-xl hover:bg-slate-800"
+                      >
+                        Anexar URL
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preset illustration gallery for fast UI demo */}
+                  <div className="pt-2">
+                    <span className="text-[10px] text-slate-400 font-bold block mb-1">Dica técnica: Selecione abaixo ilustrações típicas para demonstração imediata:</span>
+                    <div className="flex gap-2 flex-wrap">
+                      {PRESET_IMAGES.map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleInsertPresetImage(p.url)}
+                          className="bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1"
+                        >
+                          <Image className="w-3 h-3 text-indigo-500" />
+                          {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Attached images preview list */}
+                  {previewImages.length > 0 && (
+                    <div className="grid grid-cols-4 gap-2 pt-2">
+                      {previewImages.map((src, i) => (
+                        <div key={i} className="relative rounded-xl border border-slate-200 aspect-video overflow-hidden bg-slate-50 group">
+                          <img src={src} className="w-full h-full object-cover" alt="Preview" referrerPolicy="no-referrer" />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveImageIndex(i)}
+                            className="absolute inset-0 bg-red-950/40 opacity-0 group-hover:opacity-100 text-white font-bold flex items-center justify-center transition-all rounded-xl"
+                            title="Remover"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Internals / Diagnósticos complementares */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Laudos do Técnico / Observações Secundárias (Opcional)</label>
+                  <textarea
+                    rows={2}
+                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-medium text-slate-700"
+                    placeholder="Instruções adicionais internas..."
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
+
+              </div>
+
+              {/* Action buttons */}
+              <div className="p-6 bg-slate-50 border-t border-slate-100 flex gap-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setIsFormOpen(false)}
+                  className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold py-3.5 rounded-xl hover:bg-slate-100 transition-all shadow-sm"
+                >
+                  Cancelar Cadastro
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-slate-950/10 transition-all"
+                >
+                  {editingOrder ? "Atualizar Requisição" : "Registrar Requisição"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SECTOR: HIDDEN PRINT PREVIEW DOCUMENT */}
+      {selectedOrder && (
+        <div id="print-section" className="hidden print:block bg-white p-10 text-black font-sans leading-relaxed text-sm">
+          {/* Document Header */}
+          <div className="border-b-2 border-slate-900 pb-6 mb-6 flex justify-between items-start">
+            <div>
+              <span className="text-xl font-extrabold uppercase tracking-tight block text-slate-900">RequisiçãoPro</span>
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Sistema de Gestão Técnica Integrada</span>
+            </div>
+            
+            <div className="text-right">
+              <span className="text-sm font-black text-slate-800 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                REQUISIÇÃO #{selectedOrder.id}
+              </span>
+              <span className="text-[10px] text-slate-500 block font-bold font-mono mt-2">
+                Emitido em: {new Date().toLocaleDateString("pt-BR")} às {new Date().toLocaleTimeString("pt-BR")}
+              </span>
+            </div>
+          </div>
+
+          <div className="text-center bg-slate-900 text-white p-2.5 font-bold text-xs uppercase tracking-widest rounded-lg mb-6">
+            Via Administrativa de Campo / Ficha de Execução de Serviço
+          </div>
+
+          {/* Grid Information: 2 Columns */}
+          <div className="grid grid-cols-2 gap-6 mb-6">
+            {/* Column 1: Client details */}
+            <div className="border border-slate-200 rounded-xl p-4 space-y-2 bg-slate-50/50">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1 mb-2">Dados do Requisitante</span>
+              {(() => {
+                const client = getClientObj(selectedOrder.clientId);
+                if (!client) return <p className="text-xs text-slate-500 font-bold">Requisitante Desconhecido</p>;
+                return (
+                  <div className="space-y-1.5 text-xs font-semibold">
+                    <p className="text-slate-900 font-bold">Nome: <span className="font-medium text-slate-700">{client.name}</span></p>
+                    <p className="text-slate-900 font-bold">Documento: <span className="font-mono font-medium text-slate-700">{client.document}</span></p>
+                    <p className="text-slate-900 font-bold">Telefone: <span className="font-medium text-slate-700">{client.phone}</span></p>
+                    <p className="text-slate-900 font-bold">E-mail: <span className="font-medium text-slate-700">{client.email}</span></p>
+                    <p className="text-slate-900 font-bold">Endereço: <span className="font-medium text-slate-700">{client.address}</span></p>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Column 2: Contract technical specifics */}
+            <div className="border border-slate-200 rounded-xl p-4 space-y-2 bg-slate-50/50">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1 mb-2">Dados Técnicos da Operação</span>
+              <div className="space-y-1.5 text-xs font-semibold text-slate-900">
+                <p className="font-bold">Categoria Técnica: <span className="font-medium text-slate-700">{selectedOrder.category}</span></p>
+                <p className="font-bold">Status Atual: <span className="font-extrabold uppercase text-slate-800">{selectedOrder.status}</span></p>
+                <p className="font-bold">Profissional Responsável: <span className="font-extrabold text-indigo-700">{selectedOrder.assignedTo || "Pendente de Alocação Técnica"}</span></p>
+                <p className="font-bold">Previsão de Conclusão: <span className="font-medium text-slate-700">{selectedOrder.endDate ? new Date(selectedOrder.endDate).toLocaleDateString("pt-BR") : "Não Programado"}</span></p>
+                {selectedOrder.hasMissingMaterial && (
+                  <p className="text-red-700 font-bold bg-stretch bg-red-50 px-2 py-0.5 rounded text-[11px] border border-red-250 border-red-200/30">
+                    ⚠️ BLOQUEADO POR FALTA DE MATERIAL
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Ticket Description details */}
+          <div className="border border-slate-200 rounded-xl p-5 space-y-3 mb-6 bg-slate-50/20">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1">Sintoma Inicial / Escopo Técnico</span>
+            <p className="text-xs font-semibold text-slate-800 leading-relaxed font-sans">{selectedOrder.description}</p>
+            {selectedOrder.notes && (
+              <div className="mt-3 bg-white border border-slate-150 p-3 rounded-lg text-xs">
+                <strong className="block text-slate-500 font-bold text-[10px] uppercase mb-1">Notas Gerais</strong>
+                <p className="text-slate-650">{selectedOrder.notes}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Historical progression timeline for the auditor */}
+          {selectedOrder.history && selectedOrder.history.length > 0 && (
+            <div className="border border-slate-200 rounded-xl p-5 space-y-4 mb-8 bg-slate-50/20">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1">Histórico de Pareceres e Andamentos</span>
+              <div className="space-y-3.5 animate-none">
+                {selectedOrder.history.map((h, idx) => (
+                  <div key={idx} className="text-xs font-semibold border-b border-slate-100 last:border-b-0 pb-2 bg-white p-2.5 rounded-lg border border-slate-250 border-slate-200/45">
+                    <div className="flex justify-between items-center text-[10px] text-slate-500 font-bold mb-1">
+                      <span>Autor: <strong className="text-slate-700 uppercase">{h.author}</strong> | Status: <strong className="text-slate-800 uppercase">{h.status}</strong></span>
+                      <span className="font-mono">{new Date(h.date).toLocaleString("pt-BR")}</span>
+                    </div>
+                    <p className="text-slate-700 font-sans">{h.comment}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Signature margins & confirmation */}
+          <div className="mt-16 grid grid-cols-2 gap-10">
+            <div className="text-center pt-8 border-t border-dashed border-slate-400 font-semibold text-xs text-slate-800">
+              <div className="inline-block w-48 mb-1 leading-none border-b border-slate-400">{selectedOrder.assignedTo || "__________________________"}</div>
+              <p className="font-extrabold text-slate-900">Profissional Técnico Responsável</p>
+              <p className="text-[10px] text-slate-400 font-mono mt-1">Assinatura / Carimbo</p>
+            </div>
+            
+            <div className="text-center pt-8 border-t border-dashed border-slate-400 font-semibold text-xs text-slate-800">
+              <div className="inline-block w-48 mb-1 leading-none border-b border-slate-400">_________________________________</div>
+              <p className="font-extrabold text-slate-900">Assinatura do Requisitante / Gestor</p>
+              <p className="text-[10px] text-slate-400 font-mono mt-1">Autorização de Conclusão Física</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SECTOR: VISUAL PRINT PREVIEW DIALOG MODAL ON-SCREEN */}
+      {isPrintPreviewOpen && selectedOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs overflow-y-auto print:hidden">
+          <div className="bg-slate-50 rounded-3xl w-full max-w-5xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col h-[90vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Ficha Técnica em Formato PDF</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                {pdfBlobUrl && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const link = document.createElement("a");
+                        link.href = pdfBlobUrl;
+                        link.download = `requisicao-${selectedOrder.id}-${selectedOrder.title.toLowerCase().replace(/\s+/g, "-")}.pdf`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase tracking-wider py-2 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all animate-fade-in"
+                    >
+                      <Download className="w-4 h-4 text-white" />
+                      Baixar PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const iframe = document.getElementById("pdf-iframe") as HTMLIFrameElement;
+                        if (iframe && iframe.contentWindow) {
+                          iframe.contentWindow.print();
+                        } else {
+                          window.print();
+                        }
+                      }}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-2 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all animate-fade-in"
+                    >
+                      <Printer className="w-4 h-4 text-emerald-400" />
+                      Imprimir PDF
+                    </button>
+                  </>
+                )}
+                <button 
+                  type="button"
+                  onClick={() => setIsPrintPreviewOpen(false)}
+                  className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-500 hover:text-slate-700 p-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  title="Fechar visualização"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Document Area carrying PDF viewport */}
+            <div className="p-4 bg-slate-100 flex-1 flex flex-col justify-stretch">
+              {pdfBlobUrl ? (
+                <iframe 
+                  id="pdf-iframe"
+                  src={pdfBlobUrl} 
+                  className="w-full h-full rounded-2xl border border-slate-200 shadow-inner bg-white min-h-[500px]" 
+                  title="Ficha Técnica PDF"
+                />
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center space-y-4 bg-white rounded-2xl border border-slate-200">
+                  <div className="w-8 h-8 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+                  <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Gerando visualização oficial em formato PDF...</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
