@@ -88,3 +88,12 @@ export interface Toast {
   duration?: number;
 }
 
+export interface SmtpSettings {
+  host: string;
+  port: string;
+  user: string;
+  pass: string;
+  senderAddress: string;
+  secure: boolean;
+}
+

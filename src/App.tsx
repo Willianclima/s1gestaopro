@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser } from "./types";
+import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings } from "./types";
 import { 
   INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS 
 } from "./data/mockData";
@@ -10,6 +10,7 @@ import Scheduler from "./components/Scheduler";
 import Professionals from "./components/Professionals";
 import AiAssistant from "./components/AiAssistant";
 import ReportsAndLogs from "./components/ReportsAndLogs";
+import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
@@ -23,7 +24,7 @@ export default function App() {
   const { success: toastSuccess, error: toastError, warn: toastWarn, info: toastInfo } = useToast();
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings">("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // LGPD CPF Auth State
@@ -72,6 +73,14 @@ export default function App() {
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
+  const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>({
+    host: "smtp.aracatubaservicos.com.br",
+    port: "587",
+    user: "suporte@aracatubaservicos.com.br",
+    pass: "S0m3_S3cur3_P@ssw0rd",
+    senderAddress: "Araçatuba Serviços <suporte@aracatubaservicos.com.br>",
+    secure: true
+  });
 
   // Cross-component routing state (AI Prefills)
   const [selectedOS, setSelectedOS] = useState<ServiceOrder | null>(null);
@@ -83,6 +92,11 @@ export default function App() {
     const cachedCategories = localStorage.getItem("service_mgt_categories2");
     const cachedProfessionals = localStorage.getItem("service_mgt_professionals2");
     const cachedLogs = localStorage.getItem("service_mgt_logs2");
+    const cachedSmtp = localStorage.getItem("service_mgt_smtp");
+
+    if (cachedSmtp) {
+      setSmtpSettings(JSON.parse(cachedSmtp));
+    }
 
     if (cachedClients) {
       setClients(JSON.parse(cachedClients));
@@ -184,6 +198,16 @@ export default function App() {
       localStorage.setItem("service_mgt_logs2", JSON.stringify(updated));
       return updated;
     });
+  };
+
+  const handleSaveSmtpSettings = (newSettings: SmtpSettings) => {
+    setSmtpSettings(newSettings);
+    localStorage.setItem("service_mgt_smtp", JSON.stringify(newSettings));
+    addSystemLog(
+      "Configuração SMTP",
+      `Parâmetros do servidor SMTP atualizados pelo Gestor (${newSettings.host}:${newSettings.port}).`,
+      "sistema"
+    );
   };
 
   const handleClearLogs = () => {
@@ -464,9 +488,9 @@ export default function App() {
     // Clear registration success messages upon attempting log in
     setRegSuccessMessage("");
 
-    // 1. Admin/Gestor fallback bypass (e.g. 999.999.999-99)
-    if (cleanInput === "99999999999" || cleanInput === "999" || cleanInput === "000") {
-      const adminSavedPass = localStorage.getItem("admin_custom_password") || "123";
+    // 1. Admin/Gestor fallback bypass (e.g. 36911121884 or 99999999999)
+    if (cleanInput === "36911121884" || cleanInput === "99999999999" || cleanInput === "999" || cleanInput === "000") {
+      const adminSavedPass = localStorage.getItem("admin_custom_password") || "123456";
       if (passwordValue && passwordValue !== adminSavedPass) {
         setLoginError("Senha incorreta para o Gestor Administrador.");
         toastError("Senha incorreta para o canal de Gestor Administrador.", "Falha de Login");
@@ -475,7 +499,7 @@ export default function App() {
       const adminUser: CurrentUser = {
         id: "gestor-admin",
         name: "Willian C. Lima",
-        document: "999.999.999-99",
+        document: cleanInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
         userType: "gestor"
       };
       setCurrentUser(adminUser);
@@ -709,10 +733,10 @@ export default function App() {
     }
 
     // Determine current user password
-    let actualCurrentPassword = "123"; // default fallback
+    let actualCurrentPassword = "123456"; // default fallback
 
     if (currentUser.id === "gestor-admin") {
-      actualCurrentPassword = localStorage.getItem("admin_custom_password") || "123";
+      actualCurrentPassword = localStorage.getItem("admin_custom_password") || "123456";
     } else {
       // Look up in clients first
       const clientRecord = clients.find(c => c.id === currentUser.id);
@@ -1147,72 +1171,6 @@ export default function App() {
               </form>
             </div>
           )}
-
-          {/* Quick Access panel (EXCELLENT FOR WORKFLOW AND INSPECTORS) */}
-          <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
-            <div className="flex justify-between items-center text-left">
-              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Painel de Acesso Rápido de Testes e Auditoria (1-Clique)</span>
-              <span className="text-[9px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-bold">Respeito à LGPD</span>
-            </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              {/* Gestor */}
-              <button
-                type="button"
-                onClick={() => {
-                  setTypedDoc("999.999.999-99");
-                  setTypedPassword("123");
-                  setConsentCheck(true);
-                  setLoginError("");
-                  // auto signin for quick testing
-                  setTimeout(() => handleTryLogin("999.999.999-99", "123"), 50);
-                }}
-                className="bg-slate-900 hover:bg-slate-850 border border-slate-800 text-left p-3 rounded-xl transition-all hover:border-slate-700 group cursor-pointer"
-              >
-                <span className="text-[9px] font-black uppercase text-indigo-400 block tracking-widest">Acesso Gestor</span>
-                <span className="text-xs font-bold text-slate-200 block truncate group-hover:text-white">Willian C. Lima</span>
-                <span className="text-[9px] text-slate-500 block font-mono">999.999.999-99 (senha: 123)</span>
-              </button>
-
-              {/* Client */}
-              <button
-                type="button"
-                onClick={() => {
-                  setTypedDoc("123.456.789-00");
-                  setTypedPassword("123");
-                  setConsentCheck(true);
-                  setLoginError("");
-                  setTimeout(() => handleTryLogin("123.456.789-00", "123"), 50);
-                }}
-                className="bg-slate-900 hover:bg-slate-850 border border-slate-800 text-left p-3 rounded-xl transition-all hover:border-slate-700 group cursor-pointer"
-              >
-                <span className="text-[9px] font-black uppercase text-emerald-400 block tracking-widest">Acesso Cliente</span>
-                <span className="text-xs font-bold text-slate-200 block truncate group-hover:text-white">Ana J. Silveira</span>
-                <span className="text-[9px] text-slate-500 block font-mono">123.456.789-00 (senha: 123)</span>
-              </button>
-
-              {/* Technician */}
-              <button
-                type="button"
-                onClick={() => {
-                  setTypedDoc("111.111.111-11");
-                  setTypedPassword("123");
-                  setConsentCheck(true);
-                  setLoginError("");
-                  setTimeout(() => handleTryLogin("111.111.111-11", "123"), 50);
-                }}
-                className="bg-slate-900 hover:bg-slate-850 border border-slate-800 text-left p-3 rounded-xl transition-all hover:border-slate-700 group cursor-pointer"
-              >
-                <span className="text-[9px] font-black uppercase text-amber-400 block tracking-widest">Acesso Técnico</span>
-                <span className="text-xs font-bold text-slate-200 block truncate group-hover:text-white">Carlos Henrique</span>
-                <span className="text-[9px] text-slate-500 block font-mono">111.111.111-11 (senha: 123)</span>
-              </button>
-            </div>
-            <p className="text-[10px] text-slate-500 italic mt-1 font-semibold text-left">
-              * Nota de auditoria: Clicar sobre as credenciais preenche automaticamente o campo, aceita os Termos Legais e efetua o login restrito em poucos milissegundos.
-            </p>
-          </div>
-
         </div>
 
         {/* Termos de Privacidade LGPD Modal popup */}
@@ -1413,6 +1371,21 @@ export default function App() {
               </button>
             )}
 
+            {/* Configurações SMTP (Gestor only) */}
+            {currentUser.userType === "gestor" && (
+              <button
+                onClick={() => { setActiveTab("settings"); setIsSidebarOpen(false); }}
+                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === "settings"
+                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                Configurações SMTP
+              </button>
+            )}
+
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block pt-6 mb-3 px-3">Suporte IA Inteligente</span>
 
             {/* Assistente IA */}
@@ -1585,6 +1558,18 @@ export default function App() {
                 professionals={professionals}
                 logs={logs}
                 onClearLogs={handleClearLogs}
+              />
+            )}
+
+            {activeTab === "settings" && currentUser.userType === "gestor" && (
+              <SmtpSettingsPanel
+                settings={smtpSettings}
+                onSave={handleSaveSmtpSettings}
+                onNotifyTest={(title, msg, type) => {
+                  if (type === "success") toastSuccess(msg, title);
+                  else if (type === "error") toastError(msg, title);
+                  else toastInfo(msg, title);
+                }}
               />
             )}
 
@@ -1787,13 +1772,18 @@ export default function App() {
                               <Mail className="w-4.5 h-4.5 text-indigo-600" />
                               <span className="font-black text-slate-855 text-[11px] uppercase tracking-wider">E-mail Corporativo</span>
                             </div>
-                            <span className="text-[10px] bg-indigo-100 text-indigo-850 font-bold px-2.5 py-0.5 rounded-full font-mono shrink-0 truncate max-w-[150px]" title={simulatedNotification.email}>{simulatedNotification.email}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[8px] bg-emerald-100 text-emerald-800 border border-emerald-200 font-extrabold px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0" title={`Enviado via servidor SMTP: ${smtpSettings.host}`}>
+                                SMTP: {smtpSettings.host}
+                              </span>
+                              <span className="text-[10px] bg-indigo-100 text-indigo-850 font-bold px-2.5 py-0.5 rounded-full font-mono shrink-0 truncate max-w-[150px]" title={simulatedNotification.email}>{simulatedNotification.email}</span>
+                            </div>
                           </div>
 
                           {/* Email Box Visual */}
                           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm min-h-[220px] text-left text-[11px] text-slate-700 leading-relaxed font-sans space-y-3">
                             <div className="border-b border-slate-100 pb-2 space-y-1">
-                              <div><strong className="text-slate-400 font-bold uppercase text-[9px] block">De:</strong> suporte@aracatubaservicos.com.br</div>
+                              <div><strong className="text-slate-400 font-bold uppercase text-[9px] block">De:</strong> {smtpSettings.senderAddress}</div>
                               <div><strong className="text-slate-400 font-bold uppercase text-[9px] block">Para:</strong> {simulatedNotification.email}</div>
                               <div><strong className="text-slate-400 font-bold uppercase text-[9px] block">Assunto:</strong> 🔒 Redefinição de Senha e Ativação de Conta - Araçatuba Serviços</div>
                             </div>

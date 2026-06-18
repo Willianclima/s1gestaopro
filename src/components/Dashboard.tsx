@@ -1,7 +1,9 @@
 import React from "react";
+import { motion } from "motion/react";
 import { ServiceOrder, Client, CurrentUser, Professional } from "../types";
 import { 
-  Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert
+  Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
+  TrendingUp
 } from "lucide-react";
 
 interface DashboardProps {
@@ -14,6 +16,47 @@ interface DashboardProps {
   onApproveClient?: (clientId: string, type: "gestor" | "requisitante") => void;
   onRejectClient?: (clientId: string) => void;
   onResetPassword?: (id: string, type: "client" | "professional") => void;
+}
+
+// Auxiliar para calcular dias úteis (Segunda a Sexta) entre uma data de início e hoje
+function getBusinessDaysBetweenDates(startDateStr: string, endDate: Date = new Date()): number {
+  const start = new Date(startDateStr);
+  if (isNaN(start.getTime())) return 0;
+  
+  let count = 0;
+  const current = new Date(start);
+  
+  current.setHours(0, 0, 0, 0);
+  const endCompare = new Date(endDate);
+  endCompare.setHours(0, 0, 0, 0);
+
+  if (current > endCompare) return 0;
+
+  while (current < endCompare) {
+    current.setDate(current.getDate() + 1);
+    const dayOfWeek = current.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // 0 é Domingo, 6 é Sábado
+      count++;
+    }
+  }
+  return count;
+}
+
+// Verifica se um chamado está com status 'aberto' por mais de 5 dias úteis sem atualização
+function isDelayedOpen(os: ServiceOrder): boolean {
+  if (os.status !== "aberto") return false;
+  
+  let lastUpdateStr = os.createdAt;
+  if (os.history && os.history.length > 0) {
+    const dates = os.history.map(h => new Date(h.date).getTime()).filter(t => !isNaN(t));
+    if (dates.length > 0) {
+      const maxTime = Math.max(...dates);
+      lastUpdateStr = new Date(maxTime).toISOString();
+    }
+  }
+  
+  const businessDays = getBusinessDaysBetweenDates(lastUpdateStr);
+  return businessDays > 5;
 }
 
 export default function Dashboard({ 
@@ -35,6 +78,9 @@ export default function Dashboard({
   const completedOrders = orders.filter(o => o.status === "concluido");
   const missingMaterialOrders = orders.filter(o => o.hasMissingMaterial);
   const pendingTriagem = orders.filter(o => o.status === "aberto" && !o.assignedTo);
+  
+  const totalOrders = orders.length;
+  const resolutionRate = totalOrders > 0 ? Math.round((completedOrders.length / totalOrders) * 100) : 0;
   
   // Pipeline Status counts
   const countPending = orders.filter(o => o.status === "aberto").length;
@@ -276,9 +322,14 @@ export default function Dashboard({
       )}
 
       {/* KPI metrics Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
         {/* Metric 1 */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all">
+        <motion.div 
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.05, ease: "easeOut" }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all"
+        >
           <div className="space-y-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Chamados Ativos</span>
             <span className="text-3xl font-extrabold text-slate-800 block">{activeOrders.length} Requisições</span>
@@ -287,10 +338,15 @@ export default function Dashboard({
           <div className="p-3 bg-indigo-50 rounded-xl text-indigo-600">
             <ClipboardList className="w-5 h-5" />
           </div>
-        </div>
+        </motion.div>
 
         {/* Metric 2 */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all">
+        <motion.div 
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all"
+        >
           <div className="space-y-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Aguardando Triagem</span>
             <span className="text-3xl font-extrabold text-amber-600 block">{pendingTriagem.length} Sem Técnico</span>
@@ -299,10 +355,15 @@ export default function Dashboard({
           <div className="p-3 bg-amber-55/50 rounded-xl text-amber-700">
             <Clock className="w-5 h-5" />
           </div>
-        </div>
+        </motion.div>
 
         {/* Metric 3 */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all">
+        <motion.div 
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.15, ease: "easeOut" }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all"
+        >
           <div className="space-y-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Atrasos / Falta de Material</span>
             <span className="text-3xl font-extrabold text-red-600 block">{missingMaterialOrders.length} Aguardando</span>
@@ -311,10 +372,15 @@ export default function Dashboard({
           <div className="p-3 bg-red-50 rounded-xl text-red-650">
             <AlertTriangle className="w-5 h-5" />
           </div>
-        </div>
+        </motion.div>
 
         {/* Metric 4 */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all">
+        <motion.div 
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.2, ease: "easeOut" }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all"
+        >
           <div className="space-y-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Requisitantes Atendidos</span>
             <span className="text-3xl font-extrabold text-slate-800 block">{totalClients} Requisitantes</span>
@@ -323,7 +389,24 @@ export default function Dashboard({
           <div className="p-3 bg-slate-100 rounded-xl text-slate-600">
             <Users className="w-5 h-5" />
           </div>
-        </div>
+        </motion.div>
+
+        {/* Metric 5 */}
+        <motion.div 
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.25, ease: "easeOut" }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 relative overflow-hidden flex items-center justify-between group hover:border-slate-300 transition-all"
+        >
+          <div className="space-y-1">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Taxa de Resolução</span>
+            <span className="text-3xl font-extrabold text-emerald-600 block">{resolutionRate}%</span>
+            <span className="text-[10px] text-slate-500 font-medium block">{completedOrders.length} de {totalOrders} concluídos</span>
+          </div>
+          <div className="p-3 bg-emerald-50 rounded-xl text-emerald-600">
+            <TrendingUp className="w-5 h-5" />
+          </div>
+        </motion.div>
       </div>
 
       {/* Pipeline Status Flow Visualization */}
@@ -385,25 +468,40 @@ export default function Dashboard({
 
             <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-1">
               {todaySchedule.length > 0 ? (
-                todaySchedule.map(os => (
-                  <div key={os.id} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/40 hover:border-slate-200 duration-150 text-xs">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-[9px] font-mono font-bold text-slate-400">{os.id}</span>
-                      <span className={`text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
-                        os.status === "concluido" ? "bg-green-100 text-green-800" :
-                        os.status === "em_progresso" ? "bg-blue-100 text-blue-800" : 
-                        os.status === "aguardando" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
-                      }`}>
-                        {os.status === "concluido" ? "Concluído" :
-                         os.status === "em_progresso" ? "Em Execução" : 
-                         os.status === "aguardando" ? "Falta de Material" : "Aberto"}
-                      </span>
-                    </div>
+                todaySchedule.map(os => {
+                  const delayed = isDelayedOpen(os);
+                  return (
+                    <div key={os.id} className={`p-3.5 rounded-xl border duration-150 text-xs transition-all ${
+                      delayed 
+                        ? "bg-red-50/60 border-red-200/50 hover:border-red-300" 
+                        : "bg-slate-50 border-slate-200/40 hover:border-slate-200"
+                    }`}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[9px] font-mono font-bold text-slate-400">{os.id}</span>
+                        <div className="flex items-center gap-1.5">
+                          {delayed && (
+                            <span className="bg-red-100 text-red-700 text-[8px] font-black uppercase px-1.5 py-0.5 rounded flex items-center gap-0.5 animate-pulse" title="Sem atualização há mais de 5 dias úteis!">
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              Atrasado
+                            </span>
+                          )}
+                          <span className={`text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                            os.status === "concluido" ? "bg-green-100 text-green-800" :
+                            os.status === "em_progresso" ? "bg-blue-100 text-blue-800" : 
+                            os.status === "aguardando" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
+                          }`}>
+                            {os.status === "concluido" ? "Concluído" :
+                             os.status === "em_progresso" ? "Em Execução" : 
+                             os.status === "aguardando" ? "Falta de Material" : "Aberto"}
+                          </span>
+                        </div>
+                      </div>
 
-                    <h4 className="font-bold text-slate-800 text-xs line-clamp-1">{os.title}</h4>
-                    <p className="text-[10px] text-slate-500 font-medium mt-1">Requisitante: {getClientName(os.clientId)}</p>
-                  </div>
-                ))
+                      <h4 className="font-bold text-slate-800 text-xs line-clamp-1">{os.title}</h4>
+                      <p className="text-[10px] text-slate-500 font-medium mt-1">Requisitante: {getClientName(os.clientId)}</p>
+                    </div>
+                  );
+                })
               ) : (
                 <div className="py-12 border border-dashed border-slate-200 rounded-xl text-center text-slate-400">
                   <CheckCircle className="w-8 h-8 text-slate-350 mx-auto mb-1.5" />
@@ -448,37 +546,53 @@ export default function Dashboard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
-                {orders.slice(0, 5).map(os => (
-                  <tr key={os.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-slate-400 font-bold">{os.id}</td>
-                    <td className="px-4 py-3 pb-2.5 max-w-[200px]">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-800 truncate" title={os.title}>{os.title}</span>
-                        {(os.unreadByClient || os.unreadByProfessional) && (
-                          <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" title="Novas mensagens responsivas aguardando ação" />
-                        )}
-                      </div>
-                      <span className="text-[10px] text-slate-500 font-normal truncate block mt-0.5">
-                        {getClientName(os.clientId)}
-                        {os.unreadByClient && (
-                          <span className="ml-2 text-[8px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1 rounded">Nova Resposta</span>
-                        )}
-                        {os.unreadByProfessional && (
-                          <span className="ml-2 text-[8px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">Aguardando Técnico</span>
-                        )}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase ${
-                        os.status === "concluido" ? "bg-green-100 text-green-800" :
-                        os.status === "em_progresso" ? "bg-blue-100 text-blue-800" :
-                        os.status === "aguardando" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
-                      }`}>
-                        {os.status === "concluido" ? "Concluído" :
-                         os.status === "em_progresso" ? "Em Execução" :
-                         os.status === "aguardando" ? "Falta de Material" : "Aberto"}
-                      </span>
-                    </td>
+                {orders.slice(0, 5).map(os => {
+                  const delayed = isDelayedOpen(os);
+                  return (
+                    <tr key={os.id} className={`hover:bg-slate-50/50 transition-colors ${delayed ? "bg-red-50/20" : ""}`}>
+                      <td className="px-4 py-3 font-mono text-slate-400 font-bold">{os.id}</td>
+                      <td className="px-4 py-3 pb-2.5 max-w-[200px]">
+                        <div className="flex items-center gap-2">
+                          {delayed && (
+                            <span className="flex items-center gap-1 bg-red-105 bg-red-100 text-red-700 text-[8.5px] px-1.5 py-0.5 rounded border border-red-200/50 animate-pulse font-black" title="Chamado sem atualização há mais de 5 dias úteis!">
+                              <AlertTriangle className="w-3 h-3 text-red-600" />
+                              Atrasado
+                            </span>
+                          )}
+                          <span className="font-bold text-slate-800 truncate" title={os.title}>{os.title}</span>
+                          {(os.unreadByClient || os.unreadByProfessional) && (
+                            <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" title="Novas mensagens responsivas aguardando ação" />
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-normal truncate block mt-0.5">
+                          {getClientName(os.clientId)}
+                          {os.unreadByClient && (
+                            <span className="ml-2 text-[8px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1 rounded">Nova Resposta</span>
+                          )}
+                          {os.unreadByProfessional && (
+                            <span className="ml-2 text-[8px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">Aguardando Técnico</span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase ${
+                            os.status === "concluido" ? "bg-green-100 text-green-800" :
+                            os.status === "em_progresso" ? "bg-blue-100 text-blue-800" :
+                            os.status === "aguardando" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
+                          }`}>
+                            {os.status === "concluido" ? "Concluído" :
+                             os.status === "em_progresso" ? "Em Execução" :
+                             os.status === "aguardando" ? "Falta de Material" : "Aberto"}
+                          </span>
+                          {delayed && (
+                            <span className="text-[8px] font-black text-red-700 bg-red-50 border border-red-100 px-1 rounded uppercase tracking-wider flex items-center gap-0.5 animate-pulse" title="Mais de 5 dias úteis sem atualização">
+                              <AlertCircle className="w-2.5 h-2.5 text-red-600 shrink-0" />
+                              &gt; 5d úteis
+                            </span>
+                          )}
+                        </div>
+                      </td>
                     <td className="px-4 py-3">
                       {os.assignedTo ? (
                         <span className="font-bold text-slate-750">{os.assignedTo}</span>
@@ -496,8 +610,9 @@ export default function Dashboard({
                       </button>
                     </td>
                   </tr>
-                ))}
-              </tbody>
+                );
+              })}
+            </tbody>
             </table>
           </div>
         </div>

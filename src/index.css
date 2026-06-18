@@ -4,6 +4,19 @@
 @theme {
   --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Troca a cor azul escuro/indigo anterior para o novo tom azul aço/azul médio do usuário (#2d749a) */
+  --color-indigo-50: #f0f6fa;
+  --color-indigo-100: #dbe7f0;
+  --color-indigo-200: #b3cfe4;
+  --color-indigo-300: #81afd1;
+  --color-indigo-400: #4b8eb9;
+  --color-indigo-500: #2d749a;
+  --color-indigo-600: #235c7c;
+  --color-indigo-700: #1a465f;
+  --color-indigo-800: #123042;
+  --color-indigo-900: #0a1c26;
+  --color-indigo-950: #050e13;
 }
 
 /* Custom scrollbars for a cleaner UI */
