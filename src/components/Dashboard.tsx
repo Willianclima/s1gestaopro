@@ -84,6 +84,9 @@ export default function Dashboard({
   const [techModal, setTechModal] = useState(false);
   const [techSearch, setTechSearch] = useState("");
   const [isActivityCollapsed, setIsActivityCollapsed] = useState(false);
+  
+  // Track dismissed material shortages low-priority toasts/notifications
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
 
   const getClientAddress = (id: string) => {
     const c = clients.find(cl => cl.id === id);
@@ -96,6 +99,7 @@ export default function Dashboard({
   const activeOrders = orders.filter(o => o.status !== "concluido" && o.status !== "cancelado");
   const completedOrders = orders.filter(o => o.status === "concluido");
   const missingMaterialOrders = orders.filter(o => o.hasMissingMaterial);
+  const materialAlertNotifications = missingMaterialOrders.filter(o => !dismissedNotificationIds.includes(o.id));
   const pendingTriagem = orders.filter(o => o.status === "aberto" && !o.assignedTo);
   
   const totalOrders = orders.length;
@@ -1245,6 +1249,63 @@ export default function Dashboard({
               <span className="text-emerald-650">Upgrade de Visão Gerencial</span>
             </div>
           </motion.div>
+        </div>
+      )}
+
+      {/* Floating System Low-Priority Toasts (Material Shortage Alerts) */}
+      {currentUser?.userType === "gestor" && materialAlertNotifications.length > 0 && (
+        <div id="material-shortage-low-priority-toast-container" className="fixed bottom-5 right-5 z-50 flex flex-col gap-3.5 max-w-sm w-full font-sans select-none pointer-events-none">
+          {materialAlertNotifications.map((os) => (
+            <motion.div
+              key={os.id}
+              initial={{ opacity: 0, x: 50, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 30, scale: 0.95 }}
+              className="bg-white border-l-4 border-l-amber-500 border border-slate-150 rounded-2xl p-4 shadow-xl pointer-events-auto relative overflow-hidden backdrop-blur-md"
+            >
+              <div className="flex gap-3 items-start">
+                <div className="p-2 bg-amber-50 border border-amber-100 rounded-xl text-amber-650 shrink-0">
+                  <AlertTriangle className="w-5 h-5 animate-pulse" />
+                </div>
+                
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black tracking-widest text-amber-600 uppercase">Falta de Material</span>
+                    <button
+                      onClick={() => setDismissedNotificationIds(prev => [...prev, os.id])}
+                      className="text-slate-400 hover:text-slate-600 transition-colors p-0.5 rounded-lg hover:bg-slate-105 cursor-pointer"
+                      title="Dispensar Notificação"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  
+                  <span className="font-extrabold text-slate-800 text-[11px] block truncate">
+                    Chamado #{os.id} - {os.title}
+                  </span>
+                  
+                  <p className="text-[10px] text-slate-500 font-medium leading-relaxed italic border-l-2 border-slate-200 pl-1.5 py-0.5 my-1 bg-slate-50 rounded-r-lg">
+                    "{os.missingMaterialDescription || "Material não especificado"}"
+                  </p>
+
+                  <div className="flex items-center gap-1.5 pt-1.5">
+                    <button
+                      onClick={() => onSelectOrder(os)}
+                      className="flex-1 py-1.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-extrabold rounded-lg transition-all cursor-pointer shadow-xs uppercase tracking-wide text-center"
+                    >
+                      Ação Rápida
+                    </button>
+                    <button
+                      onClick={() => setDismissedNotificationIds(prev => [...prev, os.id])}
+                      className="py-1.5 px-2 bg-slate-100 hover:bg-slate-150 border border-slate-200 text-slate-600 text-[10px] font-extrabold rounded-lg transition-all cursor-pointer uppercase tracking-wide text-center"
+                    >
+                      Ignorar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          ))}
         </div>
       )}
 

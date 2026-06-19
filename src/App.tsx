@@ -728,11 +728,31 @@ export default function App() {
     }
   };
 
+  // Strict CPF Dynamic formatting for internal municipal controls
+  const formatOnlyCPF = (value: string) => {
+    const clean = value.replace(/\D/g, "").slice(0, 11);
+    let formatted = clean;
+    if (clean.length > 9) {
+      formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6, 9)}-${clean.slice(9, 11)}`;
+    } else if (clean.length > 6) {
+      formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6)}`;
+    } else if (clean.length > 3) {
+      formatted = `${clean.slice(0, 3)}.${clean.slice(3)}`;
+    }
+    return formatted;
+  };
+
   // Login handler
   const handleTryLogin = (docValue: string, passwordValue: string) => {
     const normalizedInput = docValue.replace(/\D/g, "");
     if (!normalizedInput) {
-      setLoginError("Por favor, digite um CPF ou CNPJ de cadastro.");
+      setLoginError("Por favor, digite seu CPF de cadastro.");
+      return;
+    }
+    // Limit to municipal requirements (CPF only: 11 digits, fallback master is 999/000/36911121884 etc.)
+    const isSpecialFallback = normalizedInput === "999" || normalizedInput === "000";
+    if (normalizedInput.length !== 11 && !isSpecialFallback) {
+      setLoginError("Acesso restrito. Por favor, forneça um CPF de cadastro válido com 11 dígitos.");
       return;
     }
     if (!passwordValue) {
@@ -1209,7 +1229,7 @@ export default function App() {
               >
                 <div>
                   <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
-                    Informe seu CPF de requisitante / Gestor
+                    Informe seu CPF de requisitante / Gestor (Atendimento Prefeitura)
                   </label>
                   <div className="relative">
                     <input
@@ -1217,15 +1237,15 @@ export default function App() {
                       required
                       value={typedDoc}
                       onChange={(e) => {
-                        const formatted = formatDoc(e.target.value);
+                        const formatted = formatOnlyCPF(e.target.value);
                         setTypedDoc(formatted);
                         setLoginError("");
                       }}
                       className="w-full text-base font-semibold border border-slate-800 rounded-2xl px-4 py-3.5 focus:outline-none focus:ring-4 focus:ring-indigo-600/20 focus:border-indigo-500 bg-slate-950 transition-all text-white placeholder-slate-600 tracking-wide font-medium"
-                      placeholder="000.000.000-00 ou 00.000.000/0000-00"
+                      placeholder="000.000.000-00"
                     />
-                    <div className="absolute right-4 top-4 text-slate-500 text-xs font-bold font-mono uppercase">
-                      {typedDoc.replace(/\D/g, "").length <= 11 ? "CPF" : "CNPJ"}
+                    <div className="absolute right-4 top-4 text-indigo-400 text-[10px] font-extrabold font-mono uppercase tracking-wider bg-indigo-950 border border-indigo-900 px-2 py-0.5 rounded-md">
+                      CPF REQUERIDO
                     </div>
                   </div>
                 </div>
@@ -1261,7 +1281,7 @@ export default function App() {
                     className="w-4.5 h-4.5 rounded border-slate-700 bg-slate-950 text-indigo-600 mt-0.5 focus:ring-0 cursor-pointer"
                   />
                   <label htmlFor="consent-check" className="text-xs text-slate-400 leading-relaxed font-medium select-none cursor-pointer text-left">
-                    Consinto expressamente com o processamento do meu CPF/CNPJ e senha para fins de consulta e abertura segura de requisições, afirmando estar em concordância com os <button type="button" onClick={() => setLgpdModalOpen(true)} className="text-indigo-400 font-bold underline hover:text-indigo-300">Termos de Governança de Dados do Sistema</button>.
+                    Consinto expressamente com o processamento do meu CPF e senha secreta para fins de consulta e abertura de requisições, afirmando estar em concordância com os <button type="button" onClick={() => setLgpdModalOpen(true)} className="text-indigo-400 font-bold underline hover:text-indigo-300">Termos de Governança de Dados da Prefeitura</button>.
                   </label>
                 </div>
 

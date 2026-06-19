@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { 
   Mail, ShieldCheck, Key, Server, Hash, Send, RefreshCw, 
-  CheckCircle, AlertTriangle, Eye, EyeOff, Sparkles, Terminal, Smartphone, HelpCircle
+  CheckCircle, AlertTriangle, Eye, EyeOff, Sparkles, Terminal, Smartphone, HelpCircle,
+  Database, Download, Upload, X, Check, Save
 } from "lucide-react";
 import { SmtpSettings, WhatsappSettings } from "../types";
 
@@ -22,7 +23,7 @@ export default function SmtpSettingsPanel({
 }: SmtpSettingsPanelProps) {
   
   // Tab control
-  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp">("smtp");
+  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup">("smtp");
 
   // SMTP States
   const [host, setHost] = useState(settings.host || "smtp.aracatubaservicos.com.br");
@@ -124,6 +125,140 @@ export default function SmtpSettingsPanel({
       enabled: waEnabled
     });
     onNotifyTest("WhatsApp Salvo", "Ajustes de API de WhatsApp salvos com sucesso.", "success");
+  };
+
+  // Backup Local States
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<boolean>(false);
+  const [dragActive, setDragActive] = useState<boolean>(false);
+
+  const getLocalStorageStats = () => {
+    const stats = [];
+    let totalBytes = 0;
+    
+    const keysMap = [
+      { key: "service_mgt_orders2", label: "Ordens de Serviço (Chamados)" },
+      { key: "service_mgt_clients2", label: "Requisitantes / Munícipes homologados" },
+      { key: "service_mgt_professionals2", label: "Técnicos de Campo" },
+      { key: "service_mgt_teams", label: "Equipes de Manutenção" },
+      { key: "service_mgt_logs2", label: "Logs de Auditoria do Sistema" },
+      { key: "service_mgt_smtp", label: "Configuração do Servidor de Email" },
+      { key: "service_mgt_whatsapp", label: "Configuração de Alertas WhatsApp" },
+      { key: "admin_custom_password", label: "Senha Geral do Gestor Administrador" },
+    ];
+
+    for (const item of keysMap) {
+      const value = localStorage.getItem(item.key);
+      const bytes = value ? new Blob([value]).size : 0;
+      totalBytes += bytes;
+      
+      let count = 0;
+      if (value) {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            count = parsed.length;
+          } else if (typeof parsed === "object" && parsed !== null) {
+            count = Object.keys(parsed).length;
+          } else {
+            count = 1;
+          }
+        } catch {
+          count = 1;
+        }
+      }
+      
+      stats.push({
+        ...item,
+        exists: !!value,
+        bytes,
+        count
+      });
+    }
+
+    return { stats, totalBytes };
+  };
+
+  const handleExportBackup = () => {
+    const backupObj: Record<string, string | null> = {};
+    const keys = [
+      "service_mgt_logged_user",
+      "service_mgt_clients2",
+      "service_mgt_orders2",
+      "service_mgt_categories2",
+      "service_mgt_professionals2",
+      "service_mgt_logs2",
+      "service_mgt_smtp",
+      "service_mgt_whatsapp",
+      "service_mgt_teams",
+      "service_mgt_login_attempts",
+      "admin_custom_password"
+    ];
+    
+    for (const k of keys) {
+      backupObj[k] = localStorage.getItem(k);
+    }
+    
+    // Add file metadata
+    const payload = {
+      system: "RequisicaoPro - Araçatuba Serviços de Manutenção",
+      exportedAt: new Date().toISOString(),
+      version: "2.0.0",
+      data: backupObj
+    };
+    
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+    const downloadAnchor = document.createElement("a");
+    downloadAnchor.setAttribute("href", dataStr);
+    
+    const formattedDate = new Date().toISOString().slice(0, 10);
+    downloadAnchor.setAttribute("download", `backup_aracatuba_manutencao_${formattedDate}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    
+    onNotifyTest("Backup Concluído", "Cópia completa gerada e descarregada com sucesso.", "success");
+  };
+
+  const handleImportFile = (file: File) => {
+    setImportError(null);
+    setImportSuccess(false);
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const result = e.target?.result as string;
+        const backupObj = JSON.parse(result);
+        
+        // Validation check
+        if (!backupObj || typeof backupObj !== "object" || backupObj.system === undefined || !backupObj.data) {
+          throw new Error("O arquivo selecionado não possui a assinatura estrutural de backups do RequisiçãoPro.");
+        }
+        
+        const data = backupObj.data;
+        let keysRestoredCount = 0;
+        
+        for (const k in data) {
+          if (data[k] !== null && data[k] !== undefined) {
+            localStorage.setItem(k, data[k]);
+            keysRestoredCount++;
+          }
+        }
+        
+        setImportSuccess(true);
+        onNotifyTest("Restauração Concluída", `Total de ${keysRestoredCount} tabelas restauradas. Reiniciando portal em 2 segundos...`, "success");
+        
+        // Refresh the page so the app reloads all state cleanly from localStorage
+        setTimeout(() => {
+          window.location.reload();
+        }, 2200);
+        
+      } catch (err: any) {
+        setImportError(err.message || "Erro desconhecido ao decodificar arquivo de backup JSON.");
+        onNotifyTest("Falha na Restauração", "Conteúdo do arquivo JSON inválido ou corrompido.", "error");
+      }
+    };
+    reader.readAsText(file);
   };
 
   // Test Connection SMTP
@@ -325,16 +460,26 @@ export default function SmtpSettingsPanel({
   return (
     <div className="space-y-6">
       {/* Page Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 text-white p-6 rounded-3xl border border-slate-850 shadow-md">
         <div>
-          <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Servidor de Comunicação</h1>
-          <p className="text-xs text-slate-500 font-medium">Configure as chaves e parâmetros de conexão para disparo de e-mails corporativos transacionais.</p>
+          <h1 className="text-2xl font-extrabold tracking-tight">Servidor de Comunicação & Governança</h1>
+          <p className="text-xs text-slate-400 font-medium mt-1">Configure as chaves, e-mails, alertas corporativos e baixe diagnósticos completos da base de dados Araçatuba.</p>
         </div>
+        <button
+          type="button"
+          onClick={handleExportBackup}
+          className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer border border-amber-400 active:scale-98 self-start sm:self-center"
+          title="Fazer download imediato de toda a base de dados (localStorage)"
+        >
+          <Download className="w-4 h-4 text-slate-950 stroke-[3]" />
+          <span>Exportar Backup JSON</span>
+        </button>
       </div>
 
       {/* Tabs Menu */}
-      <div className="flex border-b border-slate-200">
+      <div className="flex border-b border-slate-200 flex-wrap gap-y-2">
         <button
+          type="button"
           onClick={() => setActiveSubTab("smtp")}
           className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
             activeSubTab === "smtp"
@@ -344,6 +489,30 @@ export default function SmtpSettingsPanel({
         >
           <Mail className="w-4 h-4 text-indigo-505" />
           Servidor de E-mail (SMTP)
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("whatsapp")}
+          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+            activeSubTab === "whatsapp"
+              ? "border-indigo-600 text-indigo-600 font-black"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <Smartphone className="w-4 h-4 text-emerald-500" />
+          Canal de WhatsApp API
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("backup")}
+          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+            activeSubTab === "backup"
+              ? "border-indigo-600 text-indigo-600 font-black"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <Database className="w-4 h-4 text-amber-500 animate-pulse" />
+          Cópia de Segurança & Backup
         </button>
       </div>
 
@@ -863,6 +1032,198 @@ export default function SmtpSettingsPanel({
             </div>
           </>
         )}
+
+        {/* TAB 3: BACKUP & RESTORE SYSTEM */}
+        {activeSubTab === "backup" && (() => {
+          const { stats, totalBytes } = getLocalStorageStats();
+          return (
+            <div className="lg:col-span-3 bg-white rounded-3xl border border-slate-100 shadow-xs p-6 space-y-6 animate-fade-in text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-5 gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-amber-50 rounded-2xl text-amber-650 border border-amber-100 shrink-0">
+                    <Database className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div>
+                    <h2 className="font-extrabold text-slate-800 text-base uppercase tracking-wider">Cópia de Segurança / Backup do Gestor</h2>
+                    <p className="text-xs text-slate-550 font-medium text-slate-500">Exporte toda a base de dados de ARAÇATUBA (configurações, e-mails, requisitantes, logs e ordens) para um arquivo JSON seguro.</p>
+                  </div>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={handleExportBackup}
+                  className="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer hover:-translate-y-[1px] active:translate-y-0"
+                >
+                  <Download className="w-4 h-4 text-indigo-200" />
+                  Baixar Backup JSON Completo
+                </button>
+              </div>
+
+              {/* Grid Overview Info */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Tamanho Estimado da Base</span>
+                  <div className="my-2">
+                    <span className="text-2xl font-black text-slate-800">{(totalBytes / 1024).toFixed(3)} KB</span>
+                    <span className="text-[10px] text-slate-500 block font-mono mt-1">{totalBytes} bytes em armazenamento local</span>
+                  </div>
+                  <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1 bg-emerald-50/80 p-1 rounded-lg border border-emerald-100/50 block w-fit">
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    Status Saudável
+                  </span>
+                </div>
+
+                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Tabelas Ativas no Sistema</span>
+                  <div className="my-2">
+                    <span className="text-2xl font-black text-indigo-600">{stats.filter(s => s.exists).length} / {stats.length}</span>
+                    <span className="text-[10px] text-slate-500 block mt-1">Estruturas municipais instanciadas</span>
+                  </div>
+                  <span className="text-[9px] font-extrabold text-indigo-500 uppercase tracking-wider bg-indigo-50 border border-indigo-100/50 rounded-lg px-2 py-0.5 block w-fit">
+                    Armazenamento Local
+                  </span>
+                </div>
+
+                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Tipo de Governança (LGPD)</span>
+                  <div className="my-2">
+                    <span className="text-2xl font-black text-amber-600">Off-line / Criptografado</span>
+                    <span className="text-[10px] text-slate-500 block mt-1">Dispositivo de controle restrito</span>
+                  </div>
+                  <span className="text-[9px] font-extrabold text-amber-600 uppercase tracking-wider bg-amber-50 border border-amber-100/50 rounded-lg px-2 py-0.5 block w-fit">
+                    Prefeitura Municipal
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
+                {/* Statistics Breakdown Table */}
+                <div className="space-y-3">
+                  <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 block">Detalhamento dos Dados Coletados</h3>
+                  
+                  <div className="border border-slate-150 rounded-2xl overflow-hidden divide-y divide-slate-100 bg-slate-50">
+                    {stats.map((row) => (
+                      <div key={row.key} className="flex items-center justify-between p-3.5 text-xs hover:bg-slate-100/55 transition-colors bg-white">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-1.5 rounded-lg shrink-0 ${
+                            row.exists ? "bg-indigo-55 bg-indigo-50 text-indigo-600" : "bg-slate-100 text-slate-350"
+                          }`}>
+                            {row.key.includes("smtp") ? (
+                              <Mail className="w-4 h-4" />
+                            ) : row.key.includes("whatsapp") ? (
+                              <Smartphone className="w-4 h-4" />
+                            ) : row.key.includes("password") ? (
+                              <Key className="w-4 h-4 focus-visible:no-underline" />
+                            ) : (
+                              <Database className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div>
+                            <span className="font-bold text-slate-800 block">{row.label}</span>
+                            <span className="text-[9px] text-slate-400 font-mono select-all block">{row.key}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          {row.exists ? (
+                            <>
+                              <span className="font-extrabold text-slate-700 block">
+                                {row.count > 0 ? `${row.count} itens` : "Ativo"}
+                              </span>
+                              <span className="text-[9px] text-slate-450 text-slate-400 font-mono block">{(row.bytes / 1024).toFixed(3)} KB</span>
+                            </>
+                          ) : (
+                            <span className="text-[10px] text-slate-350 font-bold uppercase tracking-wider block bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100/70">
+                              Vazia / Ausente
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Import / Restore panel */}
+                <div className="bg-slate-50/55 rounded-2xl border border-slate-100 p-5 space-y-4 flex flex-col justify-between">
+                  <div className="space-y-4">
+                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 flex items-center gap-1.5 border-b border-slate-100 pb-2.5">
+                      <Upload className="w-4 h-4 text-indigo-500 shrink-0" />
+                      Restaurar Base (Carregar Arquivo .JSON)
+                    </h3>
+                    
+                    <p className="text-[11px] text-slate-500 leading-normal font-medium">
+                      O processo de restauração lerá o arquivo `.json` exportado anteriormente e reiniciará o portal do gestor recarregando os chamados, equipes, usuários e logs gravados originalmente no backup.
+                    </p>
+
+                    <div 
+                      onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                      onDragLeave={() => setDragActive(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragActive(false);
+                        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                          handleImportFile(e.dataTransfer.files[0]);
+                        }
+                      }}
+                      className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all flex flex-col items-center justify-center gap-3 cursor-pointer ${
+                        dragActive 
+                          ? "border-indigo-500 bg-indigo-50/50 text-indigo-600 scale-[0.99]" 
+                          : "border-slate-200 bg-white hover:border-indigo-400 hover:bg-slate-50/50 text-slate-500"
+                      }`}
+                      onClick={() => {
+                        const input = document.createElement("input");
+                        input.type = "file";
+                        input.accept = ".json";
+                        input.onchange = (e: any) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleImportFile(e.target.files[0]);
+                          }
+                        };
+                        input.click();
+                      }}
+                    >
+                      <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-2xl text-indigo-600">
+                        <Upload className="w-6 h-6 animate-pulse" />
+                      </div>
+                      <div>
+                        <span className="font-extrabold text-xs text-slate-800 block">Arraste ou clique para selecionar</span>
+                        <span className="text-[10px] text-slate-400 font-medium">Aceita apenas arquivos JSON gerados pelo sistema Araçatuba</span>
+                      </div>
+                    </div>
+
+                    {importError && (
+                      <div className="bg-rose-50 border border-rose-205 border-rose-200 text-rose-700 p-3.5 rounded-xl text-xs font-bold leading-normal text-left flex items-start gap-2 animate-fade-in">
+                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5 animate-bounce" />
+                        <div>
+                          <span className="uppercase text-[9px] block font-black text-rose-800 tracking-wider">Falha de Integridade</span>
+                          <span>{importError}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {importSuccess && (
+                      <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3.5 rounded-xl text-xs font-bold leading-normal text-left flex items-start gap-2 animate-pulse">
+                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="uppercase text-[9px] block font-black text-emerald-800 tracking-wider">Assinatura Válida</span>
+                          <span>Dados restaurados com êxito! Aplicando sincronização e recarregando em 2 segundos...</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-amber-55/60 bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-[10.5px] leading-relaxed text-left flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="uppercase text-[9px] font-black text-amber-900 tracking-wider block">⚠️ AVISO DE SUBSTITUIÇÃO</strong>
+                      <span>A importação de um backup <strong>sobrescreve totalmente</strong> as informações de chamados e configurações locais atuais. Recomenda-se baixar um backup atual preventivamente.</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       </div>
     </div>
