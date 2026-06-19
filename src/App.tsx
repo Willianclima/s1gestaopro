@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, Team } from "./types";
+import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt } from "./types";
 import { 
   INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS 
 } from "./data/mockData";
@@ -15,7 +15,7 @@ import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
-  Mail, Smartphone, Send, Copy
+  Mail, Smartphone, Send, Copy, AlertTriangle
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
 
@@ -63,6 +63,10 @@ export default function App() {
     phone: string;
     email: string;
     tempPassword: string;
+    apiStatus?: "idle" | "sending" | "success" | "error";
+    apiResponse?: string;
+    apiUrlUsed?: string;
+    apiPayload?: string;
   } | null>(null);
   const [copiedWhatsApp, setCopiedWhatsApp] = useState(false);
   const [copiedEmail, setCopiedEmail] = useState(false);
@@ -73,6 +77,7 @@ export default function App() {
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
+  const [loginAttempts, setLoginAttempts] = useState<LoginAttempt[]>([]);
   const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>({
     host: "smtp.aracatubaservicos.com.br",
     port: "587",
@@ -80,6 +85,13 @@ export default function App() {
     pass: "S0m3_S3cur3_P@ssw0rd",
     senderAddress: "Araçatuba Serviços <suporte@aracatubaservicos.com.br>",
     secure: true
+  });
+  const [whatsappSettings, setWhatsappSettings] = useState<WhatsappSettings>({
+    provider: "custom",
+    apiToken: "",
+    apiUrl: "https://api.twilio.com/2010-04-01/Accounts/ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/Messages.json",
+    fromNumber: "+14155238886",
+    enabled: false
   });
   const [teams, setTeams] = useState<Team[]>([]);
 
@@ -94,6 +106,7 @@ export default function App() {
     const cachedProfessionals = localStorage.getItem("service_mgt_professionals2");
     const cachedLogs = localStorage.getItem("service_mgt_logs2");
     const cachedSmtp = localStorage.getItem("service_mgt_smtp");
+    const cachedWhatsapp = localStorage.getItem("service_mgt_whatsapp");
     const cachedTeams = localStorage.getItem("service_mgt_teams");
 
     if (cachedTeams) {
@@ -104,6 +117,10 @@ export default function App() {
 
     if (cachedSmtp) {
       setSmtpSettings(JSON.parse(cachedSmtp));
+    }
+
+    if (cachedWhatsapp) {
+      setWhatsappSettings(JSON.parse(cachedWhatsapp));
     }
 
     if (cachedClients) {
@@ -175,6 +192,43 @@ export default function App() {
       setLogs(initialLogs);
       localStorage.setItem("service_mgt_logs2", JSON.stringify(initialLogs));
     }
+
+    const cachedLoginAttempts = localStorage.getItem("service_mgt_login_attempts");
+    if (cachedLoginAttempts) {
+      setLoginAttempts(JSON.parse(cachedLoginAttempts));
+    } else {
+      const initialAttempts: LoginAttempt[] = [
+        {
+          id: "attempt-1",
+          timestamp: new Date(Date.now() - 10 * 60000).toISOString(),
+          username: "36911121884",
+          userId: "gestor-admin",
+          status: "success",
+          userType: "gestor",
+          details: "Login autorizado com sucesso para o Gestor Administrador."
+        },
+        {
+          id: "attempt-2",
+          timestamp: new Date(Date.now() - 35 * 60000).toISOString(),
+          username: "11122233344",
+          userId: "cli-2",
+          status: "failed",
+          userType: "requisitante",
+          details: "Falha de autenticação: Senha de segurança incorreta."
+        },
+        {
+          id: "attempt-3",
+          timestamp: new Date(Date.now() - 120 * 60000).toISOString(),
+          username: "44455566677",
+          userId: "prof-1",
+          status: "success",
+          userType: "profissional",
+          details: "Login técnico homologado com sucesso."
+        }
+      ];
+      setLoginAttempts(initialAttempts);
+      localStorage.setItem("service_mgt_login_attempts", JSON.stringify(initialAttempts));
+    }
   }, []);
 
   // Sync state helpers to persistent Storage
@@ -244,12 +298,44 @@ export default function App() {
     });
   };
 
+  const addLoginAttempt = (username: string, userId: string, status: "success" | "failed", userType: string, details: string) => {
+    const attempt: LoginAttempt = {
+      id: "attempt-" + Math.random().toString(36).substr(2, 9),
+      timestamp: new Date().toISOString(),
+      username,
+      userId,
+      status,
+      userType,
+      details
+    };
+    setLoginAttempts(prev => {
+      const updated = [attempt, ...prev];
+      localStorage.setItem("service_mgt_login_attempts", JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleClearLoginAttempts = () => {
+    setLoginAttempts([]);
+    localStorage.setItem("service_mgt_login_attempts", JSON.stringify([]));
+  };
+
   const handleSaveSmtpSettings = (newSettings: SmtpSettings) => {
     setSmtpSettings(newSettings);
     localStorage.setItem("service_mgt_smtp", JSON.stringify(newSettings));
     addSystemLog(
       "Configuração SMTP",
       `Parâmetros do servidor SMTP atualizados pelo Gestor (${newSettings.host}:${newSettings.port}).`,
+      "sistema"
+    );
+  };
+
+  const handleSaveWhatsappSettings = (newSettings: WhatsappSettings) => {
+    setWhatsappSettings(newSettings);
+    localStorage.setItem("service_mgt_whatsapp", JSON.stringify(newSettings));
+    addSystemLog(
+      "Configuração WhatsApp",
+      `Parâmetros do disparador WhatsApp API atualizados pelo Gestor. Provedor: ${newSettings.provider}, Habilitado: ${newSettings.enabled ? 'Sim' : 'Não'}.`,
       "sistema"
     );
   };
@@ -422,7 +508,108 @@ export default function App() {
     toastSuccess(`Dados de "${updatedProf.name}" foram salvos com sucesso!`, "Técnico Atualizado");
   };
 
-  const handleResetPassword = (id: string, type: "client" | "professional") => {
+  const sendProgrammaticWhatsapp = async (targetPhone: string, messageText: string, settings: WhatsappSettings) => {
+    if (!settings.enabled) {
+      return { status: "idle" as const, message: "Disparador desativado nas Configurações do WhatsApp. Somente simulação exibida." };
+    }
+    
+    const cleanPhone = targetPhone.replace(/\D/g, "");
+    const finalUrl = settings.apiUrl || "";
+    let payloadStr = "";
+    let proxyBody = "";
+    let headersObj: Record<string, string> = {};
+    
+    try {
+      if (settings.provider === "twilio") {
+        const bodyParams = new URLSearchParams();
+        const toVal = targetPhone.startsWith("whatsapp:") ? targetPhone : `whatsapp:+${cleanPhone}`;
+        const fromVal = settings.fromNumber.startsWith("whatsapp:") ? settings.fromNumber : `whatsapp:${settings.fromNumber}`;
+        
+        bodyParams.append("To", toVal);
+        bodyParams.append("From", fromVal);
+        bodyParams.append("Body", messageText);
+        payloadStr = `To=${toVal}&From=${fromVal}&Body=${messageText}`;
+        
+        headersObj = {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Authorization": `Basic ${btoa(`api:${settings.apiToken}`)}`
+        };
+        proxyBody = bodyParams.toString();
+      } else if (settings.provider === "cloud_api") {
+        const bodyContent = {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: cleanPhone,
+          type: "text",
+          text: {
+            body: messageText
+          }
+        };
+        payloadStr = JSON.stringify(bodyContent, null, 2);
+        
+        headersObj = {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${settings.apiToken}`
+        };
+        proxyBody = payloadStr;
+      } else {
+        const bodyContent = {
+          phone: cleanPhone,
+          message: messageText,
+          sender: settings.fromNumber
+        };
+        payloadStr = JSON.stringify(bodyContent, null, 2);
+        
+        headersObj = {
+          "Content-Type": "application/json",
+          "X-API-Key": settings.apiToken,
+          "Authorization": `Bearer ${settings.apiToken}`
+        };
+        proxyBody = payloadStr;
+      }
+      
+      const response = await fetch("/api/whatsapp/proxy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          url: finalUrl,
+          method: "POST",
+          headers: headersObj,
+          body: proxyBody
+        })
+      });
+      
+      const resJson = await response.json();
+      
+      if (!response.ok || !resJson.ok) {
+        const errorMsg = resJson.error || resJson.data || "Erro de rede no proxy.";
+        return {
+          status: "error" as const,
+          message: `Erro no proxy (${resJson.status || response.status}): ${errorMsg.substring(0, 300)}`,
+          payload: payloadStr,
+          urlUsed: finalUrl
+        };
+      }
+      
+      return {
+        status: "success" as const,
+        message: `HTTP ${resJson.status}: ${resJson.data ? resJson.data.substring(0, 300) : "Sucesso"}`,
+        payload: payloadStr,
+        urlUsed: finalUrl
+      };
+    } catch (e: any) {
+      return {
+        status: "error" as const,
+        message: e.message || "Erro de rede no proxy.",
+        payload: payloadStr || "Não compilado",
+        urlUsed: finalUrl
+      };
+    }
+  };
+
+  const handleResetPassword = async (id: string, type: "client" | "professional") => {
     const defaultPassword = "123456";
     let userName = "";
     let phone = "";
@@ -466,15 +653,39 @@ export default function App() {
         "sistema"
       );
 
-      // Trigger visual simulator modal
-      setSimulatedNotification({
-        userName,
-        phone: phone || "(18) 99123-4567",
-        email: email || `${userName.toLowerCase().replace(/[^a-z0-9]/g, "")}@gmail.com`,
-        tempPassword: defaultPassword
-      });
+      const targetPhone = phone || "(18) 99123-4567";
+      const targetEmail = email || `${userName.toLowerCase().replace(/[^a-z0-9]/g, "")}@gmail.com`;
 
+      // Trigger modal immediately with "sending" / "idle" state
+      const defaultState = {
+        userName,
+        phone: targetPhone,
+        email: targetEmail,
+        tempPassword: defaultPassword,
+        apiStatus: (whatsappSettings.enabled ? "sending" : "idle") as any,
+        apiResponse: whatsappSettings.enabled ? "Processando disparo de API do WhatsApp..." : "Disparador automático desativado nas configurações.",
+        apiUrlUsed: whatsappSettings.apiUrl,
+        apiPayload: ""
+      };
+      
+      setSimulatedNotification(defaultState);
       toastSuccess(`Credenciais de "${userName}" redefinidas com sucesso!`, "Senha Alterada");
+
+      if (whatsappSettings.enabled) {
+        const messageText = `Araçatuba Serviços de Manutenção: Olá ${userName}! Sua senha de acesso provisória foi redefinida para "123456". Altere-a imediatamente após realizar o login para manter seus dados seguros em conformidade com o sigilo da LGPD.`;
+        const res = await sendProgrammaticWhatsapp(targetPhone, messageText, whatsappSettings);
+        
+        setSimulatedNotification(prev => {
+          if (!prev || prev.userName !== userName) return prev;
+          return {
+            ...prev,
+            apiStatus: res.status,
+            apiResponse: res.message,
+            apiUrlUsed: res.urlUsed,
+            apiPayload: res.payload
+          };
+        });
+      }
     }
   };
 
@@ -548,6 +759,7 @@ export default function App() {
       if (passwordValue && passwordValue !== adminSavedPass) {
         setLoginError("Senha incorreta para o Gestor Administrador.");
         toastError("Senha incorreta para o canal de Gestor Administrador.", "Falha de Login");
+        addLoginAttempt(normalizedInput, "gestor-admin", "failed", "gestor", "Tentativa mestre falhou: Senha do Gestor Administrador incorreta.");
         return;
       }
       const adminUser: CurrentUser = {
@@ -563,6 +775,7 @@ export default function App() {
       setTypedDoc("");
       setTypedPassword("");
       addSystemLog("Login do Gestor", "Gestor Willian C. Lima autenticado via CPF com credenciais seguras.", "sistema");
+      addLoginAttempt(normalizedInput, adminUser.id, "success", "gestor", "Login bem-sucedido via credencial mestre administrador (Willian C. Lima).");
       toastSuccess("Seja bem-vindo de volta, Willian C. Lima!", "Acesso Autorizado");
       return;
     }
@@ -573,6 +786,7 @@ export default function App() {
       if (matchedClient.status === "pendente_autorizacao") {
         setLoginError("⚠️ Seu cadastro encontra-se PENDENTE de autorização pelo Gestor Administrador. Por favor, aguarde o deferimento da liberação de sua conta.");
         toastInfo("Seu cadastro de requisitante está pendente de homologação pelo gestor.", "Aguardando Liberação");
+        addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", "Login recusado: cadastro pendente de autorização.");
         return;
       }
 
@@ -580,6 +794,7 @@ export default function App() {
       if (matchedClient.blocked) {
         setLoginError("⚠️ Esta conta foi BLOQUEADA por excesso de tentativas (3 erros). O Gestor Administrador foi notificado e pode resetar sua senha no Dashboard.");
         toastError("Esta conta de requisitante encontra-se temporariamente bloqueada!", "Acesso Bloqueado");
+        addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", "Login recusado: conta temporariamente bloqueada.");
         return;
       }
 
@@ -602,9 +817,11 @@ export default function App() {
             `A conta do requisitante "${matchedClient.name}" (${matchedClient.document}) foi bloqueada por excesso de erros consecutivas de login.`, 
             "sistema"
           );
+          addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", "Conta bloqueada: excesso de tentativas de senha incorreta (3 falhas).");
           setLoginError("⚠️ Conta BLOQUEADA por excesso de tentativas (3 erros). O Gestor foi alertado e pode liberar o login redefinindo sua senha no Painel.");
           toastError("Acesso suspenso por excesso de erros consecutivos!", "Segurança Ativada");
         } else {
+          addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", `Senha incorreta. Tentativa ${attempts} de 3.`);
           setLoginError(`Senha incorreta. Tentativa ${attempts} de 3. Seu acesso será bloqueado após 3 erros consecutivos.`);
           toastWarn(`Senha incorreta! Tentativa ${attempts}/3.`, "Falha de Autenticação");
         }
@@ -635,6 +852,7 @@ export default function App() {
       setTypedDoc("");
       setTypedPassword("");
       addSystemLog("Login do Requisitante", `Cliente "${matchedClient.name}" autenticado via CPF com isolamento de visibilidade.`, "sistema");
+      addLoginAttempt(normalizedInput, matchedClient.id, "success", isGestor ? "gestor" : "requisitante", `Login efetuado com sucesso como ${isGestor ? "Gestor" : "Requisitante"}.`);
       toastSuccess(`Seja bem-vindo, ${matchedClient.name}!`, "Acesso Autorizado");
       return;
     }
@@ -645,6 +863,7 @@ export default function App() {
       if (matchedProf.blocked) {
         setLoginError("⚠️ Esta conta de Técnico foi BLOQUEADA por excesso de tentativas (3 erros). Entre em contato com o Gestor Administrador para desbloquear.");
         toastError("Sua conta de suporte técnico encontra-se bloqueada!", "Acesso Bloqueado");
+        addLoginAttempt(normalizedInput, matchedProf.id, "failed", "profissional", "Login de técnico recusado: conta temporariamente bloqueada.");
         return;
       }
 
@@ -666,9 +885,11 @@ export default function App() {
             `A conta do técnico de campo "${matchedProf.name}" foi bloqueada por excesso de erros de senha.`, 
             "sistema"
           );
+          addLoginAttempt(normalizedInput, matchedProf.id, "failed", "profissional", "Conta técnica bloqueada: excesso de tentativas de senha incorreta (3 falhas).");
           setLoginError("⚠️ Conta BLOQUEADA por excesso de tentativas (3 erros). O Gestor foi alertado e pode liberar o login redefinindo sua senha no Painel.");
           toastError("Acesso técnico suspenso por excesso de tentativas!", "Segurança Ativada");
         } else {
+          addLoginAttempt(normalizedInput, matchedProf.id, "failed", "profissional", `Senha incorreta informada para conta de técnico. Tentativa ${attempts} de 3.`);
           setLoginError(`Senha de técnico inválida. Tentativa ${attempts} de 3. Seu acesso será bloqueado após 3 erros consecutivos.`);
           toastWarn(`Senha de técnico incorreta! Tentativa ${attempts}/3.`, "Falha de Autenticação");
         }
@@ -698,12 +919,14 @@ export default function App() {
       setTypedDoc("");
       setTypedPassword("");
       addSystemLog("Login do Técnico", `Técnico de campo "${matchedProf.name}" autenticado no portal restrito.`, "sistema");
+      addLoginAttempt(normalizedInput, matchedProf.id, "success", "profissional", "Login técnico bem-sucedido.");
       toastSuccess(`Olá, Técnico ${matchedProf.name}! Agenda de OS sincronizada.`, "Suporte Técnico Conectado");
       return;
     }
 
     setLoginError("Documento (CPF/CNPJ) não encontrado nas bases do sistema. Revise os dados ou faça seu Auto-Cadastro logo abaixo.");
     toastError("Identificador de acesso não cadastrado na base.", "Falha de Login");
+    addLoginAttempt(normalizedInput, "desconhecido", "failed", "desconhecido", "Tentativa de login de usuário não registrado no sistema.");
   };
 
   // Self-registration handler
@@ -1541,6 +1764,7 @@ export default function App() {
                 clients={clients} 
                 professionals={professionals}
                 currentUser={currentUser}
+                logs={logs}
                 onNavigate={setActiveTab}
                 onSelectOrder={(os) => {
                   setSelectedOS(os);
@@ -1596,6 +1820,7 @@ export default function App() {
                 onAddTeam={handleAddTeam}
                 onUpdateTeam={handleUpdateTeam}
                 onDeleteTeam={handleDeleteTeam}
+                orders={orders}
               />
             )}
 
@@ -1613,6 +1838,8 @@ export default function App() {
                 professionals={professionals}
                 logs={logs}
                 onClearLogs={handleClearLogs}
+                loginAttempts={loginAttempts}
+                onClearLoginAttempts={handleClearLoginAttempts}
               />
             )}
 
@@ -1620,6 +1847,8 @@ export default function App() {
               <SmtpSettingsPanel
                 settings={smtpSettings}
                 onSave={handleSaveSmtpSettings}
+                whatsappSettings={whatsappSettings}
+                onSaveWhatsapp={handleSaveWhatsappSettings}
                 onNotifyTest={(title, msg, type) => {
                   if (type === "success") toastSuccess(msg, title);
                   else if (type === "error") toastError(msg, title);
@@ -1756,7 +1985,7 @@ export default function App() {
                       <div className="p-2 bg-emerald-100 text-emerald-800 rounded-lg shrink-0 mt-0.5 animate-bounce">
                         <ShieldCheck className="w-4 h-4" />
                       </div>
-                      <div className="text-xs text-emerald-950 leading-normal font-medium">
+                      <div className="text-xs text-emerald-950 leading-normal font-medium text-left">
                         <p className="font-black text-emerald-900 uppercase tracking-wider mb-1 text-[10px]">Ativação & Comunicação Integrada</p>
                         A senha de <strong>{simulatedNotification.userName}</strong> foi alterada para a nova senha provisória padrão <strong className="text-emerald-800">123456</strong> e o bloqueio de segurança foi removido. Os canais automatizados dispararam as seguintes comunicações:
                       </div>
@@ -1770,10 +1999,52 @@ export default function App() {
                           <div className="flex items-center justify-between border-b border-emerald-200/20 pb-2.5">
                             <div className="flex items-center gap-2">
                               <Smartphone className="w-4.5 h-4.5 text-emerald-600" />
-                              <span className="font-black text-slate-850 text-[11px] uppercase tracking-wider">WhatsApp Provisório</span>
+                              <span className="font-black text-slate-855 text-[11px] uppercase tracking-wider">WhatsApp Provisório</span>
                             </div>
                             <span className="text-[10.5px] bg-emerald-100 text-emerald-850 font-bold px-2.5 py-0.5 rounded-full font-mono">{simulatedNotification.phone}</span>
                           </div>
+
+                          {/* Programmatic API Status Block */}
+                          {simulatedNotification.apiStatus && (
+                            <div className="p-3 bg-white border border-slate-200/50 rounded-xl text-left text-[11.5px] space-y-1.5 shadow-xs">
+                              {simulatedNotification.apiStatus === "sending" && (
+                                <div className="flex items-center gap-2 text-amber-850 font-extrabold text-[10.5px]">
+                                  <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping shrink-0" />
+                                  <span>Invocando API do WhatsApp...</span>
+                                </div>
+                              )}
+                              {simulatedNotification.apiStatus === "success" && (
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center gap-1.5 text-emerald-850 font-extrabold text-[10.5px]">
+                                    <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 animate-bounce" />
+                                    <span>ENVIADO PROGRAMATICAMENTE!</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-600 font-medium leading-normal bg-slate-50 p-2 border border-slate-100 rounded-lg">
+                                    <span className="font-extrabold uppercase text-[8.5px] text-slate-400 block mb-0.5">Resposta do Servidor:</span>
+                                    <div className="max-h-[60px] scroll-narrow overflow-y-auto font-mono text-[9px] break-all whitespace-pre-wrap">{simulatedNotification.apiResponse || "Resposta vazia (Sucesso)"}</div>
+                                  </div>
+                                </div>
+                              )}
+                              {simulatedNotification.apiStatus === "error" && (
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center gap-1.5 text-rose-850 font-extrabold text-[10.5px]">
+                                    <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                                    <span>FALHA NO DISPARO AUTOMÁTICO</span>
+                                  </div>
+                                  <div className="text-[10px] text-rose-650 font-medium leading-normal bg-rose-50/50 p-2 border border-rose-100 rounded-lg">
+                                    <span className="font-extrabold uppercase text-[8.5px] text-rose-455 block mb-0.5">Motivo do Erro:</span>
+                                    <div className="max-h-[60px] scroll-narrow overflow-y-auto font-mono text-[9px] break-all whitespace-pre-wrap text-rose-600">{simulatedNotification.apiResponse}</div>
+                                  </div>
+                                </div>
+                              )}
+                              {simulatedNotification.apiStatus === "idle" && (
+                                <div className="flex items-center gap-1.5 text-slate-600 font-semibold text-[10px]">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
+                                  <span>Disparador de WhatsApp desativado</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                           {/* Chat Box Visual */}
                           <div className="bg-[#efeae2] border border-emerald-150 rounded-xl p-3.5 min-h-[220px] flex flex-col justify-end relative overflow-hidden">

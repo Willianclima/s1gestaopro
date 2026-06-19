@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Professional, ServiceCategory, Team } from "../types";
+import { Professional, ServiceCategory, Team, ServiceOrder } from "../types";
 import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star } from "lucide-react";
 
 interface ProfessionalsProps {
@@ -12,6 +12,7 @@ interface ProfessionalsProps {
   onAddTeam?: (team: Team) => void;
   onUpdateTeam?: (team: Team) => void;
   onDeleteTeam?: (id: string) => void;
+  orders?: ServiceOrder[];
 }
 
 export default function Professionals({
@@ -23,7 +24,8 @@ export default function Professionals({
   teams = [],
   onAddTeam,
   onUpdateTeam,
-  onDeleteTeam
+  onDeleteTeam,
+  orders = []
 }: ProfessionalsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -308,69 +310,118 @@ export default function Professionals({
                   <th className="px-6 py-4">Nome / Cadastro</th>
                   <th className="px-6 py-4">Cargo / Atribuição</th>
                   <th className="px-6 py-4">Especialidades Técnicas</th>
+                  <th className="px-6 py-4">Carga de Trabalho (OS)</th>
                   <th className="px-6 py-4 text-center">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
                 {filteredProfessionals.length > 0 ? (
-                  filteredProfessionals.map(prof => (
-                    <tr key={prof.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700 font-bold shrink-0 uppercase text-[10px]">
-                            {prof.name.split(" ").slice(0, 2).map(n => n[0]).join("")}
+                  filteredProfessionals.map(prof => {
+                    const techOrders = orders.filter(o => o.assignedTo === prof.name);
+                    const activeOrders = techOrders.filter(o => o.status !== "concluido" && o.status !== "cancelado");
+                    
+                    const maxCapacity = 5;
+                    const percentage = Math.min(100, Math.round((activeOrders.length / maxCapacity) * 100));
+
+                    let barColor = "bg-emerald-500";
+                    let textColor = "text-emerald-700 bg-emerald-50 border-emerald-150";
+                    let statusText = "Sob Controle";
+
+                    if (activeOrders.length === 0) {
+                      barColor = "bg-slate-200";
+                      textColor = "text-slate-500 bg-slate-50 border-slate-150";
+                      statusText = "Livre / Disponível";
+                    } else if (activeOrders.length >= 4) {
+                      barColor = "bg-rose-500";
+                      textColor = "text-rose-700 bg-rose-50 border-rose-150";
+                      statusText = "Carga Crítica";
+                    } else if (activeOrders.length >= 2) {
+                      barColor = "bg-amber-500";
+                      textColor = "text-amber-700 bg-amber-50 border-amber-150";
+                      statusText = "Moderada";
+                    }
+
+                    return (
+                      <tr key={prof.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700 font-bold shrink-0 uppercase text-[10px]">
+                              {prof.name.split(" ").slice(0, 2).map(n => n[0]).join("")}
+                            </div>
+                            <div>
+                              <span className="font-extrabold text-slate-850 block">{prof.name}</span>
+                              <span className="text-[10px] text-slate-400 block font-mono">ID: {prof.id}</span>
+                            </div>
                           </div>
-                          <div>
-                            <span className="font-extrabold text-slate-850 block">{prof.name}</span>
-                            <span className="text-[10px] text-slate-400 block font-mono">ID: {prof.id}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 font-bold text-slate-650">
-                        {prof.role}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-wrap gap-1 md:max-w-[325px]">
-                          {prof.specialties && prof.specialties.length > 0 ? (
-                            prof.specialties.map((spec, sidx) => (
-                              <span key={sidx} className="inline-block bg-slate-100 border border-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase tracking-wide">
-                                {spec}
+                        </td>
+                        <td className="px-6 py-4 font-bold text-slate-650">
+                          {prof.role}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-wrap gap-1 md:max-w-[325px]">
+                            {prof.specialties && prof.specialties.length > 0 ? (
+                              prof.specialties.map((spec, sidx) => (
+                                <span key={sidx} className="inline-block bg-slate-100 border border-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase tracking-wide">
+                                  {spec}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="inline-block bg-indigo-50 border border-indigo-150 text-indigo-700 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase">
+                                {prof.specialty || "Geral"}
                               </span>
-                            ))
-                          ) : (
-                            <span className="inline-block bg-indigo-50 border border-indigo-150 text-indigo-700 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase">
-                              {prof.specialty || "Geral"}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => handleOpenForm(prof)}
-                            className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
-                            title="Editar cadastro do integrante"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (confirm(`Remover definitivamente o integrante ${prof.name}?`)) {
-                                onDeleteProfessional(prof.id);
-                              }
-                            }}
-                            className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg transition-colors cursor-pointer"
-                            title="Excluir integrante"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="space-y-1.5 max-w-[160px]">
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className={`px-1.5 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider ${textColor}`}>
+                                {activeOrders.length} {activeOrders.length === 1 ? "Ativa" : "Ativas"}
+                              </span>
+                              <span className="text-slate-500 font-extrabold font-mono">
+                                {percentage}%
+                              </span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 border border-slate-200/50 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
+                                style={{ width: `${percentage}%` }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-[9px] text-slate-400 select-none">
+                              <span>Teto ideal: {maxCapacity} OS</span>
+                              <span className="font-bold">{statusText}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              onClick={() => handleOpenForm(prof)}
+                              className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
+                              title="Editar cadastro do integrante"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (confirm(`Remover definitivamente o integrante ${prof.name}?`)) {
+                                  onDeleteProfessional(prof.id);
+                                }
+                              }}
+                              className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg transition-colors cursor-pointer"
+                              title="Excluir integrante"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
-                    <td colSpan={4} className="text-center py-12 text-slate-400 font-medium">
+                    <td colSpan={5} className="text-center py-12 text-slate-400 font-medium">
                       Nenhum integrante cadastrado ou encontrado com esses filtros.
                     </td>
                   </tr>

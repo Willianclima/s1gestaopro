@@ -6,6 +6,52 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+import dns from "dns";
+import { promisify } from "util";
+import { URL } from "url";
+
+const dnsLookup = promisify(dns.lookup);
+
+// Proteção robusta contra SSRF (Server-Side Request Forgery)
+async function validateUrlForSsrf(urlStr: string): Promise<{ safe: boolean; reason?: string }> {
+  try {
+    const parsed = new URL(urlStr);
+    
+    // 1. Apenas HTTPS seguro é permitido para conexões de gateway
+    if (parsed.protocol !== "https:") {
+      return { safe: false, reason: "Apenas conexões HTTPS seguras são permitidas." };
+    }
+    
+    const hostname = parsed.hostname.toLowerCase();
+    
+    // 2. Bloqueio de hosts locais e de metadados de nuvem conhecidos
+    const forbiddenHosts = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"];
+    if (forbiddenHosts.includes(hostname)) {
+      return { safe: false, reason: "Acesso a endereços locais bloqueado por segurança (SSRF Prevention)." };
+    }
+    
+    // 3. Regex para validação de faixas de IP privadas
+    const privateIpRegex = /^(127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
+    if (privateIpRegex.test(hostname)) {
+      return { safe: false, reason: "Acesso a redes privadas e subredes internas bloqueado por segurança (SSRF Prevention)." };
+    }
+
+    // 4. Resolve DNS e verifica IP resultante para prevenir DNS Rebinding e evasão por hosts customizados
+    try {
+      const { address } = await dnsLookup(hostname);
+      if (forbiddenHosts.includes(address) || privateIpRegex.test(address)) {
+        return { safe: false, reason: "O domínio informado resolve para uma faixa de IP local ou privada restrita." };
+      }
+    } catch {
+      return { safe: false, reason: "Não foi possível resolver o domínio DNS informado." };
+    }
+
+    return { safe: true };
+  } catch {
+    return { safe: false, reason: "Formato de URL inválido." };
+  }
+}
+
 const app = express();
 app.use(express.json());
 
@@ -144,6 +190,73 @@ app.post("/api/gemini/assist", async (req, res) => {
   } catch (error: any) {
     console.error("Gemini API error:", error);
     return res.status(500).json({ error: error?.message || "Ocorreu um erro interno no servidor ao falar com a IA." });
+  }
+});
+
+// Proxy route for secure WhatsApp API calls (avoiding CORS and browser limits)
+app.post("/api/whatsapp/proxy", async (req, res) => {
+  try {
+    const { url, method, headers, body } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({ error: "O parâmetro 'url' é obrigatório." });
+    }
+
+    // Validação contra SSRF
+    const urlValidation = await validateUrlForSsrf(url);
+    if (!urlValidation.safe) {
+      console.warn(`[Proxy Securitas] Bloqueada requisição suspeita de SSRF para: ${url}. Motivo: ${urlValidation.reason}`);
+      return res.status(403).json({
+        ok: false,
+        status: 403,
+        error: `Requisição bloqueada por política de segurança: ${urlValidation.reason}`
+      });
+    }
+
+    console.log(`[Proxy WhatsApp] Encaminhando chamada para ${url}`);
+    
+    const fetchHeaders: Record<string, string> = {
+      "User-Agent": "aistudio-build-proxy"
+    };
+
+    if (headers && typeof headers === "object") {
+      for (const [key, val] of Object.entries(headers)) {
+        if (typeof val === "string") {
+          fetchHeaders[key] = val;
+        }
+      }
+    }
+
+    // Set request body appropriately
+    let finalBody: any = body;
+    if (body && typeof body === "object" && fetchHeaders["Content-Type"]?.includes("application/json")) {
+      finalBody = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, {
+      method: method || "POST",
+      headers: fetchHeaders,
+      body: finalBody
+    });
+
+    const responseText = await response.text();
+    console.log(`[Proxy WhatsApp] Resposta com código HTTP ${response.status}`);
+
+    // Return the response details structure to client
+    return res.json({
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      data: responseText
+    });
+
+  } catch (error: any) {
+    console.error("Erro no proxy de envio de WhatsApp:", error);
+    return res.status(500).json({
+      ok: false,
+      status: 500,
+      error: error.message || "Erro interno de rede ao tentar encaminhar requisição do WhatsApp"
+    });
   }
 });
 

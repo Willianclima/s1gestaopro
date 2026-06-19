@@ -97,6 +97,14 @@ export interface SmtpSettings {
   secure: boolean;
 }
 
+export interface WhatsappSettings {
+  provider: "twilio" | "cloud_api" | "custom";
+  apiToken: string;
+  apiUrl: string;
+  fromNumber: string;
+  enabled: boolean;
+}
+
 export interface Team {
   id: string;
   name: string;
@@ -104,4 +112,15 @@ export interface Team {
   leaderId: string; // references Professional.id
   createdAt: string;
 }
+
+export interface LoginAttempt {
+  id: string;
+  timestamp: string;
+  username: string; // Document inputted
+  userId: string; // ID of profile if found, or "Desconhecido" / ID entered
+  status: "success" | "failed";
+  userType: string; // "gestor" | "requisitante" | "profissional" | "desconhecido"
+  details: string; // Reason or description of status
+}
+
 

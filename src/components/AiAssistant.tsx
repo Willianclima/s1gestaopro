@@ -163,18 +163,6 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
             <ClipboardList className="w-4 h-4 text-indigo-500" />
             Lista de Materiais & Passos
           </button>
-          
-          <button
-            onClick={() => { setActiveTab("whatsapp"); setResult(""); }}
-            className={`flex-1 py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-              activeTab === "whatsapp"
-                ? "bg-white text-slate-800 shadow-sm"
-                : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/50"
-            }`}
-          >
-            <MessageSquare className="w-4 h-4 text-indigo-500" />
-            Notificar Conclusão
-          </button>
         </div>
 
         {/* Input Forms */}

@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { jsPDF } from "jspdf";
-import { ServiceOrder, Client, Professional, SystemLog } from "../types";
+import { ServiceOrder, Client, Professional, SystemLog, LoginAttempt } from "../types";
 import { 
   BarChart3, FileText, Search, Clock, CheckCircle2, AlertTriangle, 
   X, HelpCircle, Users, Activity, SlidersHorizontal, Wrench, RefreshCw, Trash2,
-  Download
+  Download, Lock, ShieldCheck, ShieldAlert
 } from "lucide-react";
 
 interface ReportsAndLogsProps {
@@ -13,14 +13,18 @@ interface ReportsAndLogsProps {
   professionals: Professional[];
   logs: SystemLog[];
   onClearLogs: () => void;
+  loginAttempts: LoginAttempt[];
+  onClearLoginAttempts: () => void;
 }
 
 export default function ReportsAndLogs({ 
-  orders, clients, professionals, logs, onClearLogs 
+  orders, clients, professionals, logs, onClearLogs, loginAttempts = [], onClearLoginAttempts
 }: ReportsAndLogsProps) {
-  const [activeTab, setActiveTab] = useState<"charts" | "audit">("charts");
+  const [activeTab, setActiveTab] = useState<"charts" | "audit" | "access">("charts");
   const [logsSearch, setLogsSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [accessSearch, setAccessSearch] = useState("");
+  const [accessStatusFilter, setAccessStatusFilter] = useState<string>("all");
 
   // Calculations for executive reports
   const totalOrders = orders.length;
@@ -67,6 +71,19 @@ export default function ReportsAndLogs({
                           log.details.toLowerCase().includes(logsSearch.toLowerCase());
     const matchesCategory = categoryFilter === "all" || log.category === categoryFilter;
     return matchesSearch && matchesCategory;
+  });
+
+  // Filter access attempts
+  const filteredAccessAttempts = (loginAttempts || []).filter(attempt => {
+    const term = accessSearch.toLowerCase();
+    const matchesSearch = 
+      attempt.username.toLowerCase().includes(term) ||
+      attempt.userId.toLowerCase().includes(term) ||
+      attempt.details.toLowerCase().includes(term) ||
+      attempt.userType.toLowerCase().includes(term);
+    const matchesStatus = 
+      accessStatusFilter === "all" || attempt.status === accessStatusFilter;
+    return matchesSearch && matchesStatus;
   });
 
   const exportToPDF = () => {
@@ -263,6 +280,158 @@ export default function ReportsAndLogs({
     doc.save(`Relatorio_Gestao_Auditoria_${formattedDate}.pdf`);
   };
 
+  const exportCompletedOrdersToCSV = () => {
+    const completed = orders.filter(o => o.status === "concluido");
+    if (completed.length === 0) {
+      alert("Nenhuma ordem de serviço concluída disponível para exportação em CSV.");
+      return;
+    }
+
+    const headers = [
+      "ID da OS",
+      "Nome do Requisitante",
+      "Título da Demanda",
+      "Categoria Técnica",
+      "Técnico Executor",
+      "Data de Início",
+      "Data de Conclusão",
+      "Localização / Endereço",
+      "Resumo Técnica / Notas",
+      "Criado Em"
+    ];
+
+    const rows = completed.map(o => {
+      const clientName = clients.find(c => c.id === o.clientId)?.name || "Não Identificado";
+      return [
+        `#${o.id}`,
+        clientName,
+        o.title,
+        o.category,
+        o.assignedTo || "Técnico Não Alocado",
+        o.startDate ? new Date(o.startDate).toLocaleDateString("pt-BR") : "---",
+        o.endDate ? new Date(o.endDate).toLocaleDateString("pt-BR") : "---",
+        o.location || "Araçatuba/SP",
+        o.notes || "Nenhum fechamento registrado",
+        o.createdAt ? new Date(o.createdAt).toLocaleDateString("pt-BR") : "---"
+      ];
+    });
+
+    const csvRows = [headers, ...rows];
+    const csvContent = "\uFEFF" + csvRows.map(r => r.map(cell => `"${(cell || "").replace(/"/g, '""')}"`).join(";")).join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    const dateStr = new Date().toISOString().split("T")[0];
+    link.setAttribute("download", `OS_Concluidas_Aracatuba_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportCompletedOrdersToPDF = () => {
+    const completed = orders.filter(o => o.status === "concluido");
+    if (completed.length === 0) {
+      alert("Nenhuma ordem de serviço concluída disponível para exportação em PDF.");
+      return;
+    }
+
+    const doc = new jsPDF();
+    
+    // Header & Design Theme (Indigo & Slate)
+    const primaryColor = [79, 70, 229]; // Indigo-600
+    const darkGray = [30, 41, 59]; // slate-800
+    const lightGray = [248, 250, 252]; // slate-50
+    
+    // Header Title
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+    doc.text("Araçatuba Serviços de Manutenção - OS Concluídas", 14, 22);
+    
+    // Meta information
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Relatório de Encerramento Operacional - Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 29);
+    doc.text(`Total de Chamados Triados e Finalizados: ${completed.length}`, 14, 34);
+    
+    // horizontal rule
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.5);
+    doc.line(14, 38, 196, 38);
+    
+    // Table Header Header Line
+    let yOffset = 46;
+    doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+    doc.rect(14, yOffset, 182, 7, "F");
+    
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text("Código/OS", 16, yOffset + 5);
+    doc.text("Requisitante", 34, yOffset + 5);
+    doc.text("Título do Serviço", 74, yOffset + 5);
+    doc.text("Categoria", 126, yOffset + 5);
+    doc.text("Técnico Executor", 154, yOffset + 5);
+    doc.text("Concluído", 182, yOffset + 5);
+    
+    yOffset += 7;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
+    
+    completed.forEach((o, idx) => {
+      if (yOffset > 270) {
+        doc.addPage();
+        yOffset = 20;
+        
+        // Redraw Header
+        doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.rect(14, yOffset, 182, 7, "F");
+        
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8.5);
+        doc.setTextColor(255, 255, 255);
+        doc.text("Código/OS", 16, yOffset + 5);
+        doc.text("Requisitante", 34, yOffset + 5);
+        doc.text("Título do Serviço", 74, yOffset + 5);
+        doc.text("Categoria", 126, yOffset + 5);
+        doc.text("Técnico Executor", 154, yOffset + 5);
+        doc.text("Concluído", 182, yOffset + 5);
+        
+        yOffset += 7;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7.5);
+        doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
+      }
+      
+      if (idx % 2 === 1) {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(14, yOffset, 182, 6, "F");
+      }
+      
+      const clientName = clients.find(c => c.id === o.clientId)?.name || "Não Identificado";
+      const formattedEndDate = o.endDate ? new Date(o.endDate).toLocaleDateString("pt-BR") : "---";
+      
+      doc.text(`#${o.id}`, 16, yOffset + 4);
+      doc.text(clientName.substring(0, 20), 34, yOffset + 4);
+      doc.text(o.title.substring(0, 24), 74, yOffset + 4);
+      doc.text(o.category, 126, yOffset + 4);
+      doc.text((o.assignedTo || "Não Alocado").substring(0, 14), 154, yOffset + 4);
+      doc.text(formattedEndDate, 182, yOffset + 4);
+      
+      doc.setDrawColor(241, 245, 249);
+      doc.line(14, yOffset + 6, 196, yOffset + 6);
+      yOffset += 6;
+    });
+    
+    // Save PDF file
+    const dateStr = new Date().toISOString().split("T")[0];
+    doc.save(`OS_Concluidas_Aracatuba_${dateStr}.pdf`);
+  };
+
   return (
     <div className="space-y-6">
       {/* Upper header */}
@@ -298,6 +467,18 @@ export default function ReportsAndLogs({
               <Activity className="w-4 h-4" />
               Logs e Auditoria
             </button>
+
+            <button
+              onClick={() => setActiveTab("access")}
+              className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 ${
+                activeTab === "access"
+                  ? "bg-slate-900 text-white shadow-sm"
+                  : "text-slate-600 hover:text-slate-800"
+              }`}
+            >
+              <Lock className="w-4 h-4" />
+              Auditoria de Acesso
+            </button>
           </div>
 
           {/* Export PDF Button */}
@@ -312,13 +493,13 @@ export default function ReportsAndLogs({
         </div>
       </div>
 
-      {activeTab === "charts" ? (
+      {activeTab === "charts" && (
         <div className="space-y-6">
           {/* Executive Overview Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs relative overflow-hidden">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Cumpatibilidade Operacional</span>
-              <span className="text-3xl font-extrabold text-slate-850 block">{completionRate}%</span>
+              <span className="text-3xl font-extrabold text-slate-85block">{completionRate}%</span>
               <div className="text-xs text-emerald-600 font-bold mt-1 bg-emerald-50 w-max px-2 py-0.5 rounded-lg">
                 📋 {completedOrders} de {totalOrders} Concluídos
               </div>
@@ -329,7 +510,7 @@ export default function ReportsAndLogs({
 
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs relative overflow-hidden">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Aguardando Material</span>
-              <span className="text-3xl font-extrabold text-slate-850 block">{materialShortageRate}%</span>
+              <span className="text-3xl font-extrabold text-slate-85block">{materialShortageRate}%</span>
               <div className="text-xs text-amber-600 font-bold mt-1 bg-amber-50 w-max px-2 py-0.5 rounded-lg">
                 ⚠️ {materialOrders} chamados travados
               </div>
@@ -340,7 +521,7 @@ export default function ReportsAndLogs({
 
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs relative overflow-hidden">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Média de Requisitantes</span>
-              <span className="text-3xl font-extrabold text-slate-850 block">{clients.length} Ativos</span>
+              <span className="text-3xl font-extrabold text-slate-85block">{clients.length} Ativos</span>
               <div className="text-xs text-indigo-600 font-bold mt-1 bg-indigo-50 w-max px-2 py-0.5 rounded-lg">
                 👥 Integridade no GS
               </div>
@@ -351,13 +532,46 @@ export default function ReportsAndLogs({
 
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs relative overflow-hidden">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Em Atendimento</span>
-              <span className="text-3xl font-extrabold text-slate-850 block">{progressOrders} Técnicos</span>
+              <span className="text-3xl font-extrabold text-slate-85block">{progressOrders} Técnicos</span>
               <div className="text-xs text-slate-600 font-bold mt-1 bg-slate-100 w-max px-2 py-0.5 rounded-lg">
                 ⚡ Execução ativa em campo
               </div>
               <div className="absolute top-4 right-4 p-2.5 bg-slate-100 rounded-xl">
-                <Clock className="w-5 h-5 text-slate-650" />
+                <Clock className="w-5 h-5 text-slate-655" />
               </div>
+            </div>
+          </div>
+
+          {/* Export & Extraction Panel for Completed OS */}
+          <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-2xl border border-slate-800 p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="space-y-1.5 max-w-xl">
+              <span className="text-[11px] bg-indigo-500/25 border border-indigo-400/35 text-indigo-300 font-bold uppercase tracking-wider px-2 py-0.5 rounded-md inline-block">
+                Controle de Dados e Exportação
+              </span>
+              <h3 className="font-extrabold text-white text-lg tracking-tight">Extrair Demanda de Chamados Finalizados</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Exporte imediatamente todas as ordens de serviço com status <strong className="text-emerald-400">Concluído</strong>. O arquivo incluirá dados detalhados do requisitante, datas de execução, localização e técnicos responsáveis.
+              </p>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto shrink-0">
+              <button
+                onClick={exportCompletedOrdersToCSV}
+                className="flex-1 md:flex-initial px-4 py-2.5 bg-white/10 hover:bg-white/15 border border-white/15 hover:border-white/25 text-white text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer active:translate-y-[1px]"
+                title="Consolida todas as ordens concluídas em formato .CSV delimitado por ponto e vírgula"
+              >
+                <FileText className="w-4 h-4 text-emerald-400" />
+                Exportar CSV (Excel)
+              </button>
+              
+              <button
+                onClick={exportCompletedOrdersToPDF}
+                className="flex-1 md:flex-initial px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer active:translate-y-[1px]"
+                title="Gera um relatório formatado em PDF apenas com as Ordens de Serviço dadas como concluídas"
+              >
+                <Download className="w-4 h-4 text-white" />
+                Exportar PDF (OS)
+              </button>
             </div>
           </div>
 
@@ -528,7 +742,9 @@ export default function ReportsAndLogs({
             </div>
           </div>
         </div>
-      ) : (
+      )}
+
+      {activeTab === "audit" && (
         /* AUDIT LOGGER VIEW */
         <div className="bg-white rounded-3xl border border-slate-100 shadow-xs overflow-hidden flex flex-col min-h-[500px]">
           {/* Filtering Ribbon */}
@@ -705,6 +921,167 @@ export default function ReportsAndLogs({
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "access" && (
+        /* ACCESS AUDIT LAYER VIEW */
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xs overflow-hidden flex flex-col min-h-[500px]">
+          {/* Filtering Ribbon */}
+          <div className="p-5 border-b border-slate-100 bg-slate-50/55 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1">
+              {/* Search Field */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  className="w-full text-xs border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-semibold text-slate-700"
+                  placeholder="Buscar por CPF/CNPJ, ID ou detalhe de logon..."
+                  value={accessSearch}
+                  onChange={(e) => setAccessSearch(e.target.value)}
+                />
+              </div>
+
+              {/* Status Selector */}
+              <div className="relative">
+                <select
+                  value={accessStatusFilter}
+                  onChange={(e) => setAccessStatusFilter(e.target.value)}
+                  className="w-full sm:w-48 text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-bold text-slate-700 cursor-pointer appearance-none pr-8"
+                >
+                  <option value="all">Todos os Status</option>
+                  <option value="success">✅ Apenas Sucessos</option>
+                  <option value="failed">❌ Apenas Falhas</option>
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-400">
+                  <SlidersHorizontal className="w-3 h-3" />
+                </div>
+              </div>
+
+              {/* Reset shortcut */}
+              {(accessSearch || accessStatusFilter !== "all") && (
+                <button
+                  onClick={() => {
+                    setAccessSearch("");
+                    setAccessStatusFilter("all");
+                  }}
+                  className="p-2.5 border border-slate-200 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-50 transition-all flex items-center justify-center cursor-pointer"
+                  title="Limpar filtros"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Clear access logs button */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  if (confirm("Confirmar a limpeza permanente de todo o histórico de tentativas de autenticação? Esta operação é irreversível.")) {
+                    onClearLoginAttempts();
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Limpar Auditoria
+              </button>
+            </div>
+          </div>
+
+          {/* Access Logs List Segment */}
+          <div className="flex-1 overflow-x-auto">
+            <table className="w-full table-auto border-collapse text-left">
+              <thead>
+                <tr className="bg-slate-50/75 border-b border-slate-150 text-[10px] font-extrabold text-slate-450 uppercase tracking-wider font-sans">
+                  <th className="px-6 py-3.5">Status</th>
+                  <th className="px-6 py-3.5">Carimbo de Data/Hora</th>
+                  <th className="px-6 py-3.5">Chave Informada (Doc)</th>
+                  <th className="px-6 py-3.5">ID Resolvido</th>
+                  <th className="px-6 py-3.5">Perfil</th>
+                  <th className="px-6 py-3.5">Descrição do Evento</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs text-slate-600 font-medium">
+                {filteredAccessAttempts.map((attempt) => {
+                  let profileBadgeColor = "bg-slate-100 text-slate-600";
+                  let profileLabel = attempt.userType;
+
+                  if (attempt.userType === "gestor") {
+                    profileBadgeColor = "bg-indigo-50 border border-indigo-100 text-indigo-700";
+                    profileLabel = "Gestor / Diretor";
+                  } else if (attempt.userType === "requisitante") {
+                    profileBadgeColor = "bg-blue-50 border border-blue-105 text-blue-700";
+                    profileLabel = "Requisitante";
+                  } else if (attempt.userType === "profissional") {
+                    profileBadgeColor = "bg-emerald-50 border border-emerald-100 text-emerald-700";
+                    profileLabel = "Técnico de Campo";
+                  } else {
+                    profileBadgeColor = "bg-slate-100 text-slate-500 border border-slate-200";
+                    profileLabel = "Desconhecido";
+                  }
+
+                  return (
+                    <tr 
+                      key={attempt.id} 
+                      className={`hover:bg-slate-50/45 transition-colors ${
+                        attempt.status === "failed" ? "hover:bg-red-50/15" : "hover:bg-emerald-50/10"
+                      }`}
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {attempt.status === "success" ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-lg font-bold text-[10px] uppercase tracking-wider">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            Sucesso
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-100 text-red-700 rounded-lg font-bold text-[10px] uppercase tracking-wider">
+                            <ShieldAlert className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                            Bloqueado / Falha
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap font-mono font-bold text-slate-500">
+                        {new Date(attempt.timestamp).toLocaleString("pt-BR")}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap font-mono font-semibold text-slate-700">
+                        {attempt.username || "Não preenchido"}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap font-mono text-xs font-bold text-slate-800">
+                        {attempt.userId === "desconhecido" ? (
+                          <span className="text-slate-400 font-sans font-medium">Não Identificado</span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded text-[10px]">
+                            {attempt.userId}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-lg ${profileBadgeColor}`}>
+                          {profileLabel}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 leading-relaxed font-semibold text-slate-600 whitespace-nowrap sm:whitespace-normal">
+                        {attempt.details}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {filteredAccessAttempts.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="text-center py-16 text-slate-400">
+                      <div className="flex flex-col items-center justify-center">
+                        <Lock className="w-12 h-12 text-slate-300 mb-2 animate-pulse" />
+                        <p className="font-bold text-slate-500 text-sm">Nenhuma tentativa de logon localizada.</p>
+                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm">Tente reajustar seus termos de filtragem ou de status de auditoria.</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
