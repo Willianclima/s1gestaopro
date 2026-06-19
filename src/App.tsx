@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings } from "./types";
+import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, Team } from "./types";
 import { 
   INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS 
 } from "./data/mockData";
@@ -81,6 +81,7 @@ export default function App() {
     senderAddress: "Araçatuba Serviços <suporte@aracatubaservicos.com.br>",
     secure: true
   });
+  const [teams, setTeams] = useState<Team[]>([]);
 
   // Cross-component routing state (AI Prefills)
   const [selectedOS, setSelectedOS] = useState<ServiceOrder | null>(null);
@@ -93,6 +94,13 @@ export default function App() {
     const cachedProfessionals = localStorage.getItem("service_mgt_professionals2");
     const cachedLogs = localStorage.getItem("service_mgt_logs2");
     const cachedSmtp = localStorage.getItem("service_mgt_smtp");
+    const cachedTeams = localStorage.getItem("service_mgt_teams");
+
+    if (cachedTeams) {
+      setTeams(JSON.parse(cachedTeams));
+    } else {
+      setTeams([]);
+    }
 
     if (cachedSmtp) {
       setSmtpSettings(JSON.parse(cachedSmtp));
@@ -183,6 +191,42 @@ export default function App() {
   const updateProfessionalsState = (newProfs: Professional[]) => {
     setProfessionals(newProfs);
     localStorage.setItem("service_mgt_professionals2", JSON.stringify(newProfs));
+  };
+
+  const updateTeamsState = (newTeams: Team[]) => {
+    setTeams(newTeams);
+    localStorage.setItem("service_mgt_teams", JSON.stringify(newTeams));
+  };
+
+  const handleAddTeam = (newTeam: Team) => {
+    updateTeamsState([...teams, newTeam]);
+    addSystemLog(
+      "Montagem de Equipe",
+      `Nova equipe técnica montada: "${newTeam.name}" com ${newTeam.memberIds.length} integrantes sob coordenação direta.`,
+      "tecnico"
+    );
+    toastSuccess(`Equipe "${newTeam.name}" montada com sucesso!`, "Equipe Criada");
+  };
+
+  const handleUpdateTeam = (updatedTeam: Team) => {
+    updateTeamsState(teams.map(t => t.id === updatedTeam.id ? updatedTeam : t));
+    addSystemLog(
+      "Alteração de Equipe",
+      `Equipe técnica "${updatedTeam.name}" teve sua composição ou responsável modificados pelo gestor.`,
+      "tecnico"
+    );
+    toastSuccess(`Equipe "${updatedTeam.name}" atualizada com êxito!`, "Equipe Modificada");
+  };
+
+  const handleDeleteTeam = (id: string) => {
+    const targetTeam = teams.find(t => t.id === id);
+    updateTeamsState(teams.filter(t => t.id !== id));
+    addSystemLog(
+      "Dissolução de Equipe",
+      `Equipe técnica de campo "${targetTeam?.name || id}" desfeita pelo gestor no sistema de controle.`,
+      "tecnico"
+    );
+    toastWarn(`Equipe foi desfeita com sucesso.`, "Equipe Removida");
   };
 
   const addSystemLog = (action: string, details: string, category: "requisicao" | "requisitante" | "tecnico" | "sistema") => {
@@ -475,8 +519,8 @@ export default function App() {
 
   // Login handler
   const handleTryLogin = (docValue: string, passwordValue: string) => {
-    const cleanInput = docValue.replace(/\D/g, "");
-    if (!cleanInput) {
+    const normalizedInput = docValue.replace(/\D/g, "");
+    if (!normalizedInput) {
       setLoginError("Por favor, digite um CPF ou CNPJ de cadastro.");
       return;
     }
@@ -488,9 +532,19 @@ export default function App() {
     // Clear registration success messages upon attempting log in
     setRegSuccessMessage("");
 
-    // 1. Admin/Gestor fallback bypass (e.g. 36911121884 or 99999999999)
-    if (cleanInput === "36911121884" || cleanInput === "99999999999" || cleanInput === "999" || cleanInput === "000") {
-      const adminSavedPass = localStorage.getItem("admin_custom_password") || "123456";
+    // Look up in database lists first to see if a custom client/professional is registered with this CPF
+    const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
+    const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
+
+    const matchedClient = activeClients.find(c => c.document.replace(/\D/g, "") === normalizedInput);
+    const matchedProf = activeProfs.find(p => p.document && p.document.replace(/\D/g, "") === normalizedInput);
+
+    const isFallbackCPF = normalizedInput === "36911121884" || normalizedInput === "99999999999" || normalizedInput === "999" || normalizedInput === "000";
+    const hasRegisteredUser = !!(matchedClient || matchedProf);
+    const adminSavedPass = localStorage.getItem("admin_custom_password") || "123456";
+
+    // 1. Admin/Gestor fallback bypass (e.g. 36911121884 or 99999999999) - ALWAYS evaluated first if correct admin password is provided or no registered user exists
+    if (isFallbackCPF && (passwordValue === adminSavedPass || !hasRegisteredUser)) {
       if (passwordValue && passwordValue !== adminSavedPass) {
         setLoginError("Senha incorreta para o Gestor Administrador.");
         toastError("Senha incorreta para o canal de Gestor Administrador.", "Falha de Login");
@@ -499,7 +553,7 @@ export default function App() {
       const adminUser: CurrentUser = {
         id: "gestor-admin",
         name: "Willian C. Lima",
-        document: cleanInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
+        document: normalizedInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
         userType: "gestor"
       };
       setCurrentUser(adminUser);
@@ -514,8 +568,6 @@ export default function App() {
     }
 
     // 2. Check clients List
-    const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
-    const matchedClient = activeClients.find(c => c.document.replace(/\D/g, "") === cleanInput);
     if (matchedClient) {
       // Check status
       if (matchedClient.status === "pendente_autorizacao") {
@@ -588,8 +640,6 @@ export default function App() {
     }
 
     // 3. Check professionals List
-    const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
-    const matchedProf = activeProfs.find(p => p.document && p.document.replace(/\D/g, "") === cleanInput);
     if (matchedProf) {
       // Check if blocked first
       if (matchedProf.blocked) {
@@ -936,7 +986,7 @@ export default function App() {
               >
                 <div>
                   <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
-                    Informe seu CPF ou CNPJ de Requisitante / Colaborador
+                    Informe seu CPF de requisitante / Gestor
                   </label>
                   <div className="relative">
                     <input
@@ -1518,6 +1568,7 @@ export default function App() {
                 clients={clients}
                 categories={categories.map(c => c.name)}
                 professionalsList={professionals}
+                teams={teams}
                 onAddOrder={handleAddOrder}
                 onUpdateOrder={handleUpdateOrder}
                 onDeleteOrder={handleDeleteOrder}
@@ -1541,6 +1592,10 @@ export default function App() {
                 onAddProfessional={handleAddProfessional}
                 onUpdateProfessional={handleUpdateProfessional}
                 onDeleteProfessional={handleDeleteProfessional}
+                teams={teams}
+                onAddTeam={handleAddTeam}
+                onUpdateTeam={handleUpdateTeam}
+                onDeleteTeam={handleDeleteTeam}
               />
             )}
 

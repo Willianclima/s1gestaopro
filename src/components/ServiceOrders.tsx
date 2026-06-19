@@ -1,16 +1,18 @@
 import React, { useState, useRef } from "react";
-import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser } from "../types";
+import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team } from "../types";
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download
 } from "lucide-react";
 import { jsPDF } from "jspdf";
+import { useToast } from "./ToastContext";
 
 interface ServiceOrdersProps {
   orders: ServiceOrder[];
   clients: Client[];
   categories: string[];
   professionalsList: Professional[]; // Full list of professionals with specialties
+  teams?: Team[];
   onAddOrder: (order: ServiceOrder) => void;
   onUpdateOrder: (order: ServiceOrder) => void;
   onDeleteOrder: (id: string) => void;
@@ -35,11 +37,22 @@ const PRESET_COMPLETED_IMAGES = [
 ];
 
 export default function ServiceOrders({ 
-  orders, clients, categories, professionalsList, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser
+  orders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser
 }: ServiceOrdersProps) {
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("todos");
   
+  // AI Auto-triage states
+  const [isTriaging, setIsTriaging] = useState(false);
+  const [triageResult, setTriageResult] = useState<{
+    recommendedCategory: string;
+    priority: string;
+    technicalScope: string;
+    recommendedAssignee: string;
+    whyAssignee: string;
+  } | null>(null);
+
   // Modal controllers
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
@@ -470,9 +483,113 @@ export default function ServiceOrders({
     }
   };
 
+  const handleAiTriage = async () => {
+    if (!title.trim() || !description.trim()) {
+      toastError("Por favor, preencha o Título e o Sintoma do chamado para iniciar a Triagem de IA.", "Dados insuficientes");
+      return;
+    }
+    setIsTriaging(true);
+    setTriageResult(null);
+
+    const catsList = categories;
+    const profsList = professionalsList.map(p => ({
+      name: p.name,
+      role: p.role,
+      specialty: p.specialty,
+      specialties: p.specialties || []
+    }));
+    const tmsList = (teams || []).map(t => {
+      const memberNames = t.memberIds.map(mid => {
+        const p = professionalsList.find(prof => prof.id === mid);
+        return p ? p.name : "Desconhecido";
+      });
+      const leader = professionalsList.find(prof => prof.id === t.leaderId);
+      return {
+        name: t.name,
+        leaderName: leader ? leader.name : "Desconhecido",
+        members: memberNames
+      };
+    });
+
+    try {
+      const response = await fetch("/api/gemini/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "triage_os",
+          title,
+          description,
+          categoriesList: catsList,
+          professionalsList: profsList,
+          teamsList: tmsList
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Erro ao se conectar ao servidor.");
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      try {
+        const parsed = JSON.parse(data.result);
+        setTriageResult({
+          recommendedCategory: parsed.recommendedCategory || "",
+          priority: parsed.priority || "Média",
+          technicalScope: parsed.technicalScope || "",
+          recommendedAssignee: parsed.recommendedAssignee || "",
+          whyAssignee: parsed.whyAssignee || ""
+        });
+        toastSuccess("Triagem e análise técnica concluídas com sucesso pela IA!", "Operação Realizada");
+      } catch (errParser) {
+        console.error("Falha ao analisar resposta da IA em formato JSON:", errParser);
+        setTriageResult({
+          recommendedCategory: categories[0] || "Geral",
+          priority: "Média",
+          technicalScope: data.result,
+          recommendedAssignee: "Pendente de Alocação",
+          whyAssignee: "A IA retornou orientações gerais em vez de uma alocação específica estruturada."
+        });
+        toastSuccess("Análise técnica concluída! Orientações gerais disponíveis.", "Operação Realizada");
+      }
+    } catch (err: any) {
+      console.error("Erro na autotriagem de IA:", err);
+      toastError("Falha na autotriagem de IA: " + (err?.message || err), "Serviço Indisponível");
+    } finally {
+      setIsTriaging(false);
+    }
+  };
+
+  const applyTriageResult = () => {
+    if (!triageResult) return;
+
+    // Apply category if exists
+    if (categories.includes(triageResult.recommendedCategory)) {
+      setCategory(triageResult.recommendedCategory);
+    } else {
+      const matchedCat = categories.find(c => c.toLowerCase() === triageResult.recommendedCategory.toLowerCase());
+      if (matchedCat) {
+        setCategory(matchedCat);
+      }
+    }
+
+    const aiBanner = `----------------------------------------\n🤖 AUTO-TRIAGEM COM INTELIGÊNCIA ARTIFICIAL (GEMINI)\n----------------------------------------\n⚡ CRITICIDADE ESTIMADA: ${triageResult.priority.toUpperCase()}\n🛠️ DIAGNÓSTICO E OPERAÇÕES SUGERIDAS:\n${triageResult.technicalScope}\n👥 ALOCAÇÃO RECOMENDADA: ${triageResult.recommendedAssignee}\n💬 JUSTIFICATIVA: ${triageResult.whyAssignee}\n----------------------------------------\n\n`;
+    
+    setNotes(prev => {
+      const cleanedPrev = prev ? prev.replace(/[\s\S]*?----------------------------------------\n\n/g, "") : "";
+      return aiBanner + cleanedPrev;
+    });
+
+    toastSuccess("Categoria configurada e recomendações adicionadas às Observações Técnicas!", "Sucesso");
+  };
+
   const openForm = (os?: ServiceOrder) => {
     setCepError("");
     setLocationSearchResults([]);
+    setTriageResult(null);
     if (os) {
       setEditingOrder(os);
       setClientId(os.clientId);
@@ -1744,6 +1861,106 @@ export default function ServiceOrders({
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                   />
+                </div>
+
+                {/* AI-powered Auto Triage section */}
+                <div className="bg-gradient-to-br from-indigo-50/60 to-slate-50/60 border border-indigo-100 rounded-2xl p-4.5 space-y-3 shadow-xs select-none">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-indigo-900 font-extrabold text-xs uppercase tracking-wider">
+                      <Sparkles className="w-4 h-4 text-indigo-600 animate-pulse" />
+                      Triagem de IA (Gemini) - Opção 1 Recomendada
+                    </div>
+                    <span className="text-[8px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-black tracking-widest uppercase">
+                      Automático
+                    </span>
+                  </div>
+                  <p className="text-slate-500 text-[11px] leading-relaxed">
+                    A IA pode ler o **título** e os **sintomas** preenchidos acima para classificar automaticamente a categoria técnica correta, determinar a criticidade e indicar o melhor técnico ou equipe disponível no sistema.
+                  </p>
+                  
+                  <button
+                    type="button"
+                    disabled={isTriaging || !title.trim() || !description.trim()}
+                    onClick={handleAiTriage}
+                    className={`inline-flex items-center justify-center gap-2 px-4.5 py-2.5 rounded-xl text-xs font-black transition-all ${
+                      title.trim() && description.trim()
+                        ? "bg-indigo-600 shadow-sm shadow-indigo-600/10 text-white hover:bg-indigo-700 cursor-pointer hover:shadow-md"
+                        : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed"
+                    }`}
+                  >
+                    {isTriaging ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                        A IA está analisando & triando o chamado...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-white" />
+                        Autotriage & Diagnóstico com IA
+                      </>
+                    )}
+                  </button>
+
+                  {!title.trim() || !description.trim() ? (
+                    <span className="text-[10px] text-slate-400 font-medium block mt-1">
+                      💡 Escreva um título e sintoma acima para liberar a Triagem da IA.
+                    </span>
+                  ) : null}
+
+                  {/* Triage result cards */}
+                  {triageResult && (
+                    <div className="mt-4 border-t border-indigo-100 pt-3.5 space-y-3 animate-fade-in text-xs">
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-150">
+                          <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wide">Categoria Sugerida</span>
+                          <span className="font-extrabold text-slate-800 flex items-center gap-1 mt-1 text-xs">
+                            📂 {triageResult.recommendedCategory || "Indefinida"}
+                          </span>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-150">
+                          <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wide">Gravidade Estimada</span>
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-black text-[10px] mt-1.5 uppercase ${
+                            triageResult.priority === "Crítica" ? "bg-red-50 text-red-700 border border-red-200" :
+                            triageResult.priority === "Alta" ? "bg-amber-50 text-amber-700 border border-amber-200" :
+                            triageResult.priority === "Média" ? "bg-blue-50 text-blue-700 border border-blue-200" :
+                            "bg-slate-100 text-slate-700 border border-slate-200"
+                          }`}>
+                            🚨 {triageResult.priority}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="bg-white p-3.5 rounded-2xl border border-slate-150 space-y-1">
+                        <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wide">Diagnóstico Preliminar & Escopo sugerido</span>
+                        <p className="text-slate-700 font-medium leading-relaxed">{triageResult.technicalScope}</p>
+                      </div>
+
+                      <div className="bg-emerald-50/40 border border-emerald-100 p-3.5 rounded-2xl space-y-1">
+                        <span className="text-[9px] text-emerald-800 font-extrabold block uppercase tracking-wide">
+                          💡 Profissional ou Equipe de Campo Indicada
+                        </span>
+                        <p className="text-slate-900 font-black text-xs">{triageResult.recommendedAssignee}</p>
+                        <p className="text-slate-600 font-normal leading-relaxed text-[11px] mt-1">{triageResult.whyAssignee}</p>
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={applyTriageResult}
+                          className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-[11px] py-3 rounded-xl transition-all cursor-pointer uppercase tracking-wider shadow-sm"
+                        >
+                          Aplicar Diagnóstico & Categoria
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTriageResult(null)}
+                          className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 text-[11px] font-bold px-3 py-3 rounded-xl transition-all cursor-pointer"
+                        >
+                          Limpar
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Category & Date constraints */}

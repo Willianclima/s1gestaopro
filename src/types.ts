@@ -97,3 +97,11 @@ export interface SmtpSettings {
   secure: boolean;
 }
 
+export interface Team {
+  id: string;
+  name: string;
+  memberIds: string[]; // references Professional.id
+  leaderId: string; // references Professional.id
+  createdAt: string;
+}
+

@@ -35,7 +35,7 @@ function getAiClient(): GoogleGenAI {
 // API: AI Service Assistants
 app.post("/api/gemini/assist", async (req, res) => {
   try {
-    const { action, title, clientName, price, category } = req.body;
+    const { action, title, clientName, price, category, description, categoriesList, professionalsList, teamsList } = req.body;
     
     if (!action) {
       return res.status(400).json({ error: "Parâmetro 'action' é obrigatório." });
@@ -83,6 +83,39 @@ app.post("/api/gemini/assist", async (req, res) => {
       5. Adicione emojis leves onde apropriado (como ✅, 🛠️, 📱, ✨), mas mantenha o tom profissional e sem poluir visualmente.
       Apenas retorne o texto da mensagem formatado pronto para copiar e enviar.`;
     } 
+    else if (action === "triage_os") {
+      prompt = `Você é o cerebro de IA de uma central inteligente de serviços técnicos.
+      Sua missão é triar a nova ordem de serviço descrita abaixo e sugerir a melhor categoria, nível de prioridade estimado, um resumo descritivo técnico e o melhor profissional ou equipe de campo de acordo com suas especialidades e competências.
+
+      DADOS DO CHAMADO:
+      - Título: "${title}"
+      - Sintomas / Descrição Inicial: "${description || 'Não detalhado'}"
+
+      CATEGORIAS TÉCNICAS DISPONÍVEIS:
+      ${JSON.stringify(categoriesList || [])}
+
+      TÉCNICOS DISPONÍVEIS (Nome, Cargo, Especialidade):
+      ${JSON.stringify(professionalsList || [])}
+
+      EQUIPES DE CAMPO DISPONÍVEIS (Nome, Integrantes):
+      ${JSON.stringify(teamsList || [])}
+
+      INSTRUÇÕES DE PREENCHIMENTO:
+      - Categoria Recomendada: Deve ser EXATAMENTE um dos nomes de categorias descritas acima na lista de categorias técnicas (Ex: se na lista tem "Elétrica", recomende "Elétrica", sensível a maiúsculas/minúsculas).
+      - Prioridade: Escolha estritamente um valor textual entre: "Baixa", "Média", "Alta", "Crítica".
+      - Escopo Técnico: Forneça um breve laudo preliminar e instruções sobre o que o técnico deve testar primeiro.
+      - Alocação Recomendada: recomende o profissional técnico ou uma das equipes de campo recomendadas que mais se alinham ao problema técnico apresentado de acordo com as competências demonstradas na descrição do técnico. Se nenhum se adequar, recomende uma alocação plausível.
+      - Justificativa da Escolha: Uma linha curta justificando o motivo de ter indicado essa alocação em especial.
+
+      RETORNE EXCLUSIVAMENTE UM OBJETO JSON VÁLIDO. NÃO USE BACKTICKS OU BLOCOS DE MARKDOWN DE TIPO \`\`\`json. APENAS O JSON:
+      {
+        "recommendedCategory": "nome exato da categoria",
+        "priority": "Baixa/Média/Alta/Crítica",
+        "technicalScope": "breve guia do laudo técnico do problema e o que fazer",
+        "recommendedAssignee": "Nome do técnico ou da equipe sugerida",
+        "whyAssignee": "motivo de sua indicação"
+      }`;
+    }
     else {
       return res.status(400).json({ error: "Ação desconhecida ou inválida." });
     }
@@ -92,7 +125,20 @@ app.post("/api/gemini/assist", async (req, res) => {
       contents: prompt,
     });
 
-    const resultText = response.text || "Erro ao gerar resposta com a IA. Tente novamente.";
+    let resultText = response.text || "Erro ao gerar resposta com a IA. Tente novamente.";
+    
+    // Safety check and cleanup for JSON coding blocks if the model ignored our formatting rule
+    if (action === "triage_os") {
+      let cleanText = resultText.trim();
+      if (cleanText.startsWith("```json")) {
+        cleanText = cleanText.substring(7);
+      }
+      if (cleanText.endsWith("```")) {
+        cleanText = cleanText.substring(0, cleanText.length - 3);
+      }
+      resultText = cleanText.trim();
+    }
+
     return res.json({ result: resultText });
     
   } catch (error: any) {
