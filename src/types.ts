@@ -31,6 +31,7 @@ export interface ServiceOrder {
   description: string;
   category: string; // e.g. "TI", "Mecânica"
   status: OSStatus;
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
   assignedTo: string; // Professional name or empty if not yet assigned
   startDate: string;
   endDate: string; // Expected completion date

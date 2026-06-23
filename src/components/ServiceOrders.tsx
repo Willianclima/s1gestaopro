@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useFormDraft } from "../hooks/useFormDraft";
 import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team } from "../types";
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
@@ -19,6 +20,23 @@ interface ServiceOrdersProps {
   onDeleteOrder: (id: string) => void;
   onOpenAiAssistantWithOS?: (os: ServiceOrder) => void;
   currentUser?: CurrentUser;
+}
+
+export function getPriorityBadge(priority?: 'low' | 'medium' | 'high' | 'urgent') {
+  const prio = priority || 'medium';
+  const config = {
+    low: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-100', label: 'Baixa', dot: 'bg-emerald-500' },
+    medium: { bg: 'bg-blue-50 text-blue-700 border-blue-100', label: 'Média', dot: 'bg-blue-500' },
+    high: { bg: 'bg-amber-50 text-amber-700 border-amber-100', label: 'Alta', dot: 'bg-amber-500' },
+    urgent: { bg: 'bg-red-50 text-red-700 border-red-100', label: 'Urgente', dot: 'bg-red-500' },
+  };
+  const active = config[prio] || config.medium;
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[8.5px] font-black border uppercase tracking-wider ${active.bg}`}>
+      <span className={`w-1 h-1 rounded-full ${active.dot}`}></span>
+      {active.label}
+    </span>
+  );
 }
 
 const OrdersSkeleton = () => (
@@ -79,6 +97,7 @@ export default function ServiceOrders({
   const [startDateFilter, setStartDateFilter] = useState<string>("");
   const [endDateFilter, setEndDateFilter] = useState<string>("");
   const [technicianFilter, setTechnicianFilter] = useState<string>("todos");
+  const [priorityFilter, setPriorityFilter] = useState<string>("todos");
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -118,6 +137,7 @@ export default function ServiceOrders({
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
   const [status, setStatus] = useState<OSStatus>("aberto");
+  const [priority, setPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>("medium");
   const [assignedTo, setAssignedTo] = useState("");
   const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
   const [endDate, setEndDate] = useState("");
@@ -142,6 +162,46 @@ export default function ServiceOrders({
   const [missingMaterialText, setMissingMaterialText] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const {
+    hasDraft,
+    draftTimestamp,
+    lastSaved,
+    restoreDraft,
+    discardDraft,
+    clearDraftOnSubmit,
+  } = useFormDraft(
+    isFormOpen,
+    editingOrder ? editingOrder.id : null,
+    {
+      clientId,
+      title,
+      description,
+      category,
+      status,
+      priority,
+      assignedTo,
+      startDate,
+      endDate,
+      notes,
+      previewImages,
+      serviceLocation,
+    },
+    (draft) => {
+      setClientId(draft.clientId);
+      setTitle(draft.title);
+      setDescription(draft.description);
+      setCategory(draft.category);
+      setStatus(draft.status as any);
+      setPriority(draft.priority);
+      setAssignedTo(draft.assignedTo);
+      setStartDate(draft.startDate);
+      setEndDate(draft.endDate);
+      setNotes(draft.notes);
+      setPreviewImages(draft.previewImages);
+      setServiceLocation(draft.serviceLocation);
+    }
+  );
 
   const getClientName = (id: string) => {
     const c = clients.find(cl => cl.id === id);
@@ -487,7 +547,10 @@ export default function ServiceOrders({
       matchesTechnician = os.assignedTo === technicianFilter;
     }
 
-    return matchesSearch && matchesStatus && matchesDate && matchesTechnician;
+    // Priority filtering
+    const matchesPriority = priorityFilter === "todos" || (os.priority || "medium") === priorityFilter;
+
+    return matchesSearch && matchesStatus && matchesDate && matchesTechnician && matchesPriority;
   });
 
   const handleLocationSearch = async (query: string) => {
@@ -665,6 +728,18 @@ export default function ServiceOrders({
       }
     }
 
+    // Map priority
+    const prioUpper = triageResult.priority.toUpperCase();
+    if (prioUpper.includes("CRÍTICA") || prioUpper.includes("URGENTE") || prioUpper.includes("CRITICAL")) {
+      setPriority("urgent");
+    } else if (prioUpper.includes("ALTA") || prioUpper.includes("HIGH")) {
+      setPriority("high");
+    } else if (prioUpper.includes("MÉDIA") || prioUpper.includes("MEDIA") || prioUpper.includes("MEDIUM")) {
+      setPriority("medium");
+    } else {
+      setPriority("low");
+    }
+
     const aiBanner = `----------------------------------------\n🤖 AUTO-TRIAGEM COM INTELIGÊNCIA ARTIFICIAL (GEMINI)\n----------------------------------------\n⚡ CRITICIDADE ESTIMADA: ${triageResult.priority.toUpperCase()}\n🛠️ DIAGNÓSTICO E OPERAÇÕES SUGERIDAS:\n${triageResult.technicalScope}\n👥 ALOCAÇÃO RECOMENDADA: ${triageResult.recommendedAssignee}\n💬 JUSTIFICATIVA: ${triageResult.whyAssignee}\n----------------------------------------\n\n`;
     
     setNotes(prev => {
@@ -686,6 +761,7 @@ export default function ServiceOrders({
       setDescription(os.description);
       setCategory(os.category);
       setStatus(os.status);
+      setPriority(os.priority || "medium");
       setAssignedTo(os.assignedTo);
       setStartDate(os.startDate);
       setEndDate(os.endDate);
@@ -699,6 +775,7 @@ export default function ServiceOrders({
       setDescription("");
       setCategory(categories[0] || "");
       setStatus("aberto");
+      setPriority("medium");
       setAssignedTo("");
       setStartDate(new Date().toISOString().split("T")[0]);
       setEndDate("");
@@ -752,6 +829,7 @@ export default function ServiceOrders({
         description,
         category,
         status,
+        priority,
         assignedTo,
         startDate,
         endDate: endDate || startDate,
@@ -783,6 +861,7 @@ export default function ServiceOrders({
         description,
         category,
         status: "aberto", // Default is open
+        priority,
         assignedTo: "", // Start unassigned
         startDate,
         endDate: endDate || startDate,
@@ -806,6 +885,7 @@ export default function ServiceOrders({
 
     setIsFormOpen(false);
     setEditingOrder(null);
+    clearDraftOnSubmit();
   };
 
   // Attendant / Professional message reply thread interaction (antes e depois de iniciar)
@@ -1173,9 +1253,26 @@ export default function ServiceOrders({
                 ))}
             </select>
           </div>
+
+          {/* Prioridade Filter */}
+          <div className="flex items-center gap-2 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0">
+            <AlertTriangle className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-slate-500 text-xs font-bold whitespace-nowrap">Prioridade:</span>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              className="text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white text-slate-700 cursor-pointer min-w-[140px] max-w-full"
+            >
+              <option value="todos">Todas</option>
+              <option value="urgent">🔴 Urgentes</option>
+              <option value="high">🟠 Altas</option>
+              <option value="medium">🟡 Médias</option>
+              <option value="low">🟢 Baixas</option>
+            </select>
+          </div>
           
           {/* Active filter summary indicators */}
-          {(searchTerm || statusFilter !== "todos" || dateFilterType !== "todos" || technicianFilter !== "todos") && (
+          {(searchTerm || statusFilter !== "todos" || dateFilterType !== "todos" || technicianFilter !== "todos" || priorityFilter !== "todos") && (
             <button
               onClick={() => {
                 setSearchTerm("");
@@ -1184,6 +1281,7 @@ export default function ServiceOrders({
                 setStartDateFilter("");
                 setEndDateFilter("");
                 setTechnicianFilter("todos");
+                setPriorityFilter("todos");
               }}
               className="text-xs font-extrabold text-slate-500 hover:text-slate-800 px-3 py-1.5 rounded-lg border border-slate-250 bg-slate-50 hover:bg-slate-100 shrink-0 transition-all md:ml-auto"
             >
@@ -1223,9 +1321,11 @@ export default function ServiceOrders({
                           <span className="font-bold text-slate-850 text-sm block truncate hover:text-slate-900 duration-150" title={os.title}>
                             {os.title}
                           </span>
-                          <span className="text-[11px] text-slate-500 font-medium block truncate mt-0.5">
-                            Requisitante: {client ? client.name : "Desconhecido"}
-                          </span>
+                          <div className="text-[11px] text-slate-500 font-medium flex items-center flex-wrap gap-2 mt-1">
+                            <span>Requisitante: {client ? client.name : "Desconhecido"}</span>
+                            <span className="text-slate-300">•</span>
+                            {getPriorityBadge(os.priority)}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -1334,8 +1434,11 @@ export default function ServiceOrders({
             {/* Header */}
             <div className="px-6 py-5 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between rounded-t-3xl">
               <div>
-                <h3 className="font-extrabold text-base tracking-tight">{selectedOrder.title}</h3>
-                <p className="text-xs text-slate-400 font-mono mt-0.5">ID: {selectedOrder.id} | Atribuída: {selectedOrder.assignedTo || 'Não alocado'}</p>
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <h3 className="font-extrabold text-base tracking-tight">{selectedOrder.title}</h3>
+                  {getPriorityBadge(selectedOrder.priority)}
+                </div>
+                <p className="text-xs text-slate-400 font-mono">ID: {selectedOrder.id} | Atribuída: {selectedOrder.assignedTo || 'Não alocado'}</p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1914,6 +2017,37 @@ export default function ServiceOrders({
             <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto">
               <div className="p-6 space-y-4">
                 
+                {/* NOTIFICATION OF DRAFT EXISTENCE */}
+                {hasDraft && draftTimestamp && (
+                  <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex gap-2.5 items-start">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-xs font-bold">Rascunho automático detectado!</p>
+                        <p className="text-[10px] text-amber-700 font-medium">
+                          Existe um rascunho salvo às {new Date(draftTimestamp).toLocaleTimeString("pt-BR")} de {new Date(draftTimestamp).toLocaleDateString("pt-BR")}. Deseja continuar preenchendo?
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0 self-end sm:self-center">
+                      <button
+                        type="button"
+                        onClick={discardDraft}
+                        className="bg-transparent hover:bg-amber-100 text-amber-750 font-extrabold text-[10px] uppercase py-1.5 px-3 rounded-lg transition-colors border border-amber-300"
+                      >
+                        Descartar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={restoreDraft}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] uppercase py-1.5 px-3 rounded-lg transition-colors shadow-xs"
+                      >
+                        Restaurar
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
                 {/* Client dropdown */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Requisitante Associado *</label>
@@ -2167,10 +2301,10 @@ export default function ServiceOrders({
                   )}
                 </div>
 
-                {/* Category & Date constraints */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* Category, Priority & Date constraints */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Categoria do Serviço</label>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Categoria do Serviço *</label>
                     <select
                       className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-semibold text-slate-700"
                       value={category}
@@ -2181,9 +2315,23 @@ export default function ServiceOrders({
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Prioridade / Urgência *</label>
+                    <select
+                      className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-semibold text-slate-700"
+                      value={priority}
+                      onChange={(e) => setPriority(e.target.value as any)}
+                    >
+                      <option value="low">🟢 Baixa (Low)</option>
+                      <option value="medium">🟡 Média (Medium)</option>
+                      <option value="high">🟠 Alta (High)</option>
+                      <option value="urgent">🔴 Urgente (Urgent)</option>
+                    </select>
+                  </div>
                   
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Data de Abertura / Entrada</label>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Data de Entrada *</label>
                     <input
                       type="date"
                       className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold text-slate-700"
@@ -2286,6 +2434,17 @@ export default function ServiceOrders({
                 </div>
 
               </div>
+
+              {/* Draft auto-save status bar */}
+              {lastSaved && (
+                <div className="px-6 py-2 bg-slate-100 border-t border-slate-200/60 flex items-center justify-between text-[10px] text-slate-500 font-medium">
+                  <div className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Salvamento automático ativo</span>
+                  </div>
+                  <span>Último rascunho salvo às: {lastSaved.toLocaleTimeString("pt-BR")}</span>
+                </div>
+              )}
 
               {/* Action buttons */}
               <div className="p-6 bg-slate-50 border-t border-slate-100 flex gap-3 text-xs">

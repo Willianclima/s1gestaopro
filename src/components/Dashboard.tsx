@@ -3,7 +3,7 @@ import { motion } from "motion/react";
 import { ServiceOrder, Client, CurrentUser, Professional, SystemLog } from "../types";
 import { 
   Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
-  TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check
+  TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check, Calendar
 } from "lucide-react";
 
 interface DashboardProps {
@@ -17,6 +17,23 @@ interface DashboardProps {
   onApproveClient?: (clientId: string, type: "gestor" | "requisitante") => void;
   onRejectClient?: (clientId: string) => void;
   onResetPassword?: (id: string, type: "client" | "professional") => void;
+}
+
+export function getPriorityBadge(priority?: 'low' | 'medium' | 'high' | 'urgent') {
+  const prio = priority || 'medium';
+  const config = {
+    low: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-100', label: 'Baixa', dot: 'bg-emerald-500' },
+    medium: { bg: 'bg-blue-50 text-blue-700 border-blue-100', label: 'Média', dot: 'bg-blue-500' },
+    high: { bg: 'bg-amber-50 text-amber-700 border-amber-100', label: 'Alta', dot: 'bg-amber-500' },
+    urgent: { bg: 'bg-red-50 text-red-700 border-red-100', label: 'Urgente', dot: 'bg-red-500' },
+  };
+  const active = config[prio] || config.medium;
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[8.5px] font-black border uppercase tracking-wider ${active.bg}`}>
+      <span className={`w-1 h-1 rounded-full ${active.dot}`}></span>
+      {active.label}
+    </span>
+  );
 }
 
 const DashboardSkeleton = () => (
@@ -130,6 +147,11 @@ export default function Dashboard({
   const [isActivityCollapsed, setIsActivityCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // States for Day of the Week Activity Heatmap
+  const [selectedHeatCell, setSelectedHeatCell] = useState<{ dayId: number; periodId: number } | null>(null);
+  const [heatmapCategoryFilter, setHeatmapCategoryFilter] = useState<string>("all");
+  const [heatmapStatusFilter, setHeatmapStatusFilter] = useState<string>("all");
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsLoading(false);
@@ -208,6 +230,79 @@ export default function Dashboard({
   const monthlyResolutionRateVal = currentMonthOrders.length > 0
     ? Math.round((completedCurrentMonthOrders.length / currentMonthOrders.length) * 100)
     : 0;
+
+  // -------------------------------------------------------------------------
+  // Activity Heatmap Calculations
+  // -------------------------------------------------------------------------
+  const TIME_PERIODS = [
+    { id: 0, label: "Madrugada (00h - 08h)", rangeName: "Madrugada", hours: "00h - 08h" },
+    { id: 1, label: "Manhã (08h - 12h)", rangeName: "Manhã", hours: "08h - 12h" },
+    { id: 2, label: "Tarde (12h - 18h)", rangeName: "Tarde", hours: "12h - 18h" },
+    { id: 3, label: "Noite (18h - 00h)", rangeName: "Noite", hours: "18h - 00h" },
+  ];
+
+  const DAYS_OF_WEEK = [
+    { id: 1, name: "Segunda-feira", shortName: "Seg" },
+    { id: 2, name: "Terça-feira", shortName: "Ter" },
+    { id: 3, name: "Quarta-feira", shortName: "Qua" },
+    { id: 4, name: "Quinta-feira", shortName: "Qui" },
+    { id: 5, name: "Sexta-feira", shortName: "Sex" },
+    { id: 6, name: "Sábado", shortName: "Sáb" },
+    { id: 0, name: "Domingo", shortName: "Dom" },
+  ];
+
+  const uniqueCategories = Array.from(new Set(orders.map(o => o.category))).filter(Boolean);
+
+  const filteredHeatmapOrders = orders.filter(o => {
+    // Category filter
+    if (heatmapCategoryFilter !== "all" && o.category !== heatmapCategoryFilter) return false;
+    // Status filter
+    if (heatmapStatusFilter === "active" && (o.status === "concluido" || o.status === "cancelado")) return false;
+    if (heatmapStatusFilter === "concluido" && o.status !== "concluido") return false;
+    return true;
+  });
+
+  const heatmapMatrix: Record<string, ServiceOrder[]> = {};
+  DAYS_OF_WEEK.forEach(day => {
+    TIME_PERIODS.forEach(period => {
+      heatmapMatrix[`${day.id}-${period.id}`] = [];
+    });
+  });
+
+  filteredHeatmapOrders.forEach(o => {
+    if (!o.createdAt) return;
+    const oDate = new Date(o.createdAt);
+    const dayIndex = oDate.getDay(); // 0-6
+    const hour = oDate.getHours();
+    
+    let periodIndex = 0;
+    if (hour >= 0 && hour < 8) periodIndex = 0;
+    else if (hour >= 8 && hour < 12) periodIndex = 1;
+    else if (hour >= 12 && hour < 18) periodIndex = 2;
+    else periodIndex = 3;
+
+    const key = `${dayIndex}-${periodIndex}`;
+    if (heatmapMatrix[key]) {
+      heatmapMatrix[key].push(o);
+    }
+  });
+
+  let peakCell: { dayName: string; periodLabel: string; count: number } | null = null;
+  let maxCount = 0;
+
+  DAYS_OF_WEEK.forEach(day => {
+    TIME_PERIODS.forEach(period => {
+      const cellOrders = heatmapMatrix[`${day.id}-${period.id}`] || [];
+      if (cellOrders.length > maxCount) {
+        maxCount = cellOrders.length;
+        peakCell = {
+          dayName: day.name,
+          periodLabel: period.label,
+          count: cellOrders.length
+        };
+      }
+    });
+  });
 
   return (
     <div className="space-y-8">
@@ -301,6 +396,7 @@ export default function Dashboard({
                             <span className="bg-slate-205 bg-slate-200/60 text-slate-700 text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
                               {os.category}
                             </span>
+                            {getPriorityBadge(os.priority)}
                             {os.hasMissingMaterial && (
                               <span className="bg-amber-100 text-amber-850 text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded border border-amber-200/50 animate-pulse">
                                 Falta Peças
@@ -554,6 +650,7 @@ export default function Dashboard({
                             <span className="bg-slate-100 text-slate-600 text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
                               {os.category}
                             </span>
+                            {getPriorityBadge(os.priority)}
                             <span className={`text-[8.5px] font-bold uppercase px-1.5 rounded ${
                               os.status === "em_progresso" ? "bg-blue-50 text-blue-700" :
                               os.status === "aguardando" ? "bg-amber-50 text-amber-700 border border-amber-100 animate-pulse" : "bg-slate-100 text-slate-650"
@@ -1113,6 +1210,277 @@ export default function Dashboard({
         </div>
       </div>
 
+      {/* SECTION: Activity Heatmap for Scheduling Optimization */}
+      {isGestorLike && (
+        <div id="activity-heatmap" className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-6 animate-fade-in animate-none">
+          {/* Header */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-indigo-600 animate-pulse" />
+                <h3 className="font-extrabold text-sm uppercase tracking-wider text-slate-800">
+                  Mapa de Calor de Atividades (Weekly Heatmap)
+                </h3>
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium leading-normal max-w-2xl">
+                Frequência de abertura de chamados técnicos por dia da semana e período. Ajuda gestores no planejamento e na otimização de escalas de técnicos em campo.
+              </p>
+            </div>
+
+            {/* Controls */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Category Filter */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest font-mono">Setor / Setores</span>
+                <select
+                  value={heatmapCategoryFilter}
+                  onChange={(e) => {
+                    setHeatmapCategoryFilter(e.target.value);
+                    setSelectedHeatCell(null); // Reset detail display in filter change
+                  }}
+                  className="bg-slate-50 border border-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl outline-none focus:border-indigo-500 font-semibold cursor-pointer"
+                >
+                  <option value="all">📁 Todos os Setores</option>
+                  {uniqueCategories.map(cat => (
+                    <option key={cat} value={cat}>🔧 {cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Status Filter */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest font-mono">Fase Operacional</span>
+                <select
+                  value={heatmapStatusFilter}
+                  onChange={(e) => {
+                    setHeatmapStatusFilter(e.target.value);
+                    setSelectedHeatCell(null); // Reset detail display in filter change
+                  }}
+                  className="bg-slate-50 border border-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl outline-none focus:border-indigo-500 font-semibold cursor-pointer"
+                >
+                  <option value="all">📊 Todos os Status</option>
+                  <option value="active">⏳ Abertos / Em Execução</option>
+                  <option value="concluido">✅ Apenas Concluídos</option>
+                </select>
+              </div>
+
+              {/* Reset button if filter is active */}
+              {(heatmapCategoryFilter !== "all" || heatmapStatusFilter !== "all") && (
+                <button
+                  onClick={() => {
+                    setHeatmapCategoryFilter("all");
+                    setHeatmapStatusFilter("all");
+                    setSelectedHeatCell(null);
+                  }}
+                  className="mt-4 px-2.5 py-1.5 text-[10px] uppercase tracking-wider font-extrabold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg shrink-0 transition cursor-pointer"
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+            {/* Left Box: Graphic Grid */}
+            <div className="xl:col-span-8 space-y-4">
+              {/* Heatmap header timeline blocks */}
+              <div className="grid grid-cols-5 gap-1.5 text-center text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">
+                <div className="text-left font-sans pl-1 flex items-center">Dia da Semana</div>
+                {TIME_PERIODS.map(period => (
+                  <div key={period.id} className="bg-slate-50 border border-slate-100 py-1.5 rounded-lg flex flex-col items-center justify-center">
+                    <span className="text-slate-700">{period.rangeName}</span>
+                    <span className="text-[8px] text-slate-400 font-normal">{period.hours}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Grid Rows */}
+              <div className="space-y-1.5">
+                {DAYS_OF_WEEK.map((day) => {
+                  return (
+                    <div key={day.id} className="grid grid-cols-5 gap-1.5 items-center">
+                      {/* Row Title */}
+                      <div className="bg-slate-50/70 border border-slate-200/40 py-2.5 pl-3 rounded-lg text-xs font-black text-slate-800 text-left truncate flex items-center justify-between">
+                        <span>{day.name}</span>
+                        {/* Day count mini-badge */}
+                        <span className="bg-slate-200/50 font-mono text-[9px] font-extrabold px-1.5 py-0.5 rounded mr-2 text-slate-550">
+                          {TIME_PERIODS.reduce((acc, p) => acc + (heatmapMatrix[`${day.id}-${p.id}`] || []).length, 0)}
+                        </span>
+                      </div>
+
+                      {/* Cell blocks for the day */}
+                      {TIME_PERIODS.map((period) => {
+                        const cellOrders = heatmapMatrix[`${day.id}-${period.id}`] || [];
+                        const count = cellOrders.length;
+                        const isSelected = selectedHeatCell?.dayId === day.id && selectedHeatCell?.periodId === period.id;
+
+                        // Density Tailwind color classes
+                        let bgDensityClr = "bg-slate-50 border-slate-200/40 text-slate-400";
+                        let hoverDensityClr = "hover:bg-slate-100/70 hover:border-slate-300";
+                        if (count > 0 && count <= 1) {
+                          bgDensityClr = "bg-indigo-50/50 border-indigo-100 text-indigo-700";
+                          hoverDensityClr = "hover:bg-indigo-100 border-indigo-200";
+                        } else if (count > 1 && count <= 3) {
+                          bgDensityClr = "bg-indigo-100/60 border-indigo-150 text-indigo-800 font-extrabold";
+                          hoverDensityClr = "hover:bg-indigo-200/80 hover:border-indigo-250";
+                        } else if (count > 3 && count <= 5) {
+                          bgDensityClr = "bg-indigo-400 border-indigo-500 text-white font-extrabold";
+                          hoverDensityClr = "hover:bg-indigo-500 hover:border-indigo-600";
+                        } else if (count > 5) {
+                          bgDensityClr = "bg-indigo-700 border-indigo-800 text-white font-black";
+                          hoverDensityClr = "hover:bg-indigo-850 hover:border-indigo-900";
+                        }
+
+                        if (isSelected) {
+                          bgDensityClr += " ring-2 ring-indigo-500 ring-offset-1 scale-[1.02] shadow-sm";
+                        }
+
+                        return (
+                          <div
+                            key={period.id}
+                            onClick={() => setSelectedHeatCell({ dayId: day.id, periodId: period.id })}
+                            className={`p-3 min-h-[50px] border rounded-xl flex flex-col justify-between cursor-pointer transition-all ${bgDensityClr} ${hoverDensityClr}`}
+                          >
+                            <span className="text-right font-mono text-[11px] font-extrabold">{count}</span>
+                            <div className="flex justify-between items-center text-[7.5px] uppercase font-bold tracking-wider pt-1.5 opacity-80">
+                              <span>Chamados</span>
+                              {count > 0 && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Color guide legend */}
+              <div className="flex items-center gap-4 text-[9px] font-bold text-slate-500 uppercase tracking-widest pt-2 pl-1 font-mono">
+                <span>INTENSIDADE:</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 bg-slate-50 border border-slate-200/80 rounded-md" />
+                  <span>Nenhum</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 bg-indigo-50/50 border border-indigo-100 rounded-md" />
+                  <span>Baixa (1)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 bg-indigo-100/60 border border-indigo-150 rounded-md" />
+                  <span>Média (2-3)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 bg-indigo-400 border border-indigo-500 rounded-md" />
+                  <span>Alta (4-5)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 bg-indigo-700 border border-indigo-800 rounded-md" />
+                  <span>Crítica (6+)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Box: Action Recommendation & Interactive Drill Down List */}
+            <div className="xl:col-span-4 bg-slate-50 rounded-2xl border border-slate-200/60 p-4 space-y-4">
+              <h4 className="font-extrabold text-slate-800 text-[11px] uppercase tracking-wider flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-indigo-600" />
+                Planejamento de Equipes
+              </h4>
+
+              {/* Smart feedback recommendations */}
+              {peakCell ? (
+                <div className="p-3.5 bg-indigo-500/5 border border-indigo-500/10 rounded-xl space-y-1.5 text-xs">
+                  <span className="text-[9px] font-black text-indigo-700 uppercase tracking-widest block">💡 Otimização de Escalas</span>
+                  <p className="text-[11px] font-medium text-slate-700 leading-relaxed font-sans">
+                    Identificamos um pico histórico às <strong className="text-indigo-850 font-extrabold">{peakCell.dayName}s</strong> no período da <strong className="text-indigo-850 font-extrabold">{peakCell.periodLabel}</strong> com <strong className="text-indigo-650 font-extrabold">{peakCell.count} chamados</strong> abertos.
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
+                    Recomendamos direcionar mais técnicos de campo ou priorizar triagens de suporte automatizadas por IA nas primeiras horas deste ciclo!
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 bg-white border border-slate-205 border-slate-200/60 rounded-xl text-xs text-slate-450 text-center">
+                  Sem ordens registradas no momento com os filtros selecionados.
+                </div>
+              )}
+
+              {/* Selected Cell details & drill down list */}
+              <div className="space-y-3 pt-2">
+                <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                  <span className="text-[10px] font-extrabold text-slate-700 uppercase tracking-widest font-mono">
+                    {selectedHeatCell ? "Detalhes da Célula" : "Selecione uma célula"}
+                  </span>
+                  {selectedHeatCell && (
+                    <button
+                      onClick={() => setSelectedHeatCell(null)}
+                      className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800 font-mono transition cursor-pointer"
+                    >
+                      Limpar [X]
+                    </button>
+                  )}
+                </div>
+
+                {selectedHeatCell ? (() => {
+                  const day = DAYS_OF_WEEK.find(d => d.id === selectedHeatCell.dayId);
+                  const period = TIME_PERIODS.find(p => p.id === selectedHeatCell.periodId);
+                  const cellOrdersList = heatmapMatrix[`${selectedHeatCell.dayId}-${selectedHeatCell.periodId}`] || [];
+
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center text-xs font-bold text-slate-500">
+                        <span className="text-slate-700">{day?.name}</span>
+                        <span className="bg-indigo-50 border border-indigo-150 text-indigo-700 font-mono text-[10px] px-2 py-0.5 rounded-md">
+                          {period?.rangeName} ({cellOrdersList.length})
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                        {cellOrdersList.length > 0 ? (
+                          cellOrdersList.map(os => (
+                            <div
+                              key={os.id}
+                              onClick={() => onSelectOrder(os)}
+                              className="p-2.5 bg-white border border-slate-200/70 hover:border-indigo-400 rounded-xl duration-120 transition hover:shadow-2xs cursor-pointer text-[11px] text-left"
+                            >
+                              <div className="flex justify-between items-center gap-1.5 mb-1.5 flex-wrap">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-mono text-[9px] font-extrabold text-indigo-500 bg-indigo-50 border border-indigo-100 px-1 py-0.5 rounded">
+                                    #{os.id}
+                                  </span>
+                                  {getPriorityBadge(os.priority)}
+                                </div>
+                                <span className={`text-[8.5px] font-bold px-1.5 py-0.2 rounded uppercase ${
+                                  os.status === "concluido" ? "bg-emerald-50 text-emerald-750" :
+                                  os.status === "em_progresso" ? "bg-blue-50 text-blue-755" : "bg-slate-100 text-slate-650"
+                                }`}>
+                                  {os.status === "concluido" ? "Resolvido" : os.status === "em_progresso" ? "Executando" : "Aberto"}
+                                </span>
+                              </div>
+                              <h5 className="font-extrabold text-slate-800 line-clamp-1">{os.title}</h5>
+                              <p className="text-[9.5px] text-slate-500 truncate mt-0.5">Técnico: {os.assignedTo || "Triação Pendente"}</p>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="py-8 text-center text-slate-400 bg-white border border-dashed border-slate-200 rounded-xl text-[10.5px]">
+                            Nenhum chamado no momento para este período da semana.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })() : (
+                  <div className="py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl text-[10.5px] bg-white p-4">
+                    Selecione um bloco colorido no gráfico da semana ao lado para planejar a escala ideal e analisar a lista de requisições enviadas.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Grid: Schedule vs Recent Repairs */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
@@ -1140,6 +1508,7 @@ export default function Dashboard({
                       <div className="flex justify-between items-center mb-1">
                         <span className="text-[9px] font-mono font-bold text-slate-400">{os.id}</span>
                         <div className="flex items-center gap-1.5">
+                          {getPriorityBadge(os.priority)}
                           {delayed && (
                             <span className="bg-red-100 text-red-700 text-[8px] font-black uppercase px-1.5 py-0.5 rounded flex items-center gap-0.5 animate-pulse" title="Sem atualização há mais de 5 dias úteis!">
                               <AlertTriangle className="w-2.5 h-2.5" />
@@ -1225,15 +1594,17 @@ export default function Dashboard({
                             <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" title="Novas mensagens responsivas aguardando ação" />
                           )}
                         </div>
-                        <span className="text-[10px] text-slate-500 font-normal truncate block mt-0.5">
-                          {getClientName(os.clientId)}
+                        <div className="text-[10px] text-slate-500 font-normal truncate flex items-center flex-wrap gap-2 mt-1">
+                          <span>{getClientName(os.clientId)}</span>
+                          <span className="text-slate-300">•</span>
+                          {getPriorityBadge(os.priority)}
                           {os.unreadByClient && (
-                            <span className="ml-2 text-[8px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1 rounded">Nova Resposta</span>
+                            <span className="text-[8px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">Nova Resposta</span>
                           )}
                           {os.unreadByProfessional && (
-                            <span className="ml-2 text-[8px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">Aguardando Técnico</span>
+                            <span className="text-[8px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">Aguardando Técnico</span>
                           )}
-                        </span>
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex flex-col items-center justify-center gap-1">
@@ -1480,7 +1851,11 @@ export default function Dashboard({
                                       <span className="bg-red-105 bg-red-100 text-red-700 text-[8.5px] font-black px-1.5 py-0.5 rounded border border-red-200/50 animate-pulse">Atrasado</span>
                                     )}
                                   </div>
-                                  <span className="text-[10px] text-slate-500 font-normal block">{getClientName(os.clientId)}</span>
+                                  <span className="text-[10px] text-slate-500 font-normal flex items-center flex-wrap gap-2 mt-0.5">
+                                    <span>{getClientName(os.clientId)}</span>
+                                    <span className="text-slate-300">•</span>
+                                    {getPriorityBadge(os.priority)}
+                                  </span>
                                 </div>
                               </td>
                               <td className="px-4 py-3">
