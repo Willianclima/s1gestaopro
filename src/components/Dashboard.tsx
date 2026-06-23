@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { ServiceOrder, Client, CurrentUser, Professional, SystemLog } from "../types";
 import { 
   Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
-  TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp
+  TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check
 } from "lucide-react";
 
 interface DashboardProps {
@@ -18,6 +18,49 @@ interface DashboardProps {
   onRejectClient?: (clientId: string) => void;
   onResetPassword?: (id: string, type: "client" | "professional") => void;
 }
+
+const DashboardSkeleton = () => (
+  <div className="space-y-8 animate-pulse">
+    {/* Metrics Cards Grid */}
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      {[1, 2, 3].map(n => (
+        <div key={n} className="bg-slate-900 border border-slate-950/10 rounded-2xl p-5 h-40 flex flex-col justify-between">
+          <div className="space-y-3">
+            <div className="h-3 bg-slate-800 rounded w-24" />
+            <div className="h-6 bg-slate-700/60 rounded w-48" />
+            <div className="h-3 bg-slate-800/40 rounded w-40" />
+          </div>
+          <div className="h-4 bg-slate-800 rounded w-full" />
+        </div>
+      ))}
+    </div>
+
+    {/* Schedule & Recent Grid */}
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="h-4 bg-slate-205 rounded w-48" />
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 h-64 space-y-4">
+          {[1, 2, 3].map(n => (
+            <div key={n} className="flex justify-between items-center pb-2 border-b border-slate-100">
+              <div className="space-y-2">
+                <div className="h-4 bg-slate-100 rounded w-32" />
+                <div className="h-3 bg-slate-100 rounded w-20" />
+              </div>
+              <div className="h-6 bg-slate-100 rounded-full w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-4">
+        <div className="h-4 bg-slate-205 rounded w-32" />
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 h-64 space-y-4">
+          <div className="h-36 bg-slate-100 rounded-xl" />
+          <div className="h-3 bg-slate-100/80 rounded w-full" />
+        </div>
+      </div>
+    </div>
+  </div>
+);
 
 // Auxiliar para calcular dias úteis (Segunda a Sexta) entre uma data de início e hoje
 function getBusinessDaysBetweenDates(startDateStr: string, endDate: Date = new Date()): number {
@@ -80,13 +123,25 @@ export default function Dashboard({
     ordersList: ServiceOrder[];
   } | null>(null);
   const [metricSearch, setMetricSearch] = useState("");
+  const [showReportPreview, setShowReportPreview] = useState(false);
 
   const [techModal, setTechModal] = useState(false);
   const [techSearch, setTechSearch] = useState("");
   const [isActivityCollapsed, setIsActivityCollapsed] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, []);
   
   // Track dismissed material shortages low-priority toasts/notifications
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+
+  const isGestorLike = currentUser && (currentUser.userType === "gestor" || currentUser.userType === "admin" || currentUser.userType === "gestor_servicos");
+  const isAdminLike = currentUser && (currentUser.userType === "gestor" || currentUser.userType === "admin");
 
   const getClientAddress = (id: string) => {
     const c = clients.find(cl => cl.id === id);
@@ -156,7 +211,11 @@ export default function Dashboard({
 
   return (
     <div className="space-y-8">
-      {/* Welcome Banner */}
+      {isLoading ? (
+        <DashboardSkeleton />
+      ) : (
+        <>
+          {/* Welcome Banner */}
       <div className="bg-slate-900 rounded-3xl border border-slate-950/10 shadow-xl p-6 sm:p-8 text-white relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div className="z-10 space-y-2">
           <div className="flex items-center gap-2 bg-slate-800 border border-slate-700/50 px-3 py-1 rounded-full w-max text-emerald-400 font-bold text-[10px] uppercase tracking-wider">
@@ -179,8 +238,404 @@ export default function Dashboard({
         <div className="absolute top-0 right-0 w-80 h-80 bg-radial-gradient from-teal-500/10 to-transparent rounded-full pointer-events-none transform translate-x-20 -translate-y-20" />
       </div>
 
+      {/* SECTION: PERSONALIZED ROLE-BASED DASHBOARD CORNER */}
+      {currentUser && (
+        <div className="bg-slate-50 rounded-3xl border border-slate-200/80 p-6 space-y-5 shadow-xs relative overflow-hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/60 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 shadow-2xs shrink-0">
+                <User className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h2 className="font-extrabold text-slate-900 text-sm tracking-wide uppercase">
+                  Workspace Personalizado
+                </h2>
+                <div className="text-xs text-slate-500 font-medium flex flex-wrap items-center gap-1.5 mt-0.5">
+                  <span>Olá, <strong className="text-indigo-600 font-extrabold">{currentUser.name}</strong></span>
+                  <span className="text-slate-300">•</span>
+                  <span>Suas ferramentas e indicadores como</span>
+                  <span className="text-slate-700 font-extrabold bg-slate-200/50 border border-slate-300/40 px-2.5 py-0.5 rounded-md text-[10px] uppercase font-mono tracking-wide">
+                    {currentUser.userType === "profissional"
+                      ? "🔧 Técnico de Campo"
+                      : currentUser.userType === "gestor" || currentUser.userType === "admin" || currentUser.userType === "gestor_servicos"
+                      ? "🛡️ Gestor Autorizador"
+                      : "👤 Requisitante / Cliente"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick status/date pill */}
+            <div className="text-right text-[10px] font-extrabold text-slate-500 font-mono self-start sm:self-auto bg-slate-100 border border-slate-200 px-3 py-1 rounded-lg">
+              Sincronizado • Araçatuba, {new Date().toLocaleDateString("pt-BR")}
+            </div>
+          </div>
+
+          {/* Cards Based on Roles */}
+          {currentUser.userType === "profissional" && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-fade-in">
+              {/* Left Column: My Current Tasks (📋 Meus Atendimentos) */}
+              <div className="lg:col-span-7 bg-white rounded-2xl border border-indigo-100 shadow-sm p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-slate-800 text-xs lg:text-sm uppercase tracking-wide flex items-center gap-2">
+                    <ClipboardList className="w-4.5 h-4.5 text-indigo-500" />
+                    Meus Chamados Ativos ({activeOrders.filter(o => o.assignedTo === currentUser.name).length})
+                  </h3>
+                  <span className="text-[9px] font-black text-indigo-600 bg-indigo-50/70 border border-indigo-100/50 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                    Fila de Campo
+                  </span>
+                </div>
+
+                <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
+                  {orders.filter(o => o.assignedTo === currentUser.name && o.status !== "concluido" && o.status !== "cancelado").length > 0 ? (
+                    orders.filter(o => o.assignedTo === currentUser.name && o.status !== "concluido" && o.status !== "cancelado").map(os => (
+                      <div
+                        key={os.id}
+                        className="p-3.5 bg-slate-50/60 hover:bg-slate-50 border border-slate-200/50 rounded-xl hover:border-indigo-200 duration-150 transition-all flex items-center justify-between gap-4 text-xs font-medium"
+                      >
+                        <div className="space-y-1 min-w-0 flex-1 text-left">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono text-[9px] font-bold text-indigo-500 bg-indigo-50 border border-indigo-100 px-1 py-0.5 rounded">
+                              #{os.id}
+                            </span>
+                            <span className="bg-slate-205 bg-slate-200/60 text-slate-700 text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
+                              {os.category}
+                            </span>
+                            {os.hasMissingMaterial && (
+                              <span className="bg-amber-100 text-amber-850 text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded border border-amber-200/50 animate-pulse">
+                                Falta Peças
+                              </span>
+                            )}
+                          </div>
+                          <h4 className="font-extrabold text-slate-800 text-xs truncate">
+                            {os.title}
+                          </h4>
+                          <p className="text-[10px] text-slate-500">
+                            Requisitante: <strong className="text-slate-600 font-bold">{getClientName(os.clientId)}</strong>
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => onSelectOrder(os)}
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-[10px] uppercase tracking-wider p-2 px-3.5 rounded-xl cursor-pointer shadow-md shadow-indigo-650/10 active:translate-y-[1px] transition-all"
+                        >
+                          Interagir
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="py-12 border border-dashed border-slate-200 rounded-xl text-center text-slate-400">
+                      <CheckCircle className="w-8 h-8 text-emerald-500 mx-auto mb-1.5 animate-bounce" />
+                      <p className="font-bold text-xs text-slate-700">Tudo em dia! 🎉</p>
+                      <p className="text-[10px] text-slate-400 mt-1 max-w-xs mx-auto">
+                        Você não possui nenhuma Ordem de Serviço pendente de atendimento hoje.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Workload performance metrics */}
+              <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <h3 className="font-extrabold text-slate-800 text-xs lg:text-sm uppercase tracking-wide text-left">
+                    Sua Performance de Atendimento
+                  </h3>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-slate-50 border border-slate-200/60 p-3 rounded-xl text-center">
+                      <span className="text-[9px] text-slate-400 font-bold uppercase block">Total Alocados</span>
+                      <span className="text-xl font-bold font-mono text-slate-800">
+                        {orders.filter(o => o.assignedTo === currentUser.name).length} OS
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200/60 p-3 rounded-xl text-center">
+                      <span className="text-[9px] text-slate-400 font-bold uppercase block">Resolvidos</span>
+                      <span className="text-xl font-bold font-mono text-emerald-600">
+                        {orders.filter(o => o.assignedTo === currentUser.name && o.status === "concluido").length} OS
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Progress Indicator Bar */}
+                  <div className="space-y-1.5 pt-1 text-left">
+                    {(() => {
+                      const totalAlloc = orders.filter(o => o.assignedTo === currentUser.name).length;
+                      const doneAlloc = orders.filter(o => o.assignedTo === currentUser.name && o.status === "concluido").length;
+                      const rate = totalAlloc > 0 ? Math.round((doneAlloc / totalAlloc) * 100) : 0;
+                      return (
+                        <>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-slate-500 font-semibold">Eficiência de Resolução</span>
+                            <span className="font-bold text-indigo-600">{rate}%</span>
+                          </div>
+                          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-indigo-600 h-full rounded-full transition-all duration-500"
+                              style={{ width: `${rate}%` }}
+                            />
+                          </div>
+                        </>
+                      );
+                    })()}
+                    <p className="text-[10px] text-slate-400 leading-normal font-medium">
+                      Suas estatísticas são protegidas por privacidade e atualizadas automaticamente por triagem técnica.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => onNavigate("scheduler")}
+                    className="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-xs uppercase tracking-wider py-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                  >
+                    <Clock className="w-4 h-4 text-indigo-500" />
+                    Acessar Minha Agenda de Visitas
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MANAGER ROLE: SYSTEM HEALTH & AUDIT SUMMARY */}
+          {(currentUser.userType === "gestor" || currentUser.userType === "admin" || currentUser.userType === "gestor_servicos") && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-fade-in">
+              {/* Left Column: Diagnostics checks */}
+              <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-slate-800 text-xs lg:text-sm uppercase tracking-wide flex items-center gap-2">
+                    <Activity className="w-4.5 h-4.5 text-indigo-650" />
+                    Saúde & Conformidade do Sistema (Realtime Agent)
+                  </h3>
+                  <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 border border-emerald-150 px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                    Sistemas Monitorados
+                  </span>
+                </div>
+
+                {/* Grid list of server resources */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                  {/* Database */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-205 border-slate-200/60 rounded-xl space-y-2 text-xs text-left">
+                    <div className="flex justify-between items-center">
+                      <div className="p-1.5 bg-indigo-50 rounded-lg text-indigo-650">
+                        <Database className="w-4.5 h-4.5" />
+                      </div>
+                      <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 font-bold text-[8px] uppercase px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                        Online
+                      </span>
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-xs">Banco de Dados</h4>
+                      <p className="text-[9.5px] leading-relaxed text-slate-450 text-slate-500 mt-1">
+                        Drizzle ORM + PostgreSQL persistent layers ativos. Latência: 3ms.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Notification Gateway */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-205 border-slate-200/60 rounded-xl space-y-2 text-xs text-left">
+                    <div className="flex justify-between items-center">
+                      <div className="p-1.5 bg-amber-50 rounded-lg text-amber-600">
+                        <Server className="w-4.5 h-4.5" />
+                      </div>
+                      <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 font-bold text-[8px] uppercase px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                        TLS Conectado
+                      </span>
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-xs">Gateway SMTP</h4>
+                      <p className="text-[9.5px] leading-relaxed text-slate-455 text-slate-500 mt-1">
+                        Servidor de e-mails blindado na porta 587. Autenticação pronta.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Security Shield */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-205 border-slate-200/60 rounded-xl space-y-2 text-xs text-left">
+                    <div className="flex justify-between items-center">
+                      <div className="p-1.5 bg-purple-50 rounded-lg text-purple-600">
+                        <Shield className="w-4.5 h-4.5" />
+                      </div>
+                      <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 font-bold text-[8px] uppercase px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full" />
+                        Ativado
+                      </span>
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-xs">Filtro LGPD & Cripto</h4>
+                      <p className="text-[9.5px] leading-relaxed text-slate-455 text-slate-500 mt-1">
+                        Ocultação automática de senhas e CPFs. Rastreável por log hash.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Security Audits & Action Items */}
+              <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex flex-col justify-between">
+                <div className="space-y-4 text-xs font-semibold text-left">
+                  <h3 className="font-extrabold text-slate-800 text-xs lg:text-sm uppercase tracking-wide">
+                    Sumário de Eventos de Auditoria
+                  </h3>
+
+                  <div className="space-y-3 pt-1 text-slate-700">
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-1.5">
+                      <span className="text-slate-500 font-medium font-normal">Acessos bloqueados e restritos:</span>
+                      <span className={`font-mono font-bold px-2 py-0.5 rounded text-[11px] ${
+                        totalBlocked > 0 ? "bg-red-50 text-red-600" : "bg-slate-50 text-slate-400"
+                      }`}>
+                        {totalBlocked} Bloqueios LGPD
+                      </span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-1.5">
+                      <span className="text-slate-500 font-medium font-normal">Contatos Clientes Autorizados:</span>
+                      <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded font-mono text-[11px]">
+                        {clients.filter(c => c.status === "ativo").length} Ativos
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500 font-medium font-normal">Registro Geral de Logs:</span>
+                      <span className="text-indigo-650 font-bold bg-indigo-50 px-2 py-0.5 rounded font-mono text-[11px]">
+                        {logs.length} Trilhas gravadas
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 leading-normal font-medium">
+                    Todas as interações nesta central operacional geram um log assinado em conformidade de segurança e controle interno.
+                  </p>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => onNavigate("reports")}
+                    className="w-full bg-slate-900 hover:bg-slate-800 p-3 rounded-xl text-white font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md active:translate-y-[1px]"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-amber-400 animate-pulse" />
+                    Abrir Painel de Auditoria Geral
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* REQUISITANTE ROLE: SOLICITATIONS WATCHER */}
+          {currentUser.userType === "requisitante" && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-fade-in">
+              {/* Left Column: My Current Service Requests */}
+              <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-slate-800 text-xs lg:text-sm uppercase tracking-wide flex items-center gap-2">
+                    <Briefcase className="w-4.5 h-4.5 text-slate-650" />
+                    Minhas Solicitações de Serviço Ativas ({orders.filter(o => o.clientId === currentUser.id && o.status !== "concluido" && o.status !== "cancelado").length})
+                  </h3>
+                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-205 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                    Suas Demandas
+                  </span>
+                </div>
+
+                <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
+                  {orders.filter(o => o.clientId === currentUser.id && o.status !== "concluido" && o.status !== "cancelado").length > 0 ? (
+                    orders.filter(o => o.clientId === currentUser.id && o.status !== "concluido" && o.status !== "cancelado").map(os => (
+                      <div
+                        key={os.id}
+                        className="p-3.5 bg-slate-50/60 hover:bg-slate-50 border border-slate-200/55 rounded-xl hover:border-indigo-150 duration-150 transition-all flex items-center justify-between gap-4 text-xs font-semibold font-medium"
+                      >
+                        <div className="space-y-1 min-w-0 flex-1 text-left">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono text-[9px] font-bold text-slate-400 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                              #{os.id}
+                            </span>
+                            <span className="bg-slate-100 text-slate-600 text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
+                              {os.category}
+                            </span>
+                            <span className={`text-[8.5px] font-bold uppercase px-1.5 rounded ${
+                              os.status === "em_progresso" ? "bg-blue-50 text-blue-700" :
+                              os.status === "aguardando" ? "bg-amber-50 text-amber-700 border border-amber-100 animate-pulse" : "bg-slate-100 text-slate-650"
+                            }`}>
+                              {os.status === "em_progresso" ? "Em Execução" : os.status === "aguardando" ? "Pendente Material" : "Aberto"}
+                            </span>
+                          </div>
+                          <h4 className="font-extrabold text-slate-800 text-xs truncate">
+                            {os.title}
+                          </h4>
+                          <p className="text-[10px] text-slate-500 font-normal">
+                            Técnico Escalado: <strong className="text-slate-600 font-bold">{os.assignedTo || "Triagem Pendente"}</strong>
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => onSelectOrder(os)}
+                          className="bg-indigo-650 hover:bg-indigo-600 text-white font-extrabold text-[10px] uppercase tracking-wider p-2 px-3 rounded-xl cursor-pointer shadow-sm active:translate-y-[1px] transition-all"
+                        >
+                          Acompanhar
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="py-12 border border-dashed border-slate-200 rounded-xl text-center text-slate-400 animate-none">
+                      <CheckCircle className="w-8 h-8 text-indigo-500 mx-auto mb-1.5" />
+                      <p className="font-bold text-xs text-slate-700">Abra o seu Primeiro Chamado!</p>
+                      <p className="text-[10px] text-slate-400 mt-1 max-w-xs mx-auto">
+                        Registre um problema de TI, Limpeza ou Manutenções Físicas diretamente pelo botão de criação de OS.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Requester instructions & Fast request shortcut */}
+              <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex flex-col justify-between">
+                <div className="space-y-4 text-left">
+                  <h3 className="font-extrabold text-slate-800 text-xs lg:text-sm uppercase tracking-wide">
+                    Visão Geral de Chamados
+                  </h3>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-slate-50 border border-slate-200/60 p-3 rounded-xl text-center">
+                      <span className="text-[9px] text-slate-450 font-bold uppercase block">Minhas OS Ativas</span>
+                      <span className="text-xl font-bold font-mono text-slate-800">
+                        {orders.filter(o => o.clientId === currentUser.id && o.status !== "concluido" && o.status !== "cancelado").length} OS
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200/60 p-3 rounded-xl text-center">
+                      <span className="text-[9px] text-slate-450 font-bold uppercase block">Já Resolvidas</span>
+                      <span className="text-xl font-bold font-mono text-emerald-600">
+                        {orders.filter(o => o.clientId === currentUser.id && o.status === "concluido").length} OS
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-indigo-500/5 border border-indigo-500/10 rounded-xl text-xs font-semibold space-y-1">
+                    <span className="text-[9.5px] text-indigo-700 uppercase tracking-wider font-extrabold block">💡 Dica de Suporte: Diagnósticos de Defeito</span>
+                    <p className="text-[10.5px] text-slate-600 leading-relaxed font-medium">
+                      O assistente de Inteligência Artificial está integrado ao portal para orientações imediatas e validação técnica de reparos antes da alocação de equipes.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => onNavigate("orders")}
+                    className="w-full bg-indigo-650 hover:bg-indigo-600 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-indigo-650/10 active:translate-y-[1px]"
+                  >
+                    <ClipboardList className="w-4 h-4 text-indigo-200" />
+                    Abrir Nova Ordem de Serviço
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Pending Registrations Notifications for Gestor */}
-      {currentUser?.userType === "gestor" && pendingClients.length > 0 && (
+      {isAdminLike && pendingClients.length > 0 && (
         <div className="bg-slate-900 border border-slate-850 rounded-3xl p-5 sm:p-6 space-y-4 shadow-xl relative overflow-hidden animate-fade-in mb-8">
           <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-xl pointer-events-none" />
           
@@ -266,7 +721,7 @@ export default function Dashboard({
       )}
 
       {/* Blocked Accounts Security Alerts for Gestor */}
-      {currentUser?.userType === "gestor" && totalBlocked > 0 && (
+      {isAdminLike && totalBlocked > 0 && (
         <div className="bg-rose-50/70 border border-red-200 rounded-3xl p-5 sm:p-6 space-y-4 shadow-xl relative overflow-hidden animate-fade-in">
           <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 rounded-full blur-xl pointer-events-none" />
           
@@ -298,7 +753,7 @@ export default function Dashboard({
 
                   <div className="grid grid-cols-2 gap-1.5 text-[10px] text-slate-500 pt-1.5">
                     <div>
-                      <span className="text-slate-400 block text-[9px] uppercase font-bold">CPF/CNPJ:</span>
+                      <span className="text-slate-400 block text-[9px] uppercase font-bold">CPF:</span>
                       <span className="font-mono text-slate-700">{c.document}</span>
                     </div>
                     <div>
@@ -368,11 +823,21 @@ export default function Dashboard({
       )}
 
       {/* Gestor Premium Metrics Cards */}
-      {currentUser?.userType === "gestor" && (
+      {isGestorLike && (
         <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-6 bg-indigo-600 rounded-full" />
-            <h2 className="font-extrabold text-slate-800 text-sm tracking-widest uppercase">Métricas Decisoras de Gestão (Tempo Real)</h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-6 bg-indigo-550 rounded-full" />
+              <h2 className="font-extrabold text-slate-800 text-sm tracking-widest uppercase">Métricas Decisoras de Gestão (Tempo Real)</h2>
+            </div>
+            
+            <button
+              onClick={() => setShowReportPreview(true)}
+              className="bg-slate-900 hover:bg-slate-800 p-2.5 px-4 rounded-xl text-white font-extrabold text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md shadow-slate-900/10 active:translate-y-[1px]"
+            >
+              <FileText className="w-4 h-4 text-indigo-400" />
+              Relatório de Capacidade Mensal
+            </button>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -816,7 +1281,7 @@ export default function Dashboard({
       </div>
 
       {/* Recent Activity Widget (Recent System Logs) */}
-      {currentUser?.userType === "gestor" && (
+      {isGestorLike && (
         <div id="recent-system-activity-widget" className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-50 pb-3 gap-3">
             <div className="flex items-center gap-2">
@@ -1253,7 +1718,7 @@ export default function Dashboard({
       )}
 
       {/* Floating System Low-Priority Toasts (Material Shortage Alerts) */}
-      {currentUser?.userType === "gestor" && materialAlertNotifications.length > 0 && (
+      {isGestorLike && materialAlertNotifications.length > 0 && (
         <div id="material-shortage-low-priority-toast-container" className="fixed bottom-5 right-5 z-50 flex flex-col gap-3.5 max-w-sm w-full font-sans select-none pointer-events-none">
           {materialAlertNotifications.map((os) => (
             <motion.div
@@ -1309,6 +1774,320 @@ export default function Dashboard({
         </div>
       )}
 
+      {/* SECTOR: HIDDEN PRINT PREVIEW FOR MONTHLY REPORT */}
+      {showReportPreview && (
+        <div id="print-section" className="hidden print:block bg-white p-12 text-black font-sans leading-relaxed text-[10.5pt] w-full">
+          {/* Header */}
+          <div className="border-b-2 border-slate-900 pb-5 mb-6 flex justify-between items-start">
+            <div>
+              <span className="text-xl font-extrabold uppercase tracking-tight block text-slate-900">RequisiçãoPro Araçatuba</span>
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest block font-mono">Relatório Analítico de Capacidade e Performance</span>
+            </div>
+            <div className="text-right">
+              <span className="text-xs font-black text-slate-800 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-350">
+                RELATÓRIO DE EFICIÊNCIA OPERACIONAL
+              </span>
+              <span className="text-[9px] text-slate-500 block font-bold font-mono mt-1.5">
+                Competência: {isMockPeriod ? "Junho / 2026" : `Ciclo ${new Date().toLocaleDateString("pt-BR", { month: 'long', year: 'numeric' })}`}
+              </span>
+              <span className="text-[8px] text-slate-400 block font-mono">
+                Emitido em: {new Date().toLocaleDateString("pt-BR")} às {new Date().toLocaleTimeString("pt-BR")} por {currentUser?.name || "Administrador Geral"}
+              </span>
+            </div>
+          </div>
+
+          <div className="text-center print-accent-bg text-white p-2.5 font-bold text-xs uppercase tracking-widest rounded-lg mb-6">
+            Sumário Executivo e Indicadores Gerenciais de Atendimento
+          </div>
+
+          {/* KPI Columns Grid */}
+          <div className="grid grid-cols-4 gap-4 mb-6">
+            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+              <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Registros Totais</span>
+              <span className="text-xl font-extrabold text-slate-900 block mt-0.5">{orders.length} OS</span>
+              <span className="text-[8px] text-slate-500 font-medium font-mono mt-1 block">Volume acumulado</span>
+            </div>
+            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+              <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Taxa de Resolução</span>
+              <span className="text-xl font-extrabold text-indigo-700 block mt-0.5">{monthlyResolutionRateVal || resolutionRate}%</span>
+              <span className="text-[8px] text-slate-500 font-medium font-mono mt-1 block">{currentMonthOrders.length > 0 ? completedCurrentMonthOrders.length : completedOrders.length} concluídas</span>
+            </div>
+            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+              <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Fila Operacional</span>
+              <span className="text-xl font-extrabold text-amber-655 text-amber-650 block mt-0.5">{activeOrders.length} Ativas</span>
+              <span className="text-[8px] text-slate-500 font-medium font-mono mt-1 block">{pendingTriagem.length} sem triagem</span>
+            </div>
+            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+              <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Bloqueios Críticos</span>
+              <span className="text-xl font-extrabold text-red-650 text-red-600 block mt-0.5">{missingMaterialOrders.length + activeOrders.filter(isDelayedOpen).length} Items</span>
+              <span className="text-[8px] text-slate-500 font-medium font-mono mt-1 block">Atrás / Falta material</span>
+            </div>
+          </div>
+
+          {/* Category Workloads */}
+          <div className="mb-6 print-break-avoid">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200 pb-1 mb-2">Demandas Técnicas por Categoria Operacional</span>
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 text-[9px] font-bold text-slate-400 uppercase bg-slate-50/50">
+                  <th className="py-2 px-3">Especialidade / Categoria</th>
+                  <th className="py-2 px-3 text-center">Chamados Registrados</th>
+                  <th className="py-2 px-3 text-right">Percentual de Participação</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {Object.entries(categoriesCount).map(([catName, count]) => {
+                  const pct = totalOrders > 0 ? Math.round((count / totalOrders) * 100) : 0;
+                  return (
+                    <tr key={catName} className="hover:bg-slate-50/40">
+                      <td className="py-2 px-3 font-bold text-slate-800">{catName}</td>
+                      <td className="py-2 px-3 text-center font-mono text-slate-700">{count} OS</td>
+                      <td className="py-2 px-3 text-right font-mono font-bold text-slate-600">{pct}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Professionals list */}
+          <div className="mb-6 print-break-avoid animate-none">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200 pb-1 mb-2">Capacidade Técnica e Workloads Alocados</span>
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 text-[9px] font-bold text-slate-400 uppercase bg-slate-50">
+                  <th className="py-2 px-3">Nome do Profissional</th>
+                  <th className="py-2 px-3">Cargo</th>
+                  <th className="py-2 px-3 text-center">Chamados Pendentes</th>
+                  <th className="py-2 px-3 text-center">Concluídos</th>
+                  <th className="py-2 px-3 text-right">Eficiência Operacional</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs text-slate-800">
+                {professionals.map(p => {
+                  const pActive = activeOrders.filter(o => o.assignedTo === p.name).length;
+                  const pCompleted = completedOrders.filter(o => o.assignedTo === p.name).length;
+                  const pTotal = pActive + pCompleted;
+                  const efficiency = pTotal > 0 ? Math.round((pCompleted / pTotal) * 100) : 0;
+                  return (
+                    <tr key={p.id}>
+                      <td className="py-2.5 px-3 font-semibold text-slate-950">{p.name} {p.blocked && "🔒 (Bloqueado)"}</td>
+                      <td className="py-2.5 px-3 text-slate-500">{p.role}</td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">{pActive} ativas</td>
+                      <td className="py-2.5 px-3 text-center font-mono text-slate-500">{pCompleted} OS</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-indigo-700">{efficiency}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Attention and Warnings */}
+          {activeOrders.filter(isDelayedOpen).length > 0 && (
+            <div className="border border-red-200 rounded-xl p-4 bg-red-50/40 mb-6 print-break-avoid">
+              <span className="text-[9px] font-bold text-red-650 text-red-600 uppercase tracking-wider block border-b border-red-200/60 pb-1 mb-2">🚨 Alerta Crítico: Chamados Parados / Sem interação há {">"} 5 dias úteis</span>
+              <div className="space-y-1.5 text-xs text-slate-800">
+                {activeOrders.filter(isDelayedOpen).map(os => (
+                  <p key={os.id} className="font-medium">
+                    • <strong>OS #{os.id} [{os.category}]</strong> - "{os.title}" atribuída para <strong className="text-slate-900">{os.assignedTo || "Pendente"}</strong> sem atualização recente.
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Signature margins & confirmation */}
+          <div className="mt-12 grid grid-cols-2 gap-8 print-break-avoid animate-none">
+            <div className="text-center pt-6 border-t border-dashed border-slate-300 font-semibold text-xs text-slate-800">
+              <div className="inline-block w-48 mb-1 leading-none border-b border-slate-400">_________________________________</div>
+              <p className="font-extrabold text-slate-900">Coordenador de Operações Físicas</p>
+              <p className="text-[10px] text-slate-400 font-mono mt-1">Selo Autorizador / Visto</p>
+            </div>
+            
+            <div className="text-center pt-6 border-t border-dashed border-slate-300 font-semibold text-xs text-slate-800">
+              <div className="inline-block w-48 mb-1 leading-none border-b border-slate-400">_________________________________</div>
+              <p className="font-extrabold text-slate-900">Diretor de Infraestrutura</p>
+              <p className="text-[10px] text-slate-400 font-mono mt-1">Homologação da Central Araçatuba</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SECTOR: VISUAL PRINT PREVIEW DIALOG MODAL ON-SCREEN (GERAR RELATÓRIO) */}
+      {showReportPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs overflow-y-auto print:hidden">
+          <div className="bg-slate-100 rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col h-[90vh] animate-fade-in">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-indigo-650" />
+                <h3 className="font-bold text-sm text-slate-805 uppercase tracking-wide">Painel de Emissão de Relatório Mensal</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-2.5 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all"
+                >
+                  <Printer className="w-4 h-4 text-emerald-400" />
+                  Abrir Diálogo de Impressão (Salvar PDF)
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setShowReportPreview(false)}
+                  className="bg-white border border-slate-200 hover:bg-slate-205 hover:bg-slate-100 text-slate-500 hover:text-slate-705 p-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  title="Fechar visualização"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Document Area simulating A4 preview page */}
+            <div className="p-6 overflow-y-auto flex-1 flex justify-center items-start bg-slate-250">
+              <div className="bg-white shadow-xl rounded-2xl w-[210mm] min-h-[297mm] p-10 font-sans leading-relaxed text-sm text-slate-800 text-left border border-slate-350">
+                {/* Header */}
+                <div className="border-b-2 border-slate-900 pb-5 mb-6 flex justify-between items-start">
+                  <div>
+                    <span className="text-xl font-extrabold uppercase block text-slate-900">RequisiçãoPro Araçatuba</span>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block font-mono">Relatório Analítico de Capacidade e Performance</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-black text-slate-800 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                      RELATÓRIO DE EFICIÊNCIA OPERACIONAL
+                    </span>
+                    <span className="text-[10px] text-slate-500 block font-bold font-mono mt-1.5">
+                      Competência: {isMockPeriod ? "Junho / 2026" : `Ciclo ${new Date().toLocaleDateString("pt-BR", { month: 'long', year: 'numeric' })}`}
+                    </span>
+                    <span className="text-[9px] text-slate-400 block font-mono">
+                      Emitido em: {new Date().toLocaleDateString("pt-BR")} às {new Date().toLocaleTimeString("pt-BR")} por {currentUser?.name || "Administrador Geral"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-center bg-slate-900 text-white p-2.5 font-bold text-xs uppercase tracking-widest rounded-lg mb-6">
+                  Sumário Executivo e Indicadores Gerenciais de Atendimento
+                </div>
+
+                {/* KPI Columns Grid */}
+                <div className="grid grid-cols-4 gap-4 mb-6">
+                  <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Registros Totais</span>
+                    <span className="text-2xl font-black text-slate-900 block mt-0.5">{orders.length} OS</span>
+                    <span className="text-[9px] text-slate-500 font-medium font-mono mt-1 block">Volume acumulado</span>
+                  </div>
+                  <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Taxa de Resolução</span>
+                    <span className="text-2xl font-black text-indigo-700 block mt-0.5">{monthlyResolutionRateVal || resolutionRate}%</span>
+                    <span className="text-[9px] text-slate-500 font-medium font-mono mt-1 block">{currentMonthOrders.length > 0 ? completedCurrentMonthOrders.length : completedOrders.length} concluídas</span>
+                  </div>
+                  <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Fila Operacional</span>
+                    <span className="text-2xl font-black text-amber-600 block mt-0.5">{activeOrders.length} Ativas</span>
+                    <span className="text-[9px] text-slate-500 font-medium font-mono mt-1 block">{pendingTriagem.length} sem triagem</span>
+                  </div>
+                  <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Bloqueios Críticos</span>
+                    <span className="text-2xl font-black text-red-600 block mt-0.5">{missingMaterialOrders.length + activeOrders.filter(isDelayedOpen).length} Items</span>
+                    <span className="text-[9px] text-slate-500 font-medium font-mono mt-1 block">Atrás / Falta material</span>
+                  </div>
+                </div>
+
+                {/* Category Workloads */}
+                <div className="mb-6">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200 pb-1 mb-2">Demandas Técnicas por Categoria Operacional</span>
+                  <table className="w-full text-left border-collapse animate-none">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase bg-slate-50">
+                        <th className="py-2 px-3">Especialidade / Categoria</th>
+                        <th className="py-2 px-3 text-center">Chamados Registrados</th>
+                        <th className="py-2 px-3 text-right">Percentual de Participação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs">
+                      {Object.entries(categoriesCount).map(([catName, count]) => {
+                        const pct = totalOrders > 0 ? Math.round((count / totalOrders) * 100) : 0;
+                        return (
+                          <tr key={catName}>
+                            <td className="py-2 px-3 font-bold text-slate-800">{catName}</td>
+                            <td className="py-2 px-3 text-center font-mono text-slate-700">{count} OS</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold text-slate-600">{pct}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Professionals list */}
+                <div className="mb-6">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200 pb-1 mb-2">Capacidade Técnica e Workloads Alocados</span>
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase bg-slate-50">
+                        <th className="py-2 px-3">Nome do Profissional</th>
+                        <th className="py-2 px-3">Cargo</th>
+                        <th className="py-2 px-3 text-center">Chamados Ativos</th>
+                        <th className="py-2 px-3 text-center">Concluídos</th>
+                        <th className="py-2 px-3 text-right font-bold text-slate-500">Eficiência Operacional</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs text-slate-800">
+                      {professionals.map(p => {
+                        const pActive = activeOrders.filter(o => o.assignedTo === p.name).length;
+                        const pCompleted = completedOrders.filter(o => o.assignedTo === p.name).length;
+                        const pTotal = pActive + pCompleted;
+                        const efficiency = pTotal > 0 ? Math.round((pCompleted / pTotal) * 100) : 0;
+                        return (
+                          <tr key={p.id}>
+                            <td className="py-2.5 px-3 font-semibold text-slate-950">{p.name} {p.blocked && "🔒"}</td>
+                            <td className="py-2.5 px-3 text-slate-500">{p.role}</td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">{pActive} ativas</td>
+                            <td className="py-2.5 px-3 text-center font-mono text-slate-500">{pCompleted} OS</td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold text-indigo-700">{efficiency}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Attention and Warnings */}
+                {activeOrders.filter(isDelayedOpen).length > 0 && (
+                  <div className="border border-red-200 rounded-xl p-4 bg-red-50/40 mb-6">
+                    <span className="text-[10px] font-bold text-red-650 text-red-650 uppercase tracking-wider block border-b border-red-200/60 pb-1 mb-2">🚨 Alertas Operacionais: Chamados Pendentes sem ação há {">"} 5 dias úteis</span>
+                    <div className="space-y-1.5 text-xs text-red-800">
+                      {activeOrders.filter(isDelayedOpen).map(os => (
+                        <p key={os.id}>
+                          • <strong>OS #{os.id} [{os.category}]</strong> - "{os.title}" alocada para <strong className="text-slate-850">{os.assignedTo || "Pendente"}</strong> requer verificação operacional.
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Signatures */}
+                <div className="mt-12 grid grid-cols-2 gap-8">
+                  <div className="text-center pt-6 border-t border-dashed border-slate-350 font-semibold text-xs text-slate-650">
+                    <div className="inline-block w-48 mb-1 leading-none border-b border-slate-300">_________________________________</div>
+                    <p className="font-extrabold text-slate-800">Coordenador de Operações Físicas</p>
+                    <p className="text-[9px] text-slate-400 font-mono mt-1">Selo Autorizador / Visto</p>
+                  </div>
+                  
+                  <div className="text-center pt-6 border-t border-dashed border-slate-350 font-semibold text-xs text-slate-650">
+                    <div className="inline-block w-48 mb-1 leading-none border-b border-slate-300">_________________________________</div>
+                    <p className="font-extrabold text-slate-800">Diretor de Infraestrutura</p>
+                    <p className="text-[9px] text-slate-400 font-mono mt-1">Homologação da Central Araçatuba</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </>
+    )}
     </div>
   );
 }

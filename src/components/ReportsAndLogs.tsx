@@ -23,6 +23,8 @@ export default function ReportsAndLogs({
   const [activeTab, setActiveTab] = useState<"charts" | "audit" | "access">("charts");
   const [logsSearch, setLogsSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [logPeriodFilter, setLogPeriodFilter] = useState<string>("all");
+  const [logUserFilter, setLogUserFilter] = useState<string>("all");
   const [accessSearch, setAccessSearch] = useState("");
   const [accessStatusFilter, setAccessStatusFilter] = useState<string>("all");
 
@@ -70,7 +72,33 @@ export default function ReportsAndLogs({
     const matchesSearch = log.action.toLowerCase().includes(logsSearch.toLowerCase()) || 
                           log.details.toLowerCase().includes(logsSearch.toLowerCase());
     const matchesCategory = categoryFilter === "all" || log.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+
+    // Filter by timestamp range
+    let matchesPeriod = true;
+    if (logPeriodFilter !== "all" && log.timestamp) {
+      const logDate = new Date(log.timestamp);
+      const now = new Date();
+      const diffMs = now.getTime() - logDate.getTime();
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      
+      if (logPeriodFilter === "today") {
+        matchesPeriod = diffMs <= oneDayMs;
+      } else if (logPeriodFilter === "week") {
+        matchesPeriod = diffMs <= 7 * oneDayMs;
+      } else if (logPeriodFilter === "month") {
+        matchesPeriod = diffMs <= 30 * oneDayMs;
+      }
+    }
+
+    // Filter by user responsible (contains name in action/details text)
+    let matchesUser = true;
+    if (logUserFilter !== "all") {
+      const uName = logUserFilter.toLowerCase();
+      matchesUser = log.action.toLowerCase().includes(uName) || 
+                    log.details.toLowerCase().includes(uName);
+    }
+
+    return matchesSearch && matchesCategory && matchesPeriod && matchesUser;
   });
 
   // Filter access attempts
@@ -330,6 +358,65 @@ export default function ReportsAndLogs({
     document.body.removeChild(link);
   };
 
+  const exportAllOrdersToCSV = () => {
+    if (orders.length === 0) {
+      alert("Nenhuma ordem de serviço disponível para exportação em CSV.");
+      return;
+    }
+
+    const headers = [
+      "ID da OS",
+      "Nome do Requisitante",
+      "Título da Demanda",
+      "Categoria Técnica",
+      "Status",
+      "Técnico Executor",
+      "Data de Início",
+      "Data de Conclusão",
+      "Localização / Endereço",
+      "Resumo Técnico / Notas",
+      "Criado Em"
+    ];
+
+    const rows = orders.map(o => {
+      const clientName = clients.find(c => c.id === o.clientId)?.name || "Não Identificado";
+      
+      let statusLabel: string = o.status;
+      if (o.status === "aberto") statusLabel = "Aberto";
+      else if (o.status === "em_progresso") statusLabel = "Em Execução";
+      else if (o.status === "aguardando") statusLabel = "Aguardando Material";
+      else if (o.status === "concluido") statusLabel = "Concluído";
+      else if (o.status === "cancelado") statusLabel = "Cancelado";
+
+      return [
+        `#${o.id}`,
+        clientName,
+        o.title,
+        o.category,
+        statusLabel,
+        o.assignedTo || "Sem Técnico",
+        o.startDate ? new Date(o.startDate).toLocaleDateString("pt-BR") : "---",
+        o.endDate ? new Date(o.endDate).toLocaleDateString("pt-BR") : "---",
+        o.location || "Araçatuba/SP",
+        o.notes || "Sem fechamento registrado",
+        o.createdAt ? new Date(o.createdAt).toLocaleDateString("pt-BR") : "---"
+      ];
+    });
+
+    const csvRows = [headers, ...rows];
+    const csvContent = "\uFEFF" + csvRows.map(r => r.map(cell => `"${(cell || "").replace(/"/g, '""')}"`).join(";")).join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    const dateStr = new Date().toISOString().split("T")[0];
+    link.setAttribute("download", `OS_Todas_Contratadas_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const exportCompletedOrdersToPDF = () => {
     const completed = orders.filter(o => o.status === "concluido");
     if (completed.length === 0) {
@@ -484,11 +571,21 @@ export default function ReportsAndLogs({
           {/* Export PDF Button */}
           <button
             onClick={exportToPDF}
-            className="px-4 py-2 bg-indigo-605 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all active:translate-y-[1px]"
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all active:translate-y-[1px]"
             title="Exportar todos os relatórios operacionais & logs de auditoria em PDF"
           >
             <Download className="w-4 h-4" />
             PDF Relatório
+          </button>
+
+          {/* Export CSV Button */}
+          <button
+            onClick={exportAllOrdersToCSV}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all active:translate-y-[1px]"
+            title="Exportar todas as Ordens de Serviço em formato CSV (Excel)"
+          >
+            <FileText className="w-4 h-4" />
+            CSV Geral
           </button>
         </div>
       </div>
@@ -548,20 +645,29 @@ export default function ReportsAndLogs({
               <span className="text-[11px] bg-indigo-500/25 border border-indigo-400/35 text-indigo-300 font-bold uppercase tracking-wider px-2 py-0.5 rounded-md inline-block">
                 Controle de Dados e Exportação
               </span>
-              <h3 className="font-extrabold text-white text-lg tracking-tight">Extrair Demanda de Chamados Finalizados</h3>
+              <h3 className="font-extrabold text-white text-lg tracking-tight">Central de Extração e Exportação (.CSV / .PDF)</h3>
               <p className="text-xs text-slate-400 font-medium leading-relaxed">
-                Exporte imediatamente todas as ordens de serviço com status <strong className="text-emerald-400">Concluído</strong>. O arquivo incluirá dados detalhados do requisitante, datas de execução, localização e técnicos responsáveis.
+                Extraia relatórios completos das Ordens de Serviço contratadas ou finalizadas do sistema em formato CSV (otimizado para Microsoft Excel) ou em PDF estruturado.
               </p>
             </div>
             
             <div className="flex flex-wrap items-center gap-3 w-full md:w-auto shrink-0">
+              <button
+                onClick={exportAllOrdersToCSV}
+                className="flex-1 md:flex-initial px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer active:translate-y-[1px]"
+                title="Consolida absolutamente todas as ordens de serviço em formato .CSV para Excel"
+              >
+                <FileText className="w-4 h-4 text-white" />
+                Exportar CSV Geral
+              </button>
+
               <button
                 onClick={exportCompletedOrdersToCSV}
                 className="flex-1 md:flex-initial px-4 py-2.5 bg-white/10 hover:bg-white/15 border border-white/15 hover:border-white/25 text-white text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer active:translate-y-[1px]"
                 title="Consolida todas as ordens concluídas em formato .CSV delimitado por ponto e vírgula"
               >
                 <FileText className="w-4 h-4 text-emerald-400" />
-                Exportar CSV (Excel)
+                Exportar CSV Concluídos
               </button>
               
               <button
@@ -570,7 +676,7 @@ export default function ReportsAndLogs({
                 title="Gera um relatório formatado em PDF apenas com as Ordens de Serviço dadas como concluídas"
               >
                 <Download className="w-4 h-4 text-white" />
-                Exportar PDF (OS)
+                Exportar PDF (Concluídos)
               </button>
             </div>
           </div>
@@ -748,52 +854,113 @@ export default function ReportsAndLogs({
         /* AUDIT LOGGER VIEW */
         <div className="bg-white rounded-3xl border border-slate-100 shadow-xs overflow-hidden flex flex-col min-h-[500px]">
           {/* Filtering Ribbon */}
-          <div className="p-5 border-b border-slate-100 bg-slate-50/55 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1">
+          <div className="p-5 border-b border-slate-100 bg-slate-50/55 space-y-4">
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
               {/* Text Search Term field */}
               <div className="relative flex-1">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   className="w-full text-xs border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-semibold text-slate-700"
-                  placeholder="Filtrar por termo (ex: Criado, Status, Suporte)..."
+                  placeholder="Filtrar por ação ou conteúdo nos logs de auditoria..."
                   value={logsSearch}
                   onChange={(e) => setLogsSearch(e.target.value)}
                 />
               </div>
 
-              {/* Category Search Selector */}
-              <div className="relative">
-                <select
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                  className="w-full sm:w-48 text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-bold text-slate-700 cursor-pointer appearance-none pr-8"
-                >
-                  <option value="all">Todas as Categorias</option>
-                  <option value="requisicao">📋 Chamados e Requisições</option>
-                  <option value="requisitante">👥 Requisitantes</option>
-                  <option value="tecnico">🔧 Técnicos & Equipe</option>
-                  <option value="sistema">⚙️ Eventos de Sistema</option>
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-400">
-                  <SlidersHorizontal className="w-3 h-3" />
-                </div>
-              </div>
-
               {/* Reset to show all filters */}
-              {(logsSearch || categoryFilter !== "all") && (
+              {(logsSearch || categoryFilter !== "all" || logPeriodFilter !== "all" || logUserFilter !== "all") && (
                 <button
                   onClick={() => {
                     setLogsSearch("");
                     setCategoryFilter("all");
+                    setLogPeriodFilter("all");
+                    setLogUserFilter("all");
                   }}
-                  className="p-2.5 border border-slate-200 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-50 transition-all flex items-center justify-center cursor-pointer"
-                  title="Limpar todos os filtros de busca"
+                  className="px-3.5 py-2.5 border border-slate-250 bg-white hover:bg-slate-55 hover:bg-slate-50 text-slate-500 hover:text-slate-800 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-bold shrink-0 shadow-xs"
+                  title="Reseta absolutamente todos os filtros da auditoria"
                 >
-                  <X className="w-4 h-4 mr-1 sm:mr-0 inline" />
-                  <span className="sm:hidden text-xs font-bold">Limpar Filtros</span>
+                  <X className="w-4 h-4" />
+                  <span>Limpar Todos os Filtros</span>
                 </button>
               )}
+            </div>
+
+            {/* Additional Advanced Audit Filters Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Category Filter */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold font-mono">Filtrar por Categoria</label>
+                <div className="relative">
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-bold text-slate-700 cursor-pointer appearance-none pr-8"
+                  >
+                    <option value="all">Todas as Categorias</option>
+                    <option value="requisicao">📋 Chamados e Requisições</option>
+                    <option value="requisitante">👥 Requisitantes</option>
+                    <option value="tecnico">🔧 Técnicos & Equipe</option>
+                    <option value="sistema">⚙️ Eventos de Sistema</option>
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-400">
+                    <SlidersHorizontal className="w-3 h-3" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Time Period Filter */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold font-mono">Período de Tempo</label>
+                <div className="relative">
+                  <select
+                    value={logPeriodFilter}
+                    onChange={(e) => setLogPeriodFilter(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-bold text-slate-700 cursor-pointer appearance-none pr-8"
+                  >
+                    <option value="all">Qualquer Período</option>
+                    <option value="today">📅 Últimas 24 Horas</option>
+                    <option value="week">📅 Última Semana</option>
+                    <option value="month">📅 Último Mês</option>
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-400">
+                    <Clock className="w-3 h-3" />
+                  </div>
+                </div>
+              </div>
+
+              {/* User Responsible Filter */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold font-mono">Usuário Responsável</label>
+                <div className="relative">
+                  <select
+                    value={logUserFilter}
+                    onChange={(e) => setLogUserFilter(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-bold text-slate-700 cursor-pointer appearance-none pr-8"
+                  >
+                    <option value="all">Qualquer Usuário</option>
+                    <option value="Willian C. Lima">Willian C. Lima (Gestor/Admin)</option>
+                    <option value="Gestor">Gestores Associados</option>
+                    {professionals && professionals.length > 0 && (
+                      <optgroup label="Técnicos & Equipe">
+                        {professionals.map(p => (
+                          <option key={p.id} value={p.name}>{p.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {clients && clients.length > 0 && (
+                      <optgroup label="Clientes & Requisitantes">
+                        {clients.map(c => (
+                          <option key={c.id} value={c.name}>{c.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-400">
+                    <Users className="w-3 h-3" />
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Log Category Quick Buttons for desktop view */}
@@ -937,7 +1104,7 @@ export default function ReportsAndLogs({
                 <input
                   type="text"
                   className="w-full text-xs border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-600/10 focus:border-indigo-500 bg-white transition-all font-semibold text-slate-700"
-                  placeholder="Buscar por CPF/CNPJ, ID ou detalhe de logon..."
+                  placeholder="Buscar por CPF, ID ou detalhe de logon..."
                   value={accessSearch}
                   onChange={(e) => setAccessSearch(e.target.value)}
                 />

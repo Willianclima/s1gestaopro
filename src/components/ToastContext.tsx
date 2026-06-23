@@ -3,11 +3,13 @@ import { Toast } from "../types";
 import ToastContainer from "./Toast";
 
 interface ToastContextType {
-  toast: (message: string, type?: "success" | "error" | "info" | "warning", title?: string, duration?: number) => void;
+  toast: (message: string, type?: "success" | "error" | "critical" | "warning" | "info" | "system", title?: string, duration?: number) => void;
   success: (message: string, title?: string, duration?: number) => void;
   error: (message: string, title?: string, duration?: number) => void;
+  critical: (message: string, title?: string, duration?: number) => void;
   warn: (message: string, title?: string, duration?: number) => void;
   info: (message: string, title?: string, duration?: number) => void;
+  system: (message: string, title?: string, duration?: number) => void;
 }
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
@@ -21,7 +23,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const toast = useCallback((
     message: string, 
-    type: "success" | "error" | "info" | "warning" = "info", 
+    type: "success" | "error" | "critical" | "warning" | "info" | "system" = "info", 
     title?: string, 
     duration?: number
   ) => {
@@ -37,6 +39,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     toast(message, "error", title || "Falha Operacional", duration);
   }, [toast]);
 
+  const critical = useCallback((message: string, title?: string, duration?: number) => {
+    toast(message, "critical", title || "Sério: Falha de Sistema", duration || 7000);
+  }, [toast]);
+
   const warn = useCallback((message: string, title?: string, duration?: number) => {
     toast(message, "warning", title || "Atenção", duration);
   }, [toast]);
@@ -45,8 +51,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     toast(message, "info", title || "Atualização", duration);
   }, [toast]);
 
+  const system = useCallback((message: string, title?: string, duration?: number) => {
+    toast(message, "system", title || "Log de Sistema", duration || 3500);
+  }, [toast]);
+
   return (
-    <ToastContext.Provider value={{ toast, success, error, warn, info }}>
+    <ToastContext.Provider value={{ toast, success, error, critical, warn, info, system }}>
       {children}
       <ToastContainer toasts={toasts} onClose={removeToast} />
     </ToastContext.Provider>

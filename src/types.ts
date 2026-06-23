@@ -7,7 +7,7 @@ export interface Client {
   address: string;
   notes: string;
   createdAt: string;
-  userType?: "requisitante" | "gestor";
+  userType?: "requisitante" | "gestor" | "gestor_servicos" | "admin";
   password?: string;
   status?: "ativo" | "pendente_autorizacao";
   failedAttempts?: number;
@@ -77,13 +77,13 @@ export interface CurrentUser {
   id: string;
   name: string;
   document: string;
-  userType: "gestor" | "requisitante" | "profissional";
+  userType: "admin" | "gestor" | "gestor_servicos" | "requisitante" | "profissional";
 }
 
 export interface Toast {
   id: string;
   message: string;
-  type: "success" | "error" | "info" | "warning";
+  type: "success" | "error" | "critical" | "warning" | "info" | "system";
   title?: string;
   duration?: number;
 }

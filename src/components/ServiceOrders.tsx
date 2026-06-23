@@ -1,8 +1,9 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team } from "../types";
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
-  Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download
+  Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
+  Filter
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { useToast } from "./ToastContext";
@@ -19,6 +20,38 @@ interface ServiceOrdersProps {
   onOpenAiAssistantWithOS?: (os: ServiceOrder) => void;
   currentUser?: CurrentUser;
 }
+
+const OrdersSkeleton = () => (
+  <>
+    {[1, 2, 3, 4, 5].map((n) => (
+      <tr key={n} className="animate-pulse">
+        <td className="px-6 py-4">
+          <div className="h-3.5 bg-slate-200 rounded w-10" />
+        </td>
+        <td className="px-6 py-4">
+          <div className="space-y-2">
+            <div className="h-3.5 bg-slate-200 rounded w-48" />
+            <div className="h-2.5 bg-slate-200 rounded w-32" />
+          </div>
+        </td>
+        <td className="px-6 py-4">
+          <div className="h-5 bg-slate-200 rounded-xl w-24" />
+        </td>
+        <td className="px-6 py-4">
+          <div className="h-5 bg-slate-200 rounded w-20" />
+        </td>
+        <td className="px-6 py-4">
+          <div className="h-5 bg-slate-200 rounded w-36" />
+        </td>
+        <td className="px-6 py-4">
+          <div className="flex justify-center gap-1.5">
+            <div className="w-16 h-8 bg-slate-200 rounded-lg" />
+          </div>
+        </td>
+      </tr>
+    ))}
+  </>
+);
 
 // Preset physical problem images for easy testing/illustration
 const PRESET_IMAGES = [
@@ -42,6 +75,18 @@ export default function ServiceOrders({
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("todos");
+  const [dateFilterType, setDateFilterType] = useState<string>("todos"); // "todos", "hoje", "7dias", "30dias", "personalizado"
+  const [startDateFilter, setStartDateFilter] = useState<string>("");
+  const [endDateFilter, setEndDateFilter] = useState<string>("");
+  const [technicianFilter, setTechnicianFilter] = useState<string>("todos");
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, []);
   
   // AI Auto-triage states
   const [isTriaging, setIsTriaging] = useState(false);
@@ -398,7 +443,51 @@ export default function ServiceOrders({
                           clientName.includes(searchTerm.toLowerCase()) || 
                           os.id.includes(searchTerm);
     const matchesStatus = statusFilter === "todos" || os.status === statusFilter;
-    return matchesSearch && matchesStatus;
+
+    // Date filtering based on createdAt
+    let matchesDate = true;
+    if (os.createdAt) {
+      const orderDate = new Date(os.createdAt);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (dateFilterType === "hoje") {
+        const orderDay = new Date(os.createdAt);
+        orderDay.setHours(0, 0, 0, 0);
+        matchesDate = orderDay.getTime() === today.getTime();
+      } else if (dateFilterType === "7dias") {
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
+        matchesDate = orderDate >= sevenDaysAgo;
+      } else if (dateFilterType === "30dias") {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        thirtyDaysAgo.setHours(0, 0, 0, 0);
+        matchesDate = orderDate >= thirtyDaysAgo;
+      } else if (dateFilterType === "personalizado") {
+        if (startDateFilter) {
+          const start = new Date(startDateFilter);
+          start.setHours(0, 0, 0, 0);
+          matchesDate = matchesDate && orderDate >= start;
+        }
+        if (endDateFilter) {
+          const end = new Date(endDateFilter);
+          end.setHours(23, 59, 59, 999);
+          matchesDate = matchesDate && orderDate <= end;
+        }
+      }
+    }
+
+    // Technician filtering
+    let matchesTechnician = true;
+    if (technicianFilter === "unassigned") {
+      matchesTechnician = !os.assignedTo;
+    } else if (technicianFilter !== "todos") {
+      matchesTechnician = os.assignedTo === technicianFilter;
+    }
+
+    return matchesSearch && matchesStatus && matchesDate && matchesTechnician;
   });
 
   const handleLocationSearch = async (query: string) => {
@@ -924,10 +1013,10 @@ export default function ServiceOrders({
           body * {
             visibility: hidden;
           }
-          #print-area, #print-area * {
+          #print-section, #print-section * {
             visibility: visible;
           }
-          #print-area {
+          #print-section {
             position: absolute;
             left: 0;
             top: 0;
@@ -953,41 +1042,154 @@ export default function ServiceOrders({
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs flex flex-col md:flex-row gap-4 items-stretch md:items-center">
-        {/* Search */}
-        <div className="flex-1 relative">
-          <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            className="w-full text-xs border border-slate-200 rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700"
-            placeholder="Buscar por código, chamados técnicos, diagnóstico ou requisitante..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs flex flex-col gap-4">
+        <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center">
+          {/* Search */}
+          <div className="flex-1 relative">
+            <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              className="w-full text-xs border border-slate-200 rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700"
+              placeholder="Buscar por código, chamados técnicos, diagnóstico ou requisitante..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          {/* Status filters */}
+          <div className="flex bg-slate-50 p-1 rounded-xl border border-slate-100 gap-1 overflow-x-auto self-start lg:self-auto max-w-full">
+            {[
+              { id: "todos", label: "Todos os Status" },
+              { id: "aberto", label: "Abertos" },
+              { id: "em_progresso", label: "Em Execução" },
+              { id: "aguardando", label: "Aguardando Material" },
+              { id: "concluido", label: "Concluídos" },
+              { id: "cancelado", label: "Cancelados" }
+            ].map(st => (
+              <button
+                key={st.id}
+                onClick={() => setStatusFilter(st.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                  statusFilter === st.id
+                    ? "bg-white text-slate-800 shadow-xs"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Status filters */}
-        <div className="flex bg-slate-50 p-1 rounded-xl border border-slate-100 gap-1 overflow-x-auto">
-          {[
-            { id: "todos", label: "Todos os Status" },
-            { id: "aberto", label: "Abertos" },
-            { id: "em_progresso", label: "Em Execução" },
-            { id: "aguardando", label: "Aguardando Material" },
-            { id: "concluido", label: "Concluídos" },
-            { id: "cancelado", label: "Cancelados" }
-          ].map(st => (
-            <button
-              key={st.id}
-              onClick={() => setStatusFilter(st.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                statusFilter === st.id
-                  ? "bg-white text-slate-800 shadow-xs"
-                  : "text-slate-500 hover:text-slate-800"
-              }`}
+        {/* Date Filters row */}
+        <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center border-t border-slate-50 pt-4">
+          <div className="flex items-center gap-2 text-slate-500 text-xs font-bold whitespace-nowrap">
+            <Calendar className="w-4 h-4 text-slate-400" />
+            <span>Filtro por Data de Abertura:</span>
+          </div>
+
+          {/* Date presets */}
+          <div className="flex bg-slate-50 p-1 rounded-xl border border-slate-100 gap-1 overflow-x-auto max-w-full">
+            {[
+              { id: "todos", label: "Qualquer data" },
+              { id: "hoje", label: "Hoje" },
+              { id: "7dias", label: "Últimos 7 dias" },
+              { id: "30dias", label: "Últimos 30 dias" },
+              { id: "personalizado", label: "Intervalo Personalizado" }
+            ].map(dt => (
+              <button
+                key={dt.id}
+                onClick={() => {
+                  setDateFilterType(dt.id);
+                  if (dt.id !== "personalizado") {
+                    setStartDateFilter("");
+                    setEndDateFilter("");
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                  dateFilterType === dt.id
+                    ? "bg-white text-slate-800 shadow-xs"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                {dt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Custom Date selection fields */}
+          {dateFilterType === "personalizado" && (
+            <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">De:</span>
+                <input
+                  type="date"
+                  value={startDateFilter}
+                  onChange={(e) => setStartDateFilter(e.target.value)}
+                  className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-1 focus:ring-slate-500 bg-white font-semibold text-slate-700"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Até:</span>
+                <input
+                  type="date"
+                  value={endDateFilter}
+                  onChange={(e) => setEndDateFilter(e.target.value)}
+                  className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-1 focus:ring-slate-500 bg-white font-semibold text-slate-700"
+                />
+              </div>
+              {(startDateFilter || endDateFilter) && (
+                <button
+                  onClick={() => {
+                    setStartDateFilter("");
+                    setEndDateFilter("");
+                  }}
+                  className="text-xs font-bold text-red-650 hover:text-red-750 p-1.5 hover:bg-red-50 rounded-lg transition-all"
+                  title="Limpar Datas"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
+          
+          {/* Técnico / Profissional Filter */}
+          <div className="flex items-center gap-2 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0">
+            <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-slate-500 text-xs font-bold whitespace-nowrap">Técnico:</span>
+            <select
+              value={technicianFilter}
+              onChange={(e) => setTechnicianFilter(e.target.value)}
+              className="text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white text-slate-700 cursor-pointer min-w-[160px] max-w-full"
             >
-              {st.label}
+              <option value="todos">Todos os Técnicos</option>
+              <option value="unassigned font-semibold">Sem Técnico (Pendente)</option>
+              {professionalsList
+                .filter(p => !p.userType || p.userType === "profissional")
+                .map(p => (
+                  <option key={p.id} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+          
+          {/* Active filter summary indicators */}
+          {(searchTerm || statusFilter !== "todos" || dateFilterType !== "todos" || technicianFilter !== "todos") && (
+            <button
+              onClick={() => {
+                setSearchTerm("");
+                setStatusFilter("todos");
+                setDateFilterType("todos");
+                setStartDateFilter("");
+                setEndDateFilter("");
+                setTechnicianFilter("todos");
+              }}
+              className="text-xs font-extrabold text-slate-500 hover:text-slate-800 px-3 py-1.5 rounded-lg border border-slate-250 bg-slate-50 hover:bg-slate-100 shrink-0 transition-all md:ml-auto"
+            >
+              Resetar Filtros
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -1006,7 +1208,9 @@ export default function ServiceOrders({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
-              {filteredOrders.length > 0 ? (
+              {isLoading ? (
+                <OrdersSkeleton />
+              ) : filteredOrders.length > 0 ? (
                 filteredOrders.map(os => {
                   const client = clients.find(cl => cl.id === os.clientId);
                   return (
@@ -1083,7 +1287,7 @@ export default function ServiceOrders({
                             <span>Interagir</span>
                           </button>
 
-                          {currentUser?.userType === "gestor" && (
+                          {(currentUser?.userType === "gestor" || currentUser?.userType === "admin" || currentUser?.userType === "gestor_servicos") && (
                             <>
                               <button
                                 onClick={() => openForm(os)}

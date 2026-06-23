@@ -21,7 +21,7 @@ import { useToast } from "./components/ToastContext";
 
 
 export default function App() {
-  const { success: toastSuccess, error: toastError, warn: toastWarn, info: toastInfo } = useToast();
+  const { success: toastSuccess, error: toastError, warn: toastWarn, info: toastInfo, critical: toastCritical, system: toastSystem } = useToast();
 
   // Navigation State
   const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings">("dashboard");
@@ -72,6 +72,42 @@ export default function App() {
   const [copiedEmail, setCopiedEmail] = useState(false);
 
   // Core persistence state
+  const [permissions, setPermissions] = useState<Record<string, string[]>>(() => {
+    const cached = localStorage.getItem("service_mgt_permissions3");
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch (err) {
+        // fallback to default
+      }
+    }
+    const defaultPerms = {
+      dashboard: ["admin", "gestor", "gestor_servicos", "profissional"],
+      clients: ["admin", "gestor"],
+      orders: ["admin", "gestor", "gestor_servicos", "profissional", "requisitante"],
+      scheduler: ["admin", "gestor", "gestor_servicos", "profissional"],
+      professionals: ["admin", "gestor", "gestor_servicos"],
+      reports: ["admin", "gestor"],
+      settings: ["admin"],
+      assistant: ["admin", "gestor", "gestor_servicos", "profissional", "requisitante"]
+    };
+    localStorage.setItem("service_mgt_permissions3", JSON.stringify(defaultPerms));
+    return defaultPerms;
+  });
+
+  const updatePermissionsState = (newPerms: Record<string, string[]>) => {
+    setPermissions(newPerms);
+    localStorage.setItem("service_mgt_permissions3", JSON.stringify(newPerms));
+  };
+
+  const hasTabPermission = (tab: string) => {
+    if (!currentUser) return false;
+    const userRole = currentUser.userType || "requisitante";
+    if (userRole === "admin") return true; // master always has access to all resources
+    const allowed = permissions[tab] || [];
+    return allowed.includes(userRole);
+  };
+
   const [clients, setClients] = useState<Client[]>([]);
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
@@ -700,32 +736,18 @@ export default function App() {
     setActiveTab("orders");
   };
 
-  // CPF / CNPJ Dynamic masking formatter
+  // CPF Dynamic masking formatter (CNPJ has been removed)
   const formatDoc = (value: string) => {
-    const clean = value.replace(/\D/g, "");
-    if (clean.length <= 11) {
-      let formatted = clean;
-      if (clean.length > 9) {
-        formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6, 9)}-${clean.slice(9, 11)}`;
-      } else if (clean.length > 6) {
-        formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6)}`;
-      } else if (clean.length > 3) {
-        formatted = `${clean.slice(0, 3)}.${clean.slice(3)}`;
-      }
-      return formatted;
-    } else {
-      let formatted = clean;
-      if (clean.length > 12) {
-        formatted = `${clean.slice(0, 2)}.${clean.slice(2, 5)}.${clean.slice(5, 8)}/${clean.slice(8, 12)}-${clean.slice(12, 14)}`;
-      } else if (clean.length > 8) {
-        formatted = `${clean.slice(0, 2)}.${clean.slice(2, 5)}.${clean.slice(5, 8)}/${clean.slice(8)}`;
-      } else if (clean.length > 5) {
-        formatted = `${clean.slice(0, 2)}.${clean.slice(2, 5)}.${clean.slice(5)}`;
-      } else if (clean.length > 2) {
-        formatted = `${clean.slice(0, 2)}.${clean.slice(2)}`;
-      }
-      return formatted.slice(0, 18);
+    const clean = value.replace(/\D/g, "").slice(0, 11);
+    let formatted = clean;
+    if (clean.length > 9) {
+      formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6, 9)}-${clean.slice(9, 11)}`;
+    } else if (clean.length > 6) {
+      formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6)}`;
+    } else if (clean.length > 3) {
+      formatted = `${clean.slice(0, 3)}.${clean.slice(3)}`;
     }
+    return formatted;
   };
 
   // Strict CPF Dynamic formatting for internal municipal controls
@@ -786,7 +808,7 @@ export default function App() {
         id: "gestor-admin",
         name: "Willian C. Lima",
         document: normalizedInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
-        userType: "gestor"
+        userType: "admin"
       };
       setCurrentUser(adminUser);
       localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
@@ -794,9 +816,9 @@ export default function App() {
       setActiveTab("dashboard");
       setTypedDoc("");
       setTypedPassword("");
-      addSystemLog("Login do Gestor", "Gestor Willian C. Lima autenticado via CPF com credenciais seguras.", "sistema");
-      addLoginAttempt(normalizedInput, adminUser.id, "success", "gestor", "Login bem-sucedido via credencial mestre administrador (Willian C. Lima).");
-      toastSuccess("Seja bem-vindo de volta, Willian C. Lima!", "Acesso Autorizado");
+      addSystemLog("Login de Administrador", "Administrador do Sistema Willian C. Lima autenticado via CPF com credenciais de raiz.", "sistema");
+      addLoginAttempt(normalizedInput, adminUser.id, "success", "admin", "Login bem-sucedido via credencial mestre administrador (Willian C. Lima).");
+      toastSuccess("Seja bem-vindo de volta, Willian C. Lima! Painel de Controle Raiz ativado.", "Acesso de Administrador");
       return;
     }
 
@@ -858,21 +880,24 @@ export default function App() {
         updateClientsState(updatedClients);
       }
 
-      const isGestor = matchedClient.userType === "gestor" || matchedClient.id === "cli-2"; // Make Roberto Negócios a Gestor if userType says so or defaults
+      const resolvedUserType = matchedClient.userType || (matchedClient.id === "cli-2" ? "gestor" : "requisitante");
       const clientUser: CurrentUser = {
         id: matchedClient.id,
         name: matchedClient.name,
         document: matchedClient.document,
-        userType: isGestor ? "gestor" : "requisitante"
+        userType: resolvedUserType
       };
       setCurrentUser(clientUser);
       localStorage.setItem("service_mgt_logged_user", JSON.stringify(clientUser));
       setLoginError("");
-      setActiveTab(isGestor ? "dashboard" : "orders");
+
+      // Lands on dashboard for administrative roles, orders for regular clients
+      const isManagement = resolvedUserType === "gestor" || resolvedUserType === "gestor_servicos" || resolvedUserType === "admin";
+      setActiveTab(isManagement ? "dashboard" : "orders");
       setTypedDoc("");
       setTypedPassword("");
-      addSystemLog("Login do Requisitante", `Cliente "${matchedClient.name}" autenticado via CPF com isolamento de visibilidade.`, "sistema");
-      addLoginAttempt(normalizedInput, matchedClient.id, "success", isGestor ? "gestor" : "requisitante", `Login efetuado com sucesso como ${isGestor ? "Gestor" : "Requisitante"}.`);
+      addSystemLog("Login Autorizado", `Usuário "${matchedClient.name}" autenticado como ${resolvedUserType} via CPF.`, "sistema");
+      addLoginAttempt(normalizedInput, matchedClient.id, "success", resolvedUserType, `Login efetuado com sucesso como ${resolvedUserType}.`);
       toastSuccess(`Seja bem-vindo, ${matchedClient.name}!`, "Acesso Autorizado");
       return;
     }
@@ -944,7 +969,7 @@ export default function App() {
       return;
     }
 
-    setLoginError("Documento (CPF/CNPJ) não encontrado nas bases do sistema. Revise os dados ou faça seu Auto-Cadastro logo abaixo.");
+    setLoginError("Documento (CPF) não encontrado nas bases do sistema. Revise os dados ou faça seu Auto-Cadastro logo abaixo.");
     toastError("Identificador de acesso não cadastrado na base.", "Falha de Login");
     addLoginAttempt(normalizedInput, "desconhecido", "failed", "desconhecido", "Tentativa de login de usuário não registrado no sistema.");
   };
@@ -1236,6 +1261,7 @@ export default function App() {
                       type="text"
                       required
                       value={typedDoc}
+                      maxLength={14}
                       onChange={(e) => {
                         const formatted = formatOnlyCPF(e.target.value);
                         setTypedDoc(formatted);
@@ -1349,6 +1375,7 @@ export default function App() {
                       type="text"
                       required
                       value={regCPF}
+                      maxLength={14}
                       onChange={(e) => setRegCPF(formatDoc(e.target.value))}
                       className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20 font-mono"
                       placeholder="000.000.000-00"
@@ -1495,7 +1522,7 @@ export default function App() {
                 <div>
                   <h4 className="font-extrabold text-white uppercase text-[10px] tracking-wider mb-1">2. FINALIDADE DE PROCESSAMENTO DOS DADOS</h4>
                   <p className="text-slate-400">
-                    O CPF/CNPJ coletado é processado estritamente para a finalidade legítima de <strong>Controle de Acesso e Autorização de Informações Pessoais</strong>. Ele garante que de forma isolada, apenas você consulte e registre as requisições vinculadas à sua pessoa física ou jurídica, eliminando riscos de espionagem cibernética de dados pessoais de terceiros.
+                    O CPF coletado é processado estritamente para a finalidade legítima de <strong>Controle de Acesso e Autorização de Informações Pessoais</strong>. Ele garante que de forma isolada, apenas você consulte e registre as requisições vinculadas à sua pessoa física ou jurídica, eliminando riscos de espionagem cibernética de dados pessoais de terceiros.
                   </p>
                 </div>
 
@@ -1573,11 +1600,19 @@ export default function App() {
           {/* Navigation Links list */}
           <nav className="space-y-1">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-3 px-3">
-              {currentUser.userType === "gestor" ? "Operações do Gestor" : currentUser.userType === "profissional" ? "Operações do Técnico" : "Portal do Requisitante"}
+              {currentUser.userType === "admin" 
+                ? "Painel de Admin" 
+                : currentUser.userType === "gestor" 
+                  ? "Operações do Gestor" 
+                  : currentUser.userType === "gestor_servicos"
+                    ? "Gestor de Serviços"
+                    : currentUser.userType === "profissional" 
+                      ? "Operações do Técnico" 
+                      : "Portal do Requisitante"}
             </span>
             
-            {/* Painel Geral (Gestores & Professionals only) */}
-            {(currentUser.userType === "gestor" || currentUser.userType === "profissional") && (
+            {/* Painel Geral (Gestores, Admin, GS & Professionals as configured) */}
+            {hasTabPermission("dashboard") && (
               <button
                 onClick={() => { setActiveTab("dashboard"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -1591,8 +1626,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Requisitantes & GS (Gestor only) */}
-            {currentUser.userType === "gestor" && (
+            {/* Requisitantes & GS */}
+            {hasTabPermission("clients") && (
               <button
                 onClick={() => { setActiveTab("clients"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -1607,20 +1642,22 @@ export default function App() {
             )}
 
             {/* Requisições de Serviço */}
-            <button
-              onClick={() => { setActiveTab("orders"); setIsSidebarOpen(false); }}
-              className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === "orders"
-                  ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/40"
-              }`}
-            >
-              <ClipboardList className="w-4 h-4" />
-              {currentUser.userType === "requisitante" ? "Minhas Requisições" : currentUser.userType === "profissional" ? "Atendimentos Designados" : "Requisições de Serviço"}
-            </button>
+            {hasTabPermission("orders") && (
+              <button
+                onClick={() => { setActiveTab("orders"); setIsSidebarOpen(false); }}
+                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === "orders"
+                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                }`}
+              >
+                <ClipboardList className="w-4 h-4" />
+                {currentUser.userType === "requisitante" ? "Minhas Requisições" : currentUser.userType === "profissional" ? "Atendimentos Designados" : "Requisições de Serviço"}
+              </button>
+            )}
 
-            {/* Agenda / Calendário (Gestor & Professional) */}
-            {(currentUser.userType === "gestor" || currentUser.userType === "profissional") && (
+            {/* Agenda / Calendário */}
+            {hasTabPermission("scheduler") && (
               <button
                 onClick={() => { setActiveTab("scheduler"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -1634,8 +1671,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Técnicos & Equipe (Gestor only) */}
-            {currentUser.userType === "gestor" && (
+            {/* Técnicos & Equipe */}
+            {hasTabPermission("professionals") && (
               <button
                 onClick={() => { setActiveTab("professionals"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -1649,8 +1686,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Relatórios & Logs (Gestor only) */}
-            {currentUser.userType === "gestor" && (
+            {/* Relatórios & Logs */}
+            {hasTabPermission("reports") && (
               <button
                 onClick={() => { setActiveTab("reports"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -1664,8 +1701,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Configurações SMTP (Gestor only) */}
-            {currentUser.userType === "gestor" && (
+            {/* Configurações SMTP / Painel de Governança */}
+            {hasTabPermission("settings") && (
               <button
                 onClick={() => { setActiveTab("settings"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -1675,24 +1712,26 @@ export default function App() {
                 }`}
               >
                 <Settings className="w-4 h-4" />
-                Configurações SMTP
+                Configurações & Governança
               </button>
             )}
 
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block pt-6 mb-3 px-3">Suporte IA Inteligente</span>
 
             {/* Assistente IA */}
-            <button
-              onClick={() => { setActiveTab("assistant"); setIsSidebarOpen(false); }}
-              className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === "assistant"
-                  ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/40"
-              }`}
-            >
-              <Sparkles className="w-4 h-4 text-indigo-400" />
-              Assistente IA Gemini
-            </button>
+            {hasTabPermission("assistant") && (
+              <button
+                onClick={() => { setActiveTab("assistant"); setIsSidebarOpen(false); }}
+                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === "assistant"
+                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                }`}
+              >
+                <Sparkles className="w-4 h-4 text-indigo-400" />
+                Assistente IA Gemini
+              </button>
+            )}
 
             {/* Sair da Conta */}
             <button
@@ -1778,7 +1817,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-4 sm:p-8">
           <div className="w-full max-w-6xl mx-auto pb-12">
             
-            {activeTab === "dashboard" && (currentUser.userType === "gestor" || currentUser.userType === "profissional") && (
+            {activeTab === "dashboard" && hasTabPermission("dashboard") && (
               <Dashboard 
                 orders={visibleOrders} 
                 clients={clients} 
@@ -1796,7 +1835,7 @@ export default function App() {
               />
             )}
             
-            {activeTab === "clients" && currentUser.userType === "gestor" && (
+            {activeTab === "clients" && hasTabPermission("clients") && (
               <Clients 
                 clients={clients}
                 orders={visibleOrders}
@@ -1806,7 +1845,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === "orders" && (
+            {activeTab === "orders" && hasTabPermission("orders") && (
               <ServiceOrders 
                 orders={visibleOrders}
                 clients={clients}
@@ -1821,7 +1860,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === "scheduler" && (currentUser.userType === "gestor" || currentUser.userType === "profissional") && (
+            {activeTab === "scheduler" && hasTabPermission("scheduler") && (
               <Scheduler 
                 orders={visibleOrders}
                 clients={clients}
@@ -1829,7 +1868,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === "professionals" && currentUser.userType === "gestor" && (
+            {activeTab === "professionals" && hasTabPermission("professionals") && (
               <Professionals 
                 professionals={professionals}
                 categories={categories}
@@ -1844,14 +1883,14 @@ export default function App() {
               />
             )}
 
-            {activeTab === "assistant" && (
+            {activeTab === "assistant" && hasTabPermission("assistant") && (
               <AiAssistant 
                 orders={visibleOrders}
                 clients={clients}
               />
             )}
 
-            {activeTab === "reports" && currentUser.userType === "gestor" && (
+            {activeTab === "reports" && hasTabPermission("reports") && (
               <ReportsAndLogs
                 orders={visibleOrders}
                 clients={clients}
@@ -1863,15 +1902,19 @@ export default function App() {
               />
             )}
 
-            {activeTab === "settings" && currentUser.userType === "gestor" && (
+            {activeTab === "settings" && hasTabPermission("settings") && (
               <SmtpSettingsPanel
                 settings={smtpSettings}
                 onSave={handleSaveSmtpSettings}
                 whatsappSettings={whatsappSettings}
                 onSaveWhatsapp={handleSaveWhatsappSettings}
+                permissions={permissions}
+                onSavePermissions={updatePermissionsState}
                 onNotifyTest={(title, msg, type) => {
                   if (type === "success") toastSuccess(msg, title);
                   else if (type === "error") toastError(msg, title);
+                  else if (type === "critical") toastCritical(msg, title);
+                  else if (type === "system") toastSystem(msg, title);
                   else toastInfo(msg, title);
                 }}
               />
@@ -2138,7 +2181,7 @@ export default function App() {
                               <p>Prezado(a) <strong className="text-slate-900 font-bold">{simulatedNotification.userName}</strong>,</p>
                               <p>Sua conta no portal de triagem e ordem de serviços de manutenção foi restaurada com sucesso.</p>
                               <div className="bg-slate-50 border border-slate-150 rounded-lg p-3 space-y-1 font-mono text-[10.5px] border-l-4 border-indigo-500">
-                                <div><strong>Login</strong>: CPF ou CNPJ cadastrado</div>
+                                <div><strong>Login</strong>: CPF cadastrado</div>
                                 <div><strong>Senha Provisória</strong>: <span className="font-extrabold text-red-650 text-xs">123456</span></div>
                               </div>
                               <p className="text-slate-500 text-[10px] leading-normal font-sans">

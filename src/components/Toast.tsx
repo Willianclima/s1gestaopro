@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { Toast } from "../types";
-import { CheckCircle, AlertTriangle, AlertCircle, Info, X } from "lucide-react";
+import { CheckCircle, AlertTriangle, AlertCircle, Info, X, Terminal } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface ToastItemProps {
@@ -21,34 +21,60 @@ export function ToastItem({ toast, onClose }: ToastItemProps) {
 
   const styles = {
     success: {
-      bg: "bg-emerald-50 border-emerald-200 text-emerald-900",
+      bg: "bg-emerald-55/95 bg-emerald-50 border-emerald-200 text-emerald-900",
       icon: <CheckCircle className="w-5 h-5 text-emerald-600 animate-bounce" />,
       accent: "bg-emerald-500",
       titleColor: "text-emerald-950",
+      textColor: "text-slate-700",
+      closeBtn: "text-slate-400 hover:text-slate-600 hover:bg-black/5"
     },
     error: {
-      bg: "bg-rose-50 border-rose-200 text-rose-900",
+      bg: "bg-rose-55/95 bg-rose-50 border-rose-200 text-rose-900",
       icon: <AlertCircle className="w-5 h-5 text-rose-600 animate-pulse" />,
       accent: "bg-rose-500",
       titleColor: "text-rose-950",
+      textColor: "text-slate-700",
+      closeBtn: "text-slate-400 hover:text-slate-600 hover:bg-black/5"
+    },
+    critical: {
+      bg: "bg-slate-950/95 border-red-500/40 text-red-100 shadow-xl shadow-red-950/50",
+      icon: <AlertCircle className="w-5 h-5 text-red-500 animate-[bounce_1.4s_infinite] stroke-[2.5]" />,
+      accent: "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse",
+      titleColor: "text-red-400 font-extrabold uppercase tracking-wide flex items-center gap-1.5",
+      textColor: "text-red-200 font-medium",
+      closeBtn: "text-red-400 hover:text-red-100 hover:bg-white/10"
     },
     warning: {
-      bg: "bg-amber-50 border-amber-250 text-amber-900",
+      bg: "bg-amber-55/95 bg-amber-50 border-amber-250 text-amber-900",
       icon: <AlertTriangle className="w-5 h-5 text-amber-600" />,
       accent: "bg-amber-500",
       titleColor: "text-amber-950",
+      textColor: "text-slate-700",
+      closeBtn: "text-slate-400 hover:text-slate-600 hover:bg-black/5"
     },
     info: {
-      bg: "bg-indigo-50 border-indigo-200 text-indigo-900",
+      bg: "bg-indigo-55/95 bg-indigo-50 border-indigo-200 text-indigo-900",
       icon: <Info className="w-5 h-5 text-indigo-600" />,
       accent: "bg-indigo-500",
       titleColor: "text-indigo-950",
+      textColor: "text-slate-700",
+      closeBtn: "text-slate-400 hover:text-slate-600 hover:bg-black/5"
     },
+    system: {
+      bg: "bg-slate-900/98 border-slate-800 text-slate-300 shadow-lg shadow-slate-950/40 font-mono",
+      icon: <Terminal className="w-4.5 h-4.5 text-violet-400 stroke-[2] animate-[pulse_2s_infinite]" />,
+      accent: "bg-blue-600",
+      titleColor: "text-indigo-400 font-bold uppercase tracking-widest text-[9px] flex items-center gap-1",
+      textColor: "text-slate-300 font-medium text-[10px]",
+      closeBtn: "text-slate-500 hover:text-slate-300 hover:bg-white/5"
+    }
   }[type] || {
     bg: "bg-slate-50 border-slate-200 text-slate-900",
     icon: <Info className="w-5 h-5 text-slate-600" />,
     accent: "bg-slate-500",
     titleColor: "text-slate-950",
+    textColor: "text-slate-700",
+    closeBtn: "text-slate-400 hover:text-slate-600 hover:bg-black/5"
   };
 
   return (
@@ -72,9 +98,16 @@ export function ToastItem({ toast, onClose }: ToastItemProps) {
         {title && (
           <h4 className={`font-black text-[10px] uppercase tracking-wider ${styles.titleColor}`}>
             {title}
+            {type === "critical" && (
+              <span className="inline-flex gap-1 items-center shrink-0 ml-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block animate-ping" />
+                <span className="text-[8px] bg-red-500/20 text-red-400 px-1 py-0.2 rounded-sm border border-red-500/30">FATAL</span>
+              </span>
+            )}
           </h4>
         )}
-        <p className="text-[11px] font-bold leading-normal text-slate-700">
+        <p className={`text-[11px] font-bold leading-normal ${styles.textColor}`}>
+          {type === "system" && <span className="text-emerald-500 select-none mr-1.5 font-bold">{`>`}</span>}
           {message}
         </p>
       </div>
@@ -82,8 +115,8 @@ export function ToastItem({ toast, onClose }: ToastItemProps) {
       {/* Button to Dismiss */}
       <button
         onClick={() => onClose(id)}
-        className="shrink-0 p-1 hover:bg-black/5 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-        aria-label="Fecar notificação"
+        className={`shrink-0 p-1 rounded-lg transition-colors cursor-pointer ${styles.closeBtn}`}
+        aria-label="Fechar notificação"
       >
         <X className="w-4 h-4" />
       </button>
