@@ -99,6 +99,22 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
   const [changePasswordSuccess, setChangePasswordSuccess] = useState("");
 
+  // Forgot Password / Password Recovery states
+  const [forgotPasswordModalOpen, setForgotPasswordModalOpen] = useState(false);
+  const [resetStep, setResetStep] = useState<"cpf" | "otp" | "new_password">("cpf");
+  const [resetCpf, setResetCpf] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetUser, setResetUser] = useState<any | null>(null);
+  const [resetUserType, setResetUserType] = useState<"admin" | "client" | "professional" | null>(null);
+  const [resetOtp, setResetOtp] = useState("");
+  const [generatedOtp, setGeneratedOtp] = useState("");
+  const [newResetPassword, setNewResetPassword] = useState("");
+  const [confirmNewResetPassword, setConfirmNewResetPassword] = useState("");
+  const [resetError, setResetError] = useState("");
+  const [resetSuccess, setResetSuccess] = useState("");
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [showSimulatedEmailMessage, setShowSimulatedEmailMessage] = useState(false);
+
   // Password Reset Notification Simulator Overlay (LGPD)
   const [simulatedNotification, setSimulatedNotification] = useState<{
     userName: string;
@@ -1183,6 +1199,155 @@ export default function App() {
     }, 2000);
   };
 
+  // Password Recovery Handlers
+  const handleSearchUserForReset = (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError("");
+    setResetSuccess("");
+    
+    const normalizedCPF = resetCpf.replace(/\D/g, "");
+    if (!normalizedCPF) {
+      setResetError("Por favor, preencha o seu CPF.");
+      return;
+    }
+
+    const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
+    const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
+
+    // Check Fallback Admin first
+    const isAdmin = normalizedCPF === "36911121884" || normalizedCPF === "99999999999" || normalizedCPF === "999" || normalizedCPF === "000";
+    
+    let matchedUser: any = null;
+    let userType: "admin" | "client" | "professional" | null = null;
+    let emailAddress = "";
+
+    if (isAdmin) {
+      matchedUser = {
+        id: "gestor-admin",
+        name: "Willian C. Lima",
+        document: "369.111.218-84"
+      };
+      userType = "admin";
+      emailAddress = "willianCLima@gmail.com";
+    } else {
+      // Check Clients / Requisitantes
+      const clientRecord = activeClients.find(c => c.document.replace(/\D/g, "") === normalizedCPF);
+      if (clientRecord) {
+        matchedUser = clientRecord;
+        userType = "client";
+        emailAddress = clientRecord.email || "";
+      } else {
+        // Check Professionals
+        const profRecord = activeProfs.find(p => p.document && p.document.replace(/\D/g, "") === normalizedCPF);
+        if (profRecord) {
+          matchedUser = profRecord;
+          userType = "professional";
+          emailAddress = profRecord.email || "";
+        }
+      }
+    }
+
+    if (!matchedUser) {
+      setResetError("Documento (CPF) não encontrado na nossa base de dados.");
+      return;
+    }
+
+    if (!emailAddress) {
+      // In case some user doesn't have an email, fallback to a sensible one
+      emailAddress = `${matchedUser.name.toLowerCase().replace(/\s+/g, "")}@gestao.com`;
+    }
+
+    // Generate a 6-digit OTP code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedOtp(code);
+    setResetUser(matchedUser);
+    setResetUserType(userType);
+    setResetEmail(emailAddress);
+    setIsSendingEmail(true);
+
+    // Simulate sending email via SMTP after brief delay
+    setTimeout(() => {
+      setIsSendingEmail(false);
+      setResetStep("otp");
+      setShowSimulatedEmailMessage(true);
+      toastSuccess(`Código de recuperação enviado para o e-mail: ${emailAddress}`, "E-mail Enviado");
+      
+      // Also write in the system log about the security recovery attempt
+      addSystemLog(
+        "Recuperação de Senha",
+        `Solicitação de token de redefinição de senha via SMTP gerado para CPF ${normalizedCPF} (${matchedUser.name}).`,
+        "sistema"
+      );
+    }, 1200);
+  };
+
+  const handleVerifyOtpSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError("");
+    if (resetOtp.trim() === generatedOtp) {
+      setResetStep("new_password");
+      setResetOtp("");
+    } else {
+      setResetError("Código de verificação incorreto ou expirado. Revise as informações.");
+    }
+  };
+
+  const handleSaveNewResetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError("");
+
+    if (newResetPassword.length < 3) {
+      setResetError("A nova senha deve ter no mínimo 3 caracteres.");
+      return;
+    }
+    if (newResetPassword !== confirmNewResetPassword) {
+      setResetError("As senhas digitadas não coincidem.");
+      return;
+    }
+
+    // Persist new password based on user type
+    if (resetUserType === "admin") {
+      localStorage.setItem("admin_custom_password", newResetPassword);
+    } else if (resetUserType === "client") {
+      const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
+      const updated = activeClients.map(c => 
+        c.id === resetUser.id ? { ...c, password: newResetPassword, failedAttempts: 0, blocked: false } : c
+      );
+      updateClientsState(updated);
+    } else if (resetUserType === "professional") {
+      const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
+      const updated = activeProfs.map(p => 
+        p.id === resetUser.id ? { ...p, password: newResetPassword, failedAttempts: 0, blocked: false } : p
+      );
+      updateProfessionalsState(updated);
+    }
+
+    addSystemLog(
+      "Senha Redefinida",
+      `A senha de acesso do usuário "${resetUser.name}" (${resetUserType}) foi alterada com sucesso através do painel de auto-recuperação CPF.`,
+      "sistema"
+    );
+
+    setResetSuccess("Senha redefinida com sucesso! Redirecionando para a tela de login...");
+    toastSuccess("Sua nova senha de acesso está ativa!", "Senha Alterada");
+
+    setTimeout(() => {
+      // Close recovery modal and reset state
+      setForgotPasswordModalOpen(false);
+      setResetStep("cpf");
+      setResetCpf("");
+      setResetEmail("");
+      setResetUser(null);
+      setResetUserType(null);
+      setGeneratedOtp("");
+      setNewResetPassword("");
+      setConfirmNewResetPassword("");
+      setResetError("");
+      setResetSuccess("");
+      setShowSimulatedEmailMessage(false);
+    }, 2500);
+  };
+
   // Approve pending client
   const handleApproveClient = (clientId: string, type: "gestor" | "requisitante") => {
     const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
@@ -1403,18 +1568,33 @@ export default function App() {
                 </div>
               </form>
 
-              <div className="flex justify-between items-center border-t border-slate-800 pt-4 text-xs font-semibold">
-                <span className="text-slate-400">Não tem um login?</span>
+              <div className="flex flex-col sm:flex-row justify-between items-center border-t border-slate-800 pt-4 gap-3 text-xs font-semibold">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400">Não tem um login?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRegistering(true);
+                      setRegSuccessMessage("");
+                      setLoginError("");
+                    }}
+                    className="text-indigo-400 font-bold hover:text-indigo-300 underline cursor-pointer text-xs"
+                  >
+                    Criar Auto-Cadastro
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={() => {
-                    setIsRegistering(true);
-                    setRegSuccessMessage("");
-                    setLoginError("");
+                    setForgotPasswordModalOpen(true);
+                    setResetStep("cpf");
+                    setResetCpf("");
+                    setResetError("");
+                    setResetSuccess("");
                   }}
                   className="text-indigo-400 font-bold hover:text-indigo-300 underline cursor-pointer text-xs"
                 >
-                  Criar Auto-Cadastro
+                  Esqueci minha senha
                 </button>
               </div>
             </div>
@@ -1637,6 +1817,225 @@ export default function App() {
                   Entendi e Dou Consentimento
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Esqueci minha Senha */}
+        {forgotPasswordModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md shadow-2xl p-6 sm:p-8 space-y-6 text-slate-300 relative text-left">
+              <div className="flex justify-between items-start border-b border-slate-800 pb-4">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider text-white flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-indigo-500" />
+                    Gestão de Serviços - Redefinição
+                  </h3>
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase">Autoatendimento de Segurança</span>
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setForgotPasswordModalOpen(false);
+                    setShowSimulatedEmailMessage(false);
+                  }}
+                  className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {resetStep === "cpf" && (
+                <form onSubmit={handleSearchUserForReset} className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-400 leading-relaxed font-medium">
+                      Insira o número do seu documento (CPF) cadastrado para localizarmos sua conta e enviarmos um e-mail com resposta para alteração segura de senha.
+                    </p>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                      Seu CPF de Acesso
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={resetCpf}
+                      maxLength={14}
+                      onChange={(e) => {
+                        const formatted = formatOnlyCPF(e.target.value);
+                        setResetCpf(formatted);
+                        setResetError("");
+                      }}
+                      className="w-full text-base font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 transition-all text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                      placeholder="000.000.000-00"
+                    />
+                  </div>
+
+                  {resetError && (
+                    <p className="text-xs text-rose-400 font-bold bg-rose-950/40 p-3 rounded-xl border border-rose-900/30">
+                      ⚠️ {resetError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSendingEmail}
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 text-white font-extrabold text-xs uppercase tracking-widest py-3.5 px-6 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all"
+                  >
+                    {isSendingEmail ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-indigo-200 border-t-transparent rounded-full animate-spin" />
+                        Verificando e Disparando E-mail...
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="w-4 h-4" />
+                        Localizar e Enviar E-mail
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              {resetStep === "otp" && (
+                <form onSubmit={handleVerifyOtpSubmit} className="space-y-4">
+                  <div className="space-y-2 text-xs">
+                    <p className="text-slate-400 leading-relaxed font-medium">
+                      Um código de autenticação SMTP de 6 dígitos foi gerado para <strong>{resetUser?.name}</strong> e disparado para o e-mail cadastrado <strong>{resetEmail}</strong>.
+                    </p>
+                  </div>
+
+                  {/* Simulação de E-mail de Resposta recebido */}
+                  {showSimulatedEmailMessage && (
+                    <div className="bg-amber-950/20 border border-amber-900/40 rounded-xl p-4 space-y-2 text-xs relative overflow-hidden animate-fade-in">
+                      <div className="absolute top-0 right-0 bg-amber-500 text-slate-950 font-black text-[7.5px] uppercase px-2 py-0.5 tracking-wider font-mono rounded-bl">
+                        E-MAIL DE RESPOSTA SMTP (SIMULAÇÃO)
+                      </div>
+                      <div className="space-y-1 text-[11px] text-slate-300 font-mono">
+                        <div><span className="text-amber-400 font-bold">De:</span> {smtpSettings?.senderAddress || "sistema@gestaodeservicos.com"}</div>
+                        <div><span className="text-amber-400 font-bold">Para:</span> {resetEmail}</div>
+                        <div><span className="text-amber-400 font-bold">Assunto:</span> Redefinição de Senha - Código de Segurança</div>
+                        <div className="border-t border-slate-800 my-2 pt-2 text-slate-300 leading-normal">
+                          Olá, <strong>{resetUser?.name}</strong>!<br /><br />
+                          Você solicitou a alteração de sua senha de segurança. Utilize o código de 6 dígitos abaixo para avançar:<br /><br />
+                          <div className="bg-slate-950 py-3 text-center rounded-lg border border-slate-800 tracking-widest text-lg font-black text-white select-all">
+                            {generatedOtp}
+                          </div>
+                          <br />
+                          Caso não tenha feito esta solicitação, desconsidere este e-mail por motivos de segurança da LGPD.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                      Código de Verificação (6 dígitos)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={resetOtp}
+                      maxLength={6}
+                      onChange={(e) => {
+                        setResetOtp(e.target.value.replace(/\D/g, ""));
+                        setResetError("");
+                      }}
+                      className="w-full text-center text-lg tracking-widest font-black border border-slate-800 rounded-xl px-4 py-2.5 bg-slate-950 transition-all text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                      placeholder="000000"
+                    />
+                  </div>
+
+                  {resetError && (
+                    <p className="text-xs text-rose-400 font-bold bg-rose-950/40 p-3 rounded-xl border border-rose-900/30">
+                      ⚠️ {resetError}
+                    </p>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setResetStep("cpf")}
+                      className="w-1/3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase py-3 px-4 rounded-xl transition-all text-center cursor-pointer"
+                    >
+                      Voltar
+                    </button>
+                    <button
+                      type="submit"
+                      className="w-2/3 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-widest py-3.5 px-6 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all"
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                      Validar Código
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {resetStep === "new_password" && (
+                <form onSubmit={handleSaveNewResetPassword} className="space-y-4">
+                  <div className="space-y-2 text-xs">
+                    <p className="text-slate-400 leading-relaxed font-medium">
+                      Código validado! Defina sua nova senha secreta de acesso para o usuário <strong>{resetUser?.name}</strong>.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 text-left">
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                        Nova Senha
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={newResetPassword}
+                        onChange={(e) => {
+                          setNewResetPassword(e.target.value);
+                          setResetError("");
+                        }}
+                        className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 transition-all text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                        placeholder="Mínimo de 3 caracteres"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                        Confirmar Nova Senha
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={confirmNewResetPassword}
+                        onChange={(e) => {
+                          setConfirmNewResetPassword(e.target.value);
+                          setResetError("");
+                        }}
+                        className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 transition-all text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                        placeholder="Repita a senha para confirmar"
+                      />
+                    </div>
+                  </div>
+
+                  {resetError && (
+                    <p className="text-xs text-rose-400 font-bold bg-rose-950/40 p-3 rounded-xl border border-rose-900/30">
+                      ⚠️ {resetError}
+                    </p>
+                  )}
+
+                  {resetSuccess && (
+                    <p className="text-xs text-emerald-400 font-bold bg-emerald-950/40 p-3 rounded-xl border border-emerald-900/30">
+                      ✅ {resetSuccess}
+                    </p>
+                  )}
+
+                  {!resetSuccess && (
+                    <button
+                      type="submit"
+                      className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-widest py-3.5 px-6 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      Salvar Nova Senha
+                    </button>
+                  )}
+                </form>
+              )}
             </div>
           </div>
         )}

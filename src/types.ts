@@ -57,6 +57,7 @@ export interface Professional {
   id: string;
   name: string;
   document?: string; // CPF for secure technician login
+  email?: string; // Optional email for password resets
   role: string;
   specialty: string; // matches ServiceCategory.name
   specialties?: string[]; // Multiple technical categories if userType is "profissional"

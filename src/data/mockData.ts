@@ -12,11 +12,11 @@ export const INITIAL_CATEGORIES: ServiceCategory[] = [
 ];
 
 export const INITIAL_PROFESSIONALS: Professional[] = [
-  { id: "prof-1", name: "Carlos Henrique", document: "111.111.111-11", role: "Técnico Líder", specialty: "Mecânica & Automotivo", specialties: ["Mecânica & Automotivo"], userType: "profissional" },
-  { id: "prof-2", name: "Mariana Costa", document: "222.222.222-22", role: "Especialista em Cloud/Redes", specialty: "Suporte de TI & Redes", specialties: ["Suporte de TI & Redes"], userType: "profissional" },
-  { id: "prof-3", name: "Roberto Silva", document: "333.333.333-33", role: "Eletricista de Climatização", specialty: "Eletrodomésticos & Climatização", specialties: ["Eletrodomésticos & Climatização"], userType: "profissional" },
-  { id: "prof-4", name: "Aline Souza", document: "444.444.444-44", role: "Projetista de Ambientes", specialty: "Design & Móveis Planejados", specialties: ["Design & Móveis Planejados"], userType: "profissional" },
-  { id: "prof-5", name: "Sérgio Pereira", document: "555.555.555-55", role: "Eletricista Geral", specialty: "Serviços Gerais & Elétrica", specialties: ["Serviços Gerais & Elétrica"], userType: "profissional" }
+  { id: "prof-1", name: "Carlos Henrique", document: "111.111.111-11", email: "carlos.henrique@gestao.com", role: "Técnico Líder", specialty: "Mecânica & Automotivo", specialties: ["Mecânica & Automotivo"], userType: "profissional" },
+  { id: "prof-2", name: "Mariana Costa", document: "222.222.222-22", email: "mariana.costa@gestao.com", role: "Especialista em Cloud/Redes", specialty: "Suporte de TI & Redes", specialties: ["Suporte de TI & Redes"], userType: "profissional" },
+  { id: "prof-3", name: "Roberto Silva", document: "333.333.333-33", email: "roberto.silva@gestao.com", role: "Eletricista de Climatização", specialty: "Eletrodomésticos & Climatização", specialties: ["Eletrodomésticos & Climatização"], userType: "profissional" },
+  { id: "prof-4", name: "Aline Souza", document: "444.444.444-44", email: "aline.souza@gestao.com", role: "Projetista de Ambientes", specialty: "Design & Móveis Planejados", specialties: ["Design & Móveis Planejados"], userType: "profissional" },
+  { id: "prof-5", name: "Sérgio Pereira", document: "555.555.555-55", email: "sergio.pereira@gestao.com", role: "Eletricista Geral", specialty: "Serviços Gerais & Elétrica", specialties: ["Serviços Gerais & Elétrica"], userType: "profissional" }
 ];
 
 export const INITIAL_CLIENTS: Client[] = [
