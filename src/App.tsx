@@ -15,13 +15,55 @@ import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
-  Mail, Smartphone, Send, Copy, AlertTriangle
+  Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
+import { useSystemTheme } from "./hooks/useSystemTheme";
 
 
 export default function App() {
+  const currentTheme = useSystemTheme();
   const { success: toastSuccess, error: toastError, warn: toastWarn, info: toastInfo, critical: toastCritical, system: toastSystem } = useToast();
+
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      return Notification.permission;
+    }
+    return "default";
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotificationPermission(Notification.permission);
+      if (Notification.permission === "default") {
+        Notification.requestPermission().then((perm) => {
+          setNotificationPermission(perm);
+        }).catch(err => console.error("Erro ao solicitar permissão de notificação:", err));
+      }
+    }
+  }, []);
+
+  const requestNotificationPermission = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      toastWarn("Este navegador não suporta notificações de área de trabalho.", "Não Suportado");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === "granted") {
+        toastSuccess("Notificações do navegador ativadas com sucesso!", "Permissão Concedida");
+        new Notification("Notificações Ativas", {
+          body: "Você receberá alertas em tempo real sobre novas ordens de serviço e atualizações de status.",
+          icon: "/favicon.ico",
+        });
+      } else if (permission === "denied") {
+        toastError("As notificações foram bloqueadas. Verifique as configurações do seu navegador para redefinir as permissões.", "Permissão Negada");
+      }
+    } catch (error) {
+      console.error("Erro ao solicitar permissão de notificação:", error);
+    }
+  };
 
   // Navigation State
   const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings">("dashboard");
@@ -430,6 +472,18 @@ export default function App() {
       "requisicao"
     );
     toastSuccess(`Recepção da OS #${order.id} registrada com sucesso!`, "Nova OS Cadastrada");
+
+    // Disparar notificação do navegador
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(`Nova Ordem de Serviço #${order.id}`, {
+          body: `A OS "${order.title}" foi aberta na categoria ${order.category}.`,
+          icon: "/favicon.ico",
+        });
+      } catch (e) {
+        console.error("Erro ao disparar notificação:", e);
+      }
+    }
   };
 
   const handleUpdateOrder = (updatedOrder: ServiceOrder) => {
@@ -460,6 +514,18 @@ export default function App() {
         };
         const statusLabel = friendlyStatus[updatedOrder.status] || updatedOrder.status;
         toastSuccess(`Status da OS #${updatedOrder.id} atualizado para "${statusLabel}".`, "Status Alterado");
+
+        // Disparar notificação do navegador
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          try {
+            new Notification(`Status Alterado - OS #${updatedOrder.id}`, {
+              body: `O status da OS "${updatedOrder.title}" foi alterado para "${statusLabel}".`,
+              icon: "/favicon.ico",
+            });
+          } catch (e) {
+            console.error("Erro ao disparar notificação:", e);
+          }
+        }
 
       } else if (!oldOrder.hasMissingMaterial && updatedOrder.hasMissingMaterial) {
         addSystemLog(
@@ -1199,10 +1265,10 @@ export default function App() {
           <div className="flex flex-col sm:flex-row items-center justify-between border-b border-slate-800 pb-6 gap-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center font-black text-white shadow-lg shadow-indigo-600/30 text-lg">
-                S
+                G
               </div>
               <div>
-                <span className="font-extrabold text-lg tracking-tight block">RequisiçãoPro</span>
+                <span className="font-extrabold text-lg tracking-tight block">Gestão de serviços</span>
                 <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider block">Sistema de Gestão Técnica Integrada</span>
               </div>
             </div>
@@ -1322,8 +1388,19 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-widest py-4 px-6 rounded-2xl shadow-lg cursor-pointer flex items-center justify-center gap-2 transition-all shadow-indigo-600/20"
                 >
                   <ShieldCheck className="w-4.5 h-4.5 text-indigo-200" />
-                  Autenticar e Acessar Painel Seguro
+                  Entrar
                 </button>
+
+                {/* Logo Assessor Público */}
+                <div className="flex flex-col items-center justify-center pt-3 select-none">
+                  <div className="flex items-center gap-1 font-sans text-lg tracking-tight bg-white py-2 px-6 rounded-full shadow-md border border-slate-200">
+                    <span className="text-[#004d8c] font-black">assessor</span>
+                    <span className="text-[#6c94c4] font-semibold relative">
+                      público
+                      <span className="absolute -top-1 -right-2.5 text-[7px] font-bold text-[#6c94c4]">®</span>
+                    </span>
+                  </div>
+                </div>
               </form>
 
               <div className="flex justify-between items-center border-t border-slate-800 pt-4 text-xs font-semibold">
@@ -1589,10 +1666,10 @@ export default function App() {
           {/* Brand header logo */}
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20">
-              S
+              G
             </div>
             <div>
-              <span className="font-extrabold text-sm tracking-tight block">RequisiçãoPro</span>
+              <span className="font-extrabold text-sm tracking-tight block">Gestão de serviços</span>
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Gestão Técnica</span>
             </div>
           </div>
@@ -1779,6 +1856,38 @@ export default function App() {
               <CheckCircle className="w-4 h-4 text-indigo-500" />
               <span>Sessão Encriptada Ativa</span>
             </div>
+
+            {/* Browser Notifications Indicator */}
+            <button
+              onClick={requestNotificationPermission}
+              className={`hidden md:flex items-center gap-1.5 p-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer ${
+                notificationPermission === "granted"
+                  ? "bg-emerald-50/50 hover:bg-emerald-50 border-emerald-100 text-emerald-700 dark:bg-emerald-950/20 dark:border-emerald-900/30 dark:text-emerald-400"
+                  : notificationPermission === "denied"
+                  ? "bg-rose-50/50 hover:bg-rose-50 border-rose-100 text-rose-700 dark:bg-rose-950/20 dark:border-rose-900/30 dark:text-rose-400"
+                  : "bg-amber-50/50 hover:bg-amber-50 border-amber-100 text-amber-700 animate-pulse dark:bg-amber-950/20 dark:border-amber-900/30 dark:text-amber-400"
+              }`}
+              title={
+                notificationPermission === "granted"
+                  ? "Notificações de navegador ativadas!"
+                  : notificationPermission === "denied"
+                  ? "Notificações bloqueadas. Clique para tentar reativar."
+                  : "Clique para ativar notificações de navegador para novas OS e atualizações."
+              }
+            >
+              {notificationPermission === "granted" ? (
+                <Bell className="w-4 h-4 text-emerald-500 shrink-0" />
+              ) : (
+                <BellOff className="w-4 h-4 text-amber-500 shrink-0" />
+              )}
+              <span>
+                {notificationPermission === "granted"
+                  ? "Notificações Ativas"
+                  : notificationPermission === "denied"
+                  ? "Notificações Bloqueadas"
+                  : "Ativar Notificações"}
+              </span>
+            </button>
 
             <div className="flex items-center gap-2.5">
               <div className="flex items-center gap-2">

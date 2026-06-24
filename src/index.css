@@ -99,3 +99,153 @@
   }
 }
 
+/* ==========================================
+   DYNAMIC ACCESSIBLE DARK MODE SYSTEM
+   ========================================== */
+.dark {
+  color-scheme: dark;
+}
+
+/* Base Body and general background structures */
+.dark,
+.dark body,
+.dark .bg-slate-50,
+.dark .bg-gray-50,
+.dark .bg-slate-50\/30 {
+  background-color: #0b0f19 !important;
+  color: #f1f5f9 !important;
+}
+
+/* Cards, Content panels, and White containers */
+.dark .bg-white,
+.dark .bg-slate-50\/50,
+.dark .bg-slate-100\/40,
+.dark .hover\:bg-slate-50:hover {
+  background-color: #161e2e !important;
+  color: #f1f5f9 !important;
+}
+
+/* Borders and dividers */
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-200\/70,
+.dark .border-slate-200\/60,
+.dark .border-slate-250,
+.dark .border-slate-300,
+.dark .border-gray-100,
+.dark .border-gray-200,
+.dark .divide-slate-100 > * {
+  border-color: #212c40 !important;
+  divide-color: #212c40 !important;
+}
+
+/* Lighter grey sections */
+.dark .bg-slate-100,
+.dark .bg-gray-100,
+.dark .bg-slate-50 {
+  background-color: #1f2a3f !important;
+}
+
+/* Heavy dark areas (like some headers or tables) */
+.dark .bg-slate-900 {
+  background-color: #0d131f !important;
+}
+
+/* Strong typography - slate-800, slate-900, slate-850 to white/light slate */
+.dark .text-slate-900,
+.dark .text-slate-850,
+.dark .text-slate-800,
+.dark .text-gray-900,
+.dark .text-slate-950,
+.dark .text-neutral-900,
+.dark .text-zinc-900 {
+  color: #f8fafc !important;
+}
+
+/* Medium emphasis typography - slate-600, slate-700 to medium slate */
+.dark .text-slate-700,
+.dark .text-slate-650,
+.dark .text-slate-600,
+.dark .text-gray-700,
+.dark .text-zinc-700 {
+  color: #cbd5e1 !important;
+}
+
+/* Low emphasis / metadata typography - slate-500, text-slate-400 */
+.dark .text-slate-500,
+.dark .text-slate-400,
+.dark .text-gray-500,
+.dark .text-gray-400 {
+  color: #94a3b8 !important;
+}
+
+/* Text selections, input forms, and interactive fields */
+.dark input[type="text"],
+.dark input[type="password"],
+.dark input[type="date"],
+.dark input[type="email"],
+.dark input[type="tel"],
+.dark select,
+.dark textarea {
+  background-color: #1f2a3f !important;
+  color: #f8fafc !important;
+  border-color: #2e3e59 !important;
+}
+
+.dark input[type="text"]::placeholder,
+.dark input[type="password"]::placeholder,
+.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+.dark select option {
+  background-color: #161e2e !important;
+  color: #f8fafc !important;
+}
+
+/* Hover highlights on tables, selectors, and dropdowns */
+.dark .hover\:bg-slate-50\/40:hover,
+.dark .hover\:bg-slate-50\/50:hover,
+.dark .hover\:bg-slate-100\/50:hover,
+.dark .hover\:bg-slate-100:hover,
+.dark .hover\:bg-slate-50:hover,
+.dark .bg-slate-50\/80 {
+  background-color: #1f2a3f !important;
+}
+
+/* Blue/Teal/Indigo secondary soft states (e.g., active elements) */
+.dark .bg-indigo-50,
+.dark .bg-blue-50 {
+  background-color: #0c2340 !important;
+  color: #5bb3e5 !important;
+}
+
+.dark .border-indigo-100,
+.dark .border-blue-100 {
+  border-color: #143566 !important;
+}
+
+.dark .text-indigo-500,
+.dark .text-indigo-600,
+.dark .text-blue-600,
+.dark .text-blue-500,
+.dark .text-indigo-400 {
+  color: #5bb3e5 !important;
+}
+
+/* Toast backgrounds & specific dynamic states */
+.dark .bg-slate-800\/95 {
+  background-color: #161e2e !important;
+}
+
+/* Form sections and modal overlays */
+.dark .bg-slate-900\/40 {
+  background-color: rgba(3, 7, 18, 0.6) !important;
+}
+
+/* Ensure scheduler time cell divisions are visible in dark theme */
+.dark .border-slate-100 {
+  border-color: #212c40 !important;
+}
+
+
