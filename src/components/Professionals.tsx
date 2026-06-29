@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Professional, ServiceCategory, Team, ServiceOrder } from "../types";
+import { Professional, ServiceCategory, Team, ServiceOrder, Almoxarifado } from "../types";
 import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star } from "lucide-react";
 
 interface ProfessionalsProps {
@@ -13,6 +13,7 @@ interface ProfessionalsProps {
   onUpdateTeam?: (team: Team) => void;
   onDeleteTeam?: (id: string) => void;
   orders?: ServiceOrder[];
+  almoxarifados?: Almoxarifado[];
 }
 
 export default function Professionals({
@@ -25,7 +26,8 @@ export default function Professionals({
   onAddTeam,
   onUpdateTeam,
   onDeleteTeam,
-  orders = []
+  orders = [],
+  almoxarifados = []
 }: ProfessionalsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -47,6 +49,7 @@ export default function Professionals({
   const [document, setDocument] = useState("");
   const [password, setPassword] = useState("");
   const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
+  const [workLocation, setWorkLocation] = useState("");
 
   const filteredProfessionals = professionals.filter(p => {
     return p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -74,7 +77,8 @@ export default function Professionals({
         specialty: finalSpecialtyStr,
         specialties: finalSpecialties,
         document,
-        password: password || "123"
+        password: password || "123",
+        workLocation: workLocation || undefined
       };
       onUpdateProfessional(updatedProf);
     } else {
@@ -86,7 +90,8 @@ export default function Professionals({
         specialties: finalSpecialties,
         userType: "profissional",
         document,
-        password: password || "123"
+        password: password || "123",
+        workLocation: workLocation || undefined
       };
       onAddProfessional(newProf);
     }
@@ -100,6 +105,7 @@ export default function Professionals({
     setDocument("");
     setPassword("");
     setSelectedSpecialties([]);
+    setWorkLocation("");
   };
 
   const handleOpenForm = (prof?: Professional) => {
@@ -110,6 +116,7 @@ export default function Professionals({
       setDocument(prof.document || "");
       setPassword(prof.password || "123");
       setSelectedSpecialties(prof.specialties || []);
+      setWorkLocation(prof.workLocation || "");
     } else {
       setEditingProfessional(null);
       setName("");
@@ -117,6 +124,7 @@ export default function Professionals({
       setDocument("");
       setPassword("123");
       setSelectedSpecialties([]);
+      setWorkLocation("");
     }
     setIsFormOpen(true);
   };
@@ -610,6 +618,18 @@ export default function Professionals({
                     placeholder="Ex: Auxiliar Técnico, Mecânico Líder"
                     value={role}
                     onChange={(e) => setRole(e.target.value)}
+                  />
+                </div>
+
+                {/* Local de Trabalho */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Local de Trabalho</label>
+                  <input
+                    type="text"
+                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold text-slate-700"
+                    placeholder="Ex: Almoxarifado Central, Unidade Norte, etc."
+                    value={workLocation}
+                    onChange={(e) => setWorkLocation(e.target.value)}
                   />
                 </div>
 

@@ -4,7 +4,7 @@ import {
   CheckCircle, AlertTriangle, Eye, EyeOff, Sparkles, Terminal, Smartphone, HelpCircle,
   Database, Download, Upload, X, Check, Save
 } from "lucide-react";
-import { SmtpSettings, WhatsappSettings } from "../types";
+import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser } from "../types";
 
 interface SmtpSettingsPanelProps {
   settings: SmtpSettings;
@@ -14,6 +14,9 @@ interface SmtpSettingsPanelProps {
   permissions?: Record<string, string[]>;
   onSavePermissions?: (newPerms: Record<string, string[]>) => void;
   onNotifyTest: (title: string, msg: string, type: "success" | "error" | "info" | "critical" | "system") => void;
+  almoxarifados?: Almoxarifado[];
+  onSaveAlmoxarifados?: (newAlms: Almoxarifado[]) => void;
+  currentUser?: CurrentUser | null;
 }
 
 export default function SmtpSettingsPanel({ 
@@ -23,11 +26,23 @@ export default function SmtpSettingsPanel({
   onSaveWhatsapp, 
   permissions = {},
   onSavePermissions,
-  onNotifyTest 
+  onNotifyTest,
+  almoxarifados = [],
+  onSaveAlmoxarifados,
+  currentUser
 }: SmtpSettingsPanelProps) {
   
   // Tab control
-  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions">("smtp");
+  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados">(
+    currentUser?.userType === "admin" ? "smtp" : "almoxarifados"
+  );
+
+  // Almoxarifado management local state
+  const [isAlmFormOpen, setIsAlmFormOpen] = useState(false);
+  const [editingAlm, setEditingAlm] = useState<Almoxarifado | null>(null);
+  const [almName, setAlmName] = useState("");
+  const [almCode, setAlmCode] = useState("");
+  const [almAddress, setAlmAddress] = useState("");
 
   // SMTP States
   const [host, setHost] = useState(settings.host || "smtp.aracatubaservicos.com.br");
@@ -534,66 +549,84 @@ export default function SmtpSettingsPanel({
           <h1 className="text-2xl font-extrabold tracking-tight">Servidor de Comunicação & Governança</h1>
           <p className="text-xs text-slate-400 font-medium mt-1">Configure as chaves, e-mails, alertas corporativos e baixe diagnósticos completos da base de dados Araçatuba.</p>
         </div>
-        <button
-          type="button"
-          onClick={handleExportBackup}
-          className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer border border-amber-400 active:scale-98 self-start sm:self-center"
-          title="Fazer download imediato de toda a base de dados (localStorage)"
-        >
-          <Download className="w-4 h-4 text-slate-950 stroke-[3]" />
-          <span>Exportar Backup JSON</span>
-        </button>
+        {currentUser?.userType === "admin" && (
+          <button
+            type="button"
+            onClick={handleExportBackup}
+            className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer border border-amber-400 active:scale-98 self-start sm:self-center"
+            title="Fazer download imediato de toda a base de dados (localStorage)"
+          >
+            <Download className="w-4 h-4 text-slate-950 stroke-[3]" />
+            <span>Exportar Backup JSON</span>
+          </button>
+        )}
       </div>
 
       {/* Tabs Menu */}
       <div className="flex border-b border-slate-200 flex-wrap gap-y-2">
+        {currentUser?.userType === "admin" && (
+          <>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab("smtp")}
+              className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+                activeSubTab === "smtp"
+                  ? "border-indigo-600 text-indigo-600 font-black"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <Mail className="w-4 h-4 text-indigo-505" />
+              Servidor de E-mail (SMTP)
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab("whatsapp")}
+              className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+                activeSubTab === "whatsapp"
+                  ? "border-indigo-600 text-indigo-600 font-black"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <Smartphone className="w-4 h-4 text-emerald-500" />
+              Canal de WhatsApp API
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab("backup")}
+              className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+                activeSubTab === "backup"
+                  ? "border-indigo-600 text-indigo-600 font-black"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <Database className="w-4 h-4 text-amber-500 animate-pulse" />
+              Cópia de Segurança & Backup
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab("permissions")}
+              className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+                activeSubTab === "permissions"
+                  ? "border-indigo-600 text-indigo-600 font-black"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 text-red-500" />
+              Controle de Permissões
+            </button>
+          </>
+        )}
         <button
           type="button"
-          onClick={() => setActiveSubTab("smtp")}
+          onClick={() => setActiveSubTab("almoxarifados")}
           className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
-            activeSubTab === "smtp"
+            activeSubTab === "almoxarifados"
               ? "border-indigo-600 text-indigo-600 font-black"
               : "border-transparent text-slate-500 hover:text-slate-800"
           }`}
         >
-          <Mail className="w-4 h-4 text-indigo-505" />
-          Servidor de E-mail (SMTP)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("whatsapp")}
-          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
-            activeSubTab === "whatsapp"
-              ? "border-indigo-600 text-indigo-600 font-black"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <Smartphone className="w-4 h-4 text-emerald-500" />
-          Canal de WhatsApp API
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("backup")}
-          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
-            activeSubTab === "backup"
-              ? "border-indigo-600 text-indigo-600 font-black"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <Database className="w-4 h-4 text-amber-500 animate-pulse" />
-          Cópia de Segurança & Backup
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("permissions")}
-          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
-            activeSubTab === "permissions"
-              ? "border-indigo-600 text-indigo-600 font-black"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4 text-red-500" />
-          Controle de Permissões
+          <Database className="w-4 h-4 text-sky-500" />
+          Cadastro de Almoxarifados
         </button>
       </div>
 
@@ -1587,6 +1620,190 @@ export default function SmtpSettingsPanel({
                 <span>
                   Qualquer mudança de permissão modular entra em vigor instantaneamente para todas as sessões. Por motivos de segurança, o perfil de <strong>Admin Geral (Administrador do Sistema)</strong> retém acesso incondicional a todas as abas das equipes e de configuração, impedindo bloqueio acidental.
                 </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: ALMOXARIFADOS */}
+        {activeSubTab === "almoxarifados" && (
+          <div className="lg:col-span-3 space-y-6">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-6 shadow-sm">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <div>
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Almoxarifados Cadastrados</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-semibold">Gerencie os almoxarifados físicos utilizados para armazenar peças, equipamentos e materiais de serviço.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingAlm(null);
+                    setAlmName("");
+                    setAlmCode("");
+                    setAlmAddress("");
+                    setIsAlmFormOpen(true);
+                  }}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-indigo-600/10 cursor-pointer flex items-center gap-1.5"
+                >
+                  Adicionar Almoxarifado
+                </button>
+              </div>
+
+              {isAlmFormOpen && (
+                <div className="mb-6 p-5 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-3">
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                      {editingAlm ? "Editar Almoxarifado" : "Novo Almoxarifado"}
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setIsAlmFormOpen(false)}
+                      className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nome do Almoxarifado *</label>
+                      <input
+                        type="text"
+                        required
+                        value={almName}
+                        onChange={(e) => setAlmName(e.target.value)}
+                        placeholder="Ex: Almoxarifado Central Araçatuba"
+                        className="w-full text-sm font-semibold border border-slate-200 dark:border-slate-850 rounded-xl px-4 py-2.5 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Código / Sigla *</label>
+                      <input
+                        type="text"
+                        required
+                        value={almCode}
+                        onChange={(e) => setAlmCode(e.target.value)}
+                        placeholder="Ex: ALM-CEN, ALM-OESTE"
+                        className="w-full text-sm font-semibold border border-slate-200 dark:border-slate-850 rounded-xl px-4 py-2.5 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600/20 uppercase font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Endereço / Localização</label>
+                      <input
+                        type="text"
+                        value={almAddress}
+                        onChange={(e) => setAlmAddress(e.target.value)}
+                        placeholder="Rua, Número, Cidade"
+                        className="w-full text-sm font-semibold border border-slate-200 dark:border-slate-850 rounded-xl px-4 py-2.5 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsAlmFormOpen(false)}
+                      className="px-4 py-2 bg-slate-200 dark:bg-slate-800 text-slate-750 dark:text-slate-300 font-bold text-xs uppercase rounded-lg transition-all"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!almName || !almCode) {
+                          onNotifyTest("Campos Obrigatórios", "Por favor, informe ao menos o Nome e Código do almoxarifado.", "error");
+                          return;
+                        }
+                        const updatedAlms = [...almoxarifados];
+                        if (editingAlm) {
+                          const idx = updatedAlms.findIndex(a => a.id === editingAlm.id);
+                          if (idx !== -1) {
+                            updatedAlms[idx] = { ...editingAlm, name: almName, code: almCode.toUpperCase(), address: almAddress };
+                          }
+                        } else {
+                          updatedAlms.push({
+                            id: `alm-${Date.now()}`,
+                            name: almName,
+                            code: almCode.toUpperCase(),
+                            address: almAddress
+                          });
+                        }
+                        if (onSaveAlmoxarifados) {
+                          onSaveAlmoxarifados(updatedAlms);
+                        }
+                        setIsAlmFormOpen(false);
+                        setEditingAlm(null);
+                        setAlmName("");
+                        setAlmCode("");
+                        setAlmAddress("");
+                        onNotifyTest("Almoxarifado Salvo", `O almoxarifado "${almName}" foi armazenado com sucesso.`, "success");
+                      }}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase rounded-lg transition-all"
+                    >
+                      Salvar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-2xl">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-800">
+                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Código</th>
+                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Nome / Identificação</th>
+                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Endereço físico</th>
+                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {almoxarifados.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-5 py-8 text-center text-xs text-slate-400 font-semibold">
+                          Nenhum almoxarifado cadastrado. Clique em "Adicionar Almoxarifado" para registrar o primeiro.
+                        </td>
+                      </tr>
+                    ) : (
+                      almoxarifados.map(alm => (
+                        <tr key={alm.id} className="border-b border-slate-50 dark:border-slate-850 hover:bg-slate-50/50 dark:hover:bg-slate-950/50 transition-colors">
+                          <td className="px-5 py-4 font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase">{alm.code}</td>
+                          <td className="px-5 py-4 text-xs font-bold text-slate-800 dark:text-slate-100">{alm.name}</td>
+                          <td className="px-5 py-4 text-xs text-slate-500 dark:text-slate-400">{alm.address || "Sem endereço cadastrado"}</td>
+                          <td className="px-5 py-4 text-right space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingAlm(alm);
+                                setAlmName(alm.name);
+                                setAlmCode(alm.code);
+                                setAlmAddress(alm.address || "");
+                                setIsAlmFormOpen(true);
+                              }}
+                              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 text-[10px] font-bold uppercase rounded-md transition-all cursor-pointer"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Tem certeza que deseja excluir o almoxarifado "${alm.name}"?`)) {
+                                  const updated = almoxarifados.filter(a => a.id !== alm.id);
+                                  if (onSaveAlmoxarifados) {
+                                    onSaveAlmoxarifados(updated);
+                                  }
+                                  onNotifyTest("Almoxarifado Excluído", `O almoxarifado "${alm.name}" foi removido do sistema.`, "system");
+                                }
+                              }}
+                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950 dark:hover:bg-rose-900 text-rose-600 text-[10px] font-bold uppercase rounded-md transition-all cursor-pointer"
+                            >
+                              Excluir
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

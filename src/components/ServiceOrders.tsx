@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useFormDraft } from "../hooks/useFormDraft";
-import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team } from "../types";
+import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team, BlockedDate } from "../types";
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { useToast } from "./ToastContext";
+import { motion } from "motion/react";
 
 interface ServiceOrdersProps {
   orders: ServiceOrder[];
@@ -20,6 +21,7 @@ interface ServiceOrdersProps {
   onDeleteOrder: (id: string) => void;
   onOpenAiAssistantWithOS?: (os: ServiceOrder) => void;
   currentUser?: CurrentUser;
+  blockedDates?: BlockedDate[];
 }
 
 export function getPriorityBadge(priority?: 'low' | 'medium' | 'high' | 'urgent') {
@@ -88,7 +90,7 @@ const PRESET_COMPLETED_IMAGES = [
 ];
 
 export default function ServiceOrders({ 
-  orders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser
+  orders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = []
 }: ServiceOrdersProps) {
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
@@ -124,6 +126,17 @@ export default function ServiceOrders({
   const [isInitiatingService, setIsInitiatingService] = useState(false);
   const [isFlaggingMaterial, setIsFlaggingMaterial] = useState(false);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
+  
+  // New States for Gemini OS Analysis
+  const [isAnalyzingOS, setIsAnalyzingOS] = useState(false);
+  const [osAnalysisResult, setOsAnalysisResult] = useState<string | null>(null);
+  const [osAnalysisError, setOsAnalysisError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOsAnalysisResult(null);
+    setOsAnalysisError(null);
+    setIsAnalyzingOS(false);
+  }, [selectedOrder?.id]);
   
   // New States for Completed service flow including photographs
   const [isCompletingService, setIsCompletingService] = useState(false);
@@ -213,6 +226,7 @@ export default function ServiceOrders({
   };
 
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<"visual" | "pdf">("visual");
 
   const asciiOnly = (str: string) => {
     if (!str) return "";
@@ -678,7 +692,14 @@ export default function ServiceOrders({
       });
 
       if (!response.ok) {
-        throw new Error("Erro ao se conectar ao servidor.");
+        let errMsg = "Erro na comunicação com o servidor de inteligência artificial.";
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) {
+            errMsg = errData.error;
+          }
+        } catch (_) {}
+        throw new Error(errMsg);
       }
 
       const data = await response.json();
@@ -926,6 +947,21 @@ export default function ServiceOrders({
   const handleConfirmInitiateService = () => {
     if (!selectedOrder || !selectedProfName) return;
 
+    const matchedProf = professionalsList.find(p => p.name === selectedProfName);
+    const block = blockedDates.find(b => 
+      b.date === selectedOrder.startDate && 
+      (
+        b.professionalId === "all" || 
+        b.type === "holiday" || 
+        (matchedProf && b.professionalId === matchedProf.id) || 
+        b.professionalId === selectedProfName
+      )
+    );
+    if (block) {
+      toastError(`O técnico ${selectedProfName} não pode ser alocado nesta data devido ao bloqueio: "${block.description}"`, "Data Bloqueada");
+      return;
+    }
+
     const updatedOrder: ServiceOrder = {
       ...selectedOrder,
       status: "em_progresso",
@@ -998,6 +1034,93 @@ export default function ServiceOrders({
 
     onUpdateOrder(updatedOrder);
     setSelectedOrder(updatedOrder);
+  };
+
+  const handleAnalyzeOSWithIA = async () => {
+    if (!selectedOrder) return;
+    setIsAnalyzingOS(true);
+    setOsAnalysisResult(null);
+    setOsAnalysisError(null);
+
+    try {
+      const response = await fetch("/api/gemini/assist", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "analyze_os_details",
+          title: selectedOrder.title,
+          category: selectedOrder.category,
+          description: selectedOrder.description || "Nenhum detalhe técnico provido no cadastro.",
+        }),
+      });
+
+      if (!response.ok) {
+        let errMsg = "Erro na comunicação com o servidor de inteligência artificial.";
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) {
+            errMsg = errData.error;
+          }
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        setOsAnalysisError(data.error);
+      } else {
+        setOsAnalysisResult(data.result);
+      }
+    } catch (err: any) {
+      setOsAnalysisError(err.message || "Não foi possível completar a análise de IA.");
+    } finally {
+      setIsAnalyzingOS(false);
+    }
+  };
+
+  const parseMarkdownToJSX = (text: string) => {
+    if (!text) return null;
+    const lines = text.split('\n');
+    return lines.map((line, idx) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('###')) {
+        return (
+          <h5 key={idx} className="font-extrabold text-slate-800 dark:text-slate-200 text-xs uppercase tracking-wider mt-4 mb-2 first:mt-0 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-1">
+            {trimmed.replace(/^###\s*/, '')}
+          </h5>
+        );
+      }
+      if (trimmed.startsWith('**') && trimmed.endsWith('**')) {
+        return (
+          <p key={idx} className="font-bold text-slate-800 dark:text-slate-100 text-xs mt-2">
+            {trimmed.replace(/\*\*/g, '')}
+          </p>
+        );
+      }
+      if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
+        const content = trimmed.replace(/^[-*]\s*/, '');
+        // Match bold parts inside the list item
+        const parts = content.split('**');
+        return (
+          <li key={idx} className="list-disc ml-5 text-xs text-slate-600 dark:text-slate-350 leading-relaxed py-0.5">
+            {parts.map((part, pIdx) => pIdx % 2 === 1 ? <strong key={pIdx} className="font-bold text-slate-800 dark:text-slate-150">{part}</strong> : part)}
+          </li>
+        );
+      }
+      if (trimmed === "") {
+        return <div key={idx} className="h-1.5" />;
+      }
+      
+      // Normal line, check for bold text inside it
+      const parts = line.split('**');
+      return (
+        <p key={idx} className="text-xs text-slate-600 dark:text-slate-350 leading-relaxed font-medium">
+          {parts.map((part, pIdx) => pIdx % 2 === 1 ? <strong key={pIdx} className="font-bold text-slate-800 dark:text-slate-150">{part}</strong> : part)}
+        </p>
+      );
+    });
   };
 
   const handleMarkAsCompleted = () => {
@@ -1309,10 +1432,16 @@ export default function ServiceOrders({
               {isLoading ? (
                 <OrdersSkeleton />
               ) : filteredOrders.length > 0 ? (
-                filteredOrders.map(os => {
+                filteredOrders.map((os, index) => {
                   const client = clients.find(cl => cl.id === os.clientId);
                   return (
-                    <tr key={os.id} className="hover:bg-slate-50/50 transition-colors">
+                    <motion.tr 
+                      key={os.id} 
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.25) }}
+                      className="hover:bg-slate-50/50 transition-colors"
+                    >
                       <td className="px-6 py-4 font-mono text-slate-400 font-bold">
                         {os.id}
                       </td>
@@ -1412,7 +1541,7 @@ export default function ServiceOrders({
                           )}
                         </div>
                       </td>
-                    </tr>
+                    </motion.tr>
                   );
                 })
               ) : (
@@ -1614,27 +1743,60 @@ export default function ServiceOrders({
                           </div>
                         );
                       }
+                      
+                      const getBlockForProfessionalOnDate = (profName: string, profId: string, date: string) => {
+                        return blockedDates.find(b => 
+                          b.date === date && 
+                          (
+                            b.professionalId === "all" || 
+                            b.type === "holiday" || 
+                            b.professionalId === profId || 
+                            b.professionalId === profName
+                          )
+                        );
+                      };
+
                       return onlyProfs.map(prof => {
                         const isRecommended = prof.specialties?.includes(selectedOrder.category) || prof.specialty === selectedOrder.category;
+                        const block = getBlockForProfessionalOnDate(prof.name, prof.id, selectedOrder.startDate);
+                        const isBlocked = !!block;
+                        
                         return (
                           <div 
                             key={prof.id} 
-                            onClick={() => setSelectedProfName(prof.name)}
-                            className={`p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
-                              selectedProfName === prof.name 
-                                ? "bg-slate-900 border-slate-900 text-white shadow-md ring-2 ring-slate-900/10" 
-                                : "bg-white border-slate-200 hover:border-slate-350 hover:bg-slate-50/20"
+                            onClick={() => {
+                              if (isBlocked) {
+                                toastError(`Não é possível alocar ${prof.name} em ${selectedOrder.startDate} devido ao bloqueio: "${block.description}"`, "Data Bloqueada");
+                                return;
+                              }
+                              setSelectedProfName(prof.name);
+                            }}
+                            className={`p-3 rounded-xl border transition-all flex items-center justify-between ${
+                              isBlocked
+                                ? "bg-slate-50 border-slate-200 opacity-60 cursor-not-allowed"
+                                : selectedProfName === prof.name 
+                                ? "bg-slate-900 border-slate-900 text-white shadow-md ring-2 ring-slate-900/10 cursor-pointer" 
+                                : "bg-white border-slate-200 hover:border-slate-350 hover:bg-slate-50/20 cursor-pointer"
                             }`}
                           >
-                            <div>
-                              <span className={`font-extrabold block ${selectedProfName === prof.name ? "text-white" : "text-slate-850"}`}>{prof.name}</span>
-                              <span className={`text-[10px] font-semibold block mt-0.5 ${selectedProfName === prof.name ? "text-slate-300" : "text-slate-500"}`}>
+                            <div className="flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className={`font-extrabold block ${isBlocked ? "text-slate-400 line-through" : selectedProfName === prof.name ? "text-white" : "text-slate-850"}`}>
+                                  {prof.name}
+                                </span>
+                                {isBlocked && (
+                                  <span className="text-[8px] bg-red-100 text-red-700 border border-red-200 rounded px-1.5 py-0.5 font-bold uppercase tracking-wider shrink-0 no-underline">
+                                    🔒 {block.type === "holiday" ? "Feriado" : "Folga"}: {block.description}
+                                  </span>
+                                )}
+                              </div>
+                              <span className={`text-[10px] font-semibold block mt-0.5 ${isBlocked ? "text-slate-400" : selectedProfName === prof.name ? "text-slate-300" : "text-slate-500"}`}>
                                 {prof.role} | {prof.specialties && prof.specialties.length > 0 ? `Especialidades: ${prof.specialties.join(", ")}` : `Especialidade: ${prof.specialty}`}
                               </span>
                             </div>
 
-                            {isRecommended && (
-                              <span className={`font-black text-[9px] px-2 py-0.5 rounded-lg tracking-wider ${
+                            {isRecommended && !isBlocked && (
+                              <span className={`font-black text-[9px] px-2 py-0.5 rounded-lg tracking-wider shrink-0 ${
                                 selectedProfName === prof.name 
                                   ? "bg-emerald-600 border border-emerald-500 text-white" 
                                   : "bg-indigo-100 border border-indigo-200 text-indigo-700 animate-pulse"
@@ -1847,6 +2009,71 @@ export default function ServiceOrders({
                 </div>
               </div>
 
+              {/* Gemini OS Technical Analysis */}
+              <div className="bg-indigo-50/40 dark:bg-slate-900/40 border border-indigo-100/50 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <h4 className="font-extrabold text-slate-900 dark:text-indigo-400 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400 animate-pulse" />
+                      Planejamento Inteligente IA
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
+                      Analise a descrição desta OS para estimar materiais, ferramentas e o perfil ideal de equipe.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAnalyzeOSWithIA}
+                    disabled={isAnalyzingOS}
+                    className="shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-300 text-white font-extrabold text-[11px] uppercase tracking-wider px-4 py-2.5 rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {isAnalyzingOS ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Analisando OS...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-200" />
+                        <span>Sugerir Materiais & Equipe</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {isAnalyzingOS && (
+                  <div className="bg-white/80 dark:bg-slate-950/80 rounded-xl p-4 border border-indigo-100/30 dark:border-slate-800 flex flex-col items-center justify-center py-6 text-center space-y-2 animate-pulse">
+                    <RefreshCw className="w-5 h-5 text-indigo-600 dark:text-indigo-400 animate-spin" />
+                    <p className="text-xs text-slate-600 dark:text-slate-400 font-bold">Consultando o Gemini para estruturar o planejamento de campo...</p>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500">Isso pode levar alguns segundos de acordo com os detalhes do diagnóstico.</p>
+                  </div>
+                )}
+
+                {osAnalysisError && (
+                  <div className="p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-400 text-xs font-semibold rounded-xl leading-relaxed">
+                    ⚠️ {osAnalysisError}
+                  </div>
+                )}
+
+                {osAnalysisResult && (
+                  <div className="bg-white dark:bg-slate-950 rounded-xl p-4 border border-indigo-100/40 dark:border-slate-800 space-y-3 shadow-2xs max-h-[300px] overflow-y-auto animate-fade-in">
+                    <div className="flex items-center justify-between border-b border-indigo-50 dark:border-slate-900 pb-1.5 mb-1">
+                      <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Recomendações Geradas por IA</span>
+                      <button
+                        type="button"
+                        onClick={() => setOsAnalysisResult(null)}
+                        className="text-[9px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 uppercase transition-colors"
+                      >
+                        Limpar
+                      </button>
+                    </div>
+                    <div className="space-y-3 prose prose-slate dark:prose-invert max-w-none text-left">
+                      {parseMarkdownToJSX(osAnalysisResult)}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Attached Photos */}
               <div className="space-y-3">
                 <h4 className="font-bold text-slate-400 text-[10px] uppercase tracking-wider">Fotos Ilustrativas do Problema Anexadas</h4>
@@ -1988,10 +2215,20 @@ export default function ServiceOrders({
             </div>
             
             {/* Footer */}
-            <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-3xl flex justify-end">
+            <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-3xl flex justify-between items-center gap-4">
               <button
+                type="button"
+                onClick={() => setIsPrintPreviewOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-wider py-3 px-5 rounded-xl transition-all shadow-md flex items-center gap-2 cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                Imprimir Ficha Técnica
+              </button>
+              
+              <button
+                type="button"
                 onClick={() => setSelectedOrder(null)}
-                className="bg-white border border-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider py-3 px-6 rounded-xl hover:bg-slate-100 transition-all shadow-sm"
+                className="bg-white border border-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider py-3 px-6 rounded-xl hover:bg-slate-100 transition-all shadow-sm cursor-pointer"
               >
                 Fechar Detalhes
               </button>
@@ -2558,6 +2795,49 @@ export default function ServiceOrders({
             </div>
           )}
 
+          {/* Photos / Registro Visual do Atendimento na Ficha de Impressão */}
+          {((selectedOrder.images && selectedOrder.images.length > 0) || (selectedOrder.completedImages && selectedOrder.completedImages.length > 0)) && (
+            <div className="print-break-avoid border border-slate-200 rounded-xl p-5 space-y-4 mb-6 bg-slate-50/10">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1">Anexo Visual / Fotos do Atendimento</span>
+              
+              {selectedOrder.images && selectedOrder.images.length > 0 && (
+                <div className="space-y-2">
+                  <h5 className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Fotos Iniciais / Entrada do Chamado:</h5>
+                  <div className="grid grid-cols-3 gap-4">
+                    {selectedOrder.images.map((imgUrl, i) => (
+                      <div key={i} className="border border-slate-200 rounded-lg overflow-hidden aspect-video bg-white h-28 flex items-center justify-center">
+                        <img 
+                          src={imgUrl} 
+                          alt={`Problema ${i + 1}`}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedOrder.completedImages && selectedOrder.completedImages.length > 0 && (
+                <div className="space-y-2 pt-3 border-t border-slate-200/60">
+                  <h5 className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">Fotos de Conclusão / Comprovantes de Entrega:</h5>
+                  <div className="grid grid-cols-3 gap-4">
+                    {selectedOrder.completedImages.map((imgUrl, i) => (
+                      <div key={i} className="border border-indigo-200 rounded-lg overflow-hidden aspect-video bg-white h-28 flex items-center justify-center">
+                        <img 
+                          src={imgUrl} 
+                          alt={`Conclusão ${i + 1}`}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Signature margins & confirmation */}
           <div className="mt-16 grid grid-cols-2 gap-10">
             <div className="text-center pt-8 border-t border-dashed border-slate-400 font-semibold text-xs text-slate-800">
@@ -2577,49 +2857,55 @@ export default function ServiceOrders({
 
       {/* SECTOR: VISUAL PRINT PREVIEW DIALOG MODAL ON-SCREEN */}
       {isPrintPreviewOpen && selectedOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs overflow-y-auto print:hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto print:hidden">
           <div className="bg-slate-50 rounded-3xl w-full max-w-5xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col h-[90vh]">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-indigo-600" />
-                <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Ficha Técnica em Formato PDF</h3>
+                <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Visualização da Ficha Técnica</h3>
               </div>
+              
               <div className="flex items-center gap-2">
+                {/* Print button which triggers window.print() or iframe print depending on mode */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (previewMode === "pdf") {
+                      const iframe = document.getElementById("pdf-iframe") as HTMLIFrameElement;
+                      if (iframe && iframe.contentWindow) {
+                        iframe.contentWindow.print();
+                      } else {
+                        window.print();
+                      }
+                    } else {
+                      window.print();
+                    }
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase tracking-wider py-2 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all"
+                >
+                  <Printer className="w-4 h-4 text-indigo-200" />
+                  Imprimir Ficha
+                </button>
+
                 {pdfBlobUrl && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const link = document.createElement("a");
-                        link.href = pdfBlobUrl;
-                        link.download = `requisicao-${selectedOrder.id}-${selectedOrder.title.toLowerCase().replace(/\s+/g, "-")}.pdf`;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      }}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase tracking-wider py-2 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all animate-fade-in"
-                    >
-                      <Download className="w-4 h-4 text-white" />
-                      Baixar PDF
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const iframe = document.getElementById("pdf-iframe") as HTMLIFrameElement;
-                        if (iframe && iframe.contentWindow) {
-                          iframe.contentWindow.print();
-                        } else {
-                          window.print();
-                        }
-                      }}
-                      className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-2 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all animate-fade-in"
-                    >
-                      <Printer className="w-4 h-4 text-emerald-400" />
-                      Imprimir PDF
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const link = document.createElement("a");
+                      link.href = pdfBlobUrl;
+                      link.download = `requisicao-${selectedOrder.id}-${selectedOrder.title.toLowerCase().replace(/\s+/g, "-")}.pdf`;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase tracking-wider py-2 px-4 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition-all"
+                  >
+                    <Download className="w-4 h-4 text-emerald-200" />
+                    Baixar PDF
+                  </button>
                 )}
+                
                 <button 
                   type="button"
                   onClick={() => setIsPrintPreviewOpen(false)}
@@ -2631,20 +2917,261 @@ export default function ServiceOrders({
               </div>
             </div>
 
-            {/* Scrollable Document Area carrying PDF viewport */}
-            <div className="p-4 bg-slate-100 flex-1 flex flex-col justify-stretch">
-              {pdfBlobUrl ? (
-                <iframe 
-                  id="pdf-iframe"
-                  src={pdfBlobUrl} 
-                  className="w-full h-full rounded-2xl border border-slate-200 shadow-inner bg-white min-h-[500px]" 
-                  title="Ficha Técnica PDF"
-                />
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center space-y-4 bg-white rounded-2xl border border-slate-200">
-                  <div className="w-8 h-8 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
-                  <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Gerando visualização oficial em formato PDF...</p>
+            {/* Mode Tabs */}
+            <div className="flex gap-4 border-b border-slate-200 bg-white px-6 py-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setPreviewMode("visual")}
+                className={`py-2 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  previewMode === "visual"
+                    ? "border-indigo-600 text-indigo-600 font-extrabold"
+                    : "border-transparent text-slate-400 hover:text-slate-700"
+                }`}
+              >
+                Ficha Técnica com Fotos (Web)
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode("pdf")}
+                className={`py-2 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  previewMode === "pdf"
+                    ? "border-indigo-600 text-indigo-600 font-extrabold"
+                    : "border-transparent text-slate-400 hover:text-slate-700"
+                }`}
+              >
+                Documento Oficial PDF
+              </button>
+            </div>
+
+            {/* Scrollable Document Area */}
+            <div className="p-6 bg-slate-100 flex-1 overflow-y-auto">
+              {previewMode === "visual" ? (
+                <div className="flex justify-center w-full">
+                  <div className="bg-white max-w-[210mm] w-full p-8 md:p-12 shadow-lg border border-slate-200 rounded-2xl text-slate-800 text-sm font-sans space-y-6">
+                    
+                    {/* Document Header */}
+                    <div className="border-b-2 border-slate-900 pb-6 flex justify-between items-start">
+                      <div>
+                        <span className="text-xl font-extrabold uppercase tracking-tight block text-slate-900">RequisiçãoPro</span>
+                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Sistema de Gestão Técnica Integrada</span>
+                      </div>
+                      
+                      <div className="text-right">
+                        <span className="text-sm font-black text-slate-800 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                          REQUISIÇÃO #{selectedOrder.id}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block font-bold font-mono mt-2">
+                          Emitido em: {new Date().toLocaleDateString("pt-BR")} às {new Date().toLocaleTimeString("pt-BR")}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-center bg-slate-900 text-white p-2.5 font-bold text-xs uppercase tracking-widest rounded-lg">
+                      Via Administrativa de Campo / Ficha de Execução de Serviço
+                    </div>
+
+                    {/* Grid Information */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Column 1: Client details */}
+                      <div className="border border-slate-200 rounded-xl p-4 space-y-2 bg-slate-50/50">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1 mb-2">Dados do Requisitante</span>
+                        {(() => {
+                          const client = getClientObj(selectedOrder.clientId);
+                          if (!client) return <p className="text-xs text-slate-500 font-bold">Requisitante Desconhecido</p>;
+                          return (
+                            <div className="space-y-1.5 text-xs font-semibold">
+                              <p className="text-slate-900 font-bold">Nome: <span className="font-medium text-slate-700">{client.name}</span></p>
+                              <p className="text-slate-900 font-bold">Documento: <span className="font-mono font-medium text-slate-700">{client.document}</span></p>
+                              <p className="text-slate-900 font-bold">Telefone: <span className="font-medium text-slate-700">{client.phone}</span></p>
+                              <p className="text-slate-900 font-bold">E-mail: <span className="font-medium text-slate-700">{client.email}</span></p>
+                              <p className="text-slate-900 font-bold">Endereço: <span className="font-medium text-slate-700">{client.address}</span></p>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Column 2: Contract technical specifics */}
+                      <div className="border border-slate-200 rounded-xl p-4 space-y-2 bg-slate-50/50">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1 mb-2">Dados Técnicos da Operação</span>
+                        <div className="space-y-1.5 text-xs font-semibold text-slate-900">
+                          <p className="font-bold">Categoria Técnica: <span className="font-medium text-slate-700">{selectedOrder.category}</span></p>
+                          <p className="font-bold">Status Atual: <span className="font-extrabold uppercase text-slate-800">{selectedOrder.status}</span></p>
+                          <p className="font-bold">Profissional Responsável: <span className="font-extrabold text-indigo-700">{selectedOrder.assignedTo || "Pendente de Alocação Técnica"}</span></p>
+                          <p className="font-bold">Previsão de Conclusão: <span className="font-medium text-slate-700">{selectedOrder.endDate ? new Date(selectedOrder.endDate).toLocaleDateString("pt-BR") : "Não Programado"}</span></p>
+                          {selectedOrder.hasMissingMaterial && (
+                            <p className="text-red-700 font-bold bg-red-50 px-2 py-0.5 rounded text-[11px] border border-red-200/30">
+                              ⚠️ BLOQUEADO POR FALTA DE MATERIAL
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Ticket Description details */}
+                    <div className="border border-slate-200 rounded-xl p-5 space-y-3 bg-slate-50/20">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1">Sintoma Inicial / Escopo Técnico</span>
+                      <p className="text-xs font-bold text-slate-800 leading-relaxed font-sans">{selectedOrder.title}</p>
+                      <p className="text-xs font-semibold text-slate-600 leading-relaxed font-sans whitespace-pre-wrap">{selectedOrder.description}</p>
+                      {selectedOrder.notes && (
+                        <div className="mt-3 bg-white border border-slate-150 p-3 rounded-lg text-xs">
+                          <strong className="block text-slate-500 font-bold text-[10px] uppercase mb-1">Notas Gerais</strong>
+                          <p className="text-slate-650">{selectedOrder.notes}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Timeline History */}
+                    {selectedOrder.history && selectedOrder.history.length > 0 && (
+                      <div className="border border-slate-200 rounded-xl p-5 space-y-4 bg-slate-50/20">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1">Histórico de Pareceres e Andamentos</span>
+                        <div className="space-y-3.5">
+                          {selectedOrder.history.map((h, idx) => (
+                            <div key={idx} className="text-xs font-semibold border-b border-slate-100 last:border-b-0 pb-2 bg-white p-2.5 rounded-lg border border-slate-200/45">
+                              <div className="flex justify-between items-center text-[10px] text-slate-500 font-bold mb-1">
+                                <span>Autor: <strong className="text-slate-700 uppercase">{h.author}</strong> | Status: <strong className="text-slate-800 uppercase">{h.status}</strong></span>
+                                <span className="font-mono">{new Date(h.date).toLocaleString("pt-BR")}</span>
+                              </div>
+                              <p className="text-slate-700 font-sans whitespace-pre-wrap">{h.comment}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Visual Attachments / Photos inside live view */}
+                    {((selectedOrder.images && selectedOrder.images.length > 0) || (selectedOrder.completedImages && selectedOrder.completedImages.length > 0)) && (
+                      <div className="border border-slate-200 rounded-xl p-5 space-y-4 bg-slate-50/10">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-200/60 pb-1">Anexo Visual / Fotos do Atendimento</span>
+                        
+                        {selectedOrder.images && selectedOrder.images.length > 0 && (
+                          <div className="space-y-2">
+                            <h5 className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Fotos Iniciais / Entrada do Chamado:</h5>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                              {selectedOrder.images.map((imgUrl, i) => (
+                                <div key={i} className="border border-slate-200 rounded-xl overflow-hidden aspect-video bg-slate-100 h-28 flex items-center justify-center">
+                                  <img 
+                                    src={imgUrl} 
+                                    alt={`Problema Inicial ${i + 1}`}
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedOrder.completedImages && selectedOrder.completedImages.length > 0 && (
+                          <div className="space-y-2 pt-3 border-t border-slate-200/60">
+                            <h5 className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">Fotos de Conclusão / Comprovantes de Entrega:</h5>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                              {selectedOrder.completedImages.map((imgUrl, i) => (
+                                <div key={i} className="border border-indigo-200 rounded-xl overflow-hidden aspect-video bg-slate-100 h-28 flex items-center justify-center">
+                                  <img 
+                                    src={imgUrl} 
+                                    alt={`Conclusão do Serviço ${i + 1}`}
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Signature lines in web view */}
+                    <div className="mt-16 grid grid-cols-1 sm:grid-cols-2 gap-10">
+                      <div className="text-center pt-8 border-t border-dashed border-slate-400 font-semibold text-xs text-slate-800">
+                        <div className="inline-block w-48 mb-1 leading-none border-b border-slate-400">{selectedOrder.assignedTo || "__________________________"}</div>
+                        <p className="font-extrabold text-slate-900">Profissional Técnico Responsável</p>
+                        <p className="text-[10px] text-slate-400 font-mono mt-1">Assinatura / Carimbo</p>
+                      </div>
+                      
+                      <div className="text-center pt-8 border-t border-dashed border-slate-400 font-semibold text-xs text-slate-800">
+                        <div className="inline-block w-48 mb-1 leading-none border-b border-slate-400">_________________________________</div>
+                        <p className="font-extrabold text-slate-900">Assinatura do Requisitante / Gestor</p>
+                        <p className="text-[10px] text-slate-400 font-mono mt-1">Autorização de Conclusão Física</p>
+                      </div>
+                    </div>
+
+                  </div>
                 </div>
+              ) : (
+                pdfBlobUrl ? (
+                  <div className="flex justify-center w-full py-4">
+                    <div className="bg-white max-w-2xl w-full p-8 md:p-12 shadow-md border border-slate-200 rounded-2xl text-slate-800 text-sm font-sans flex flex-col items-center text-center space-y-6 animate-fade-in">
+                      <div className="p-4 bg-indigo-50 text-indigo-600 rounded-2xl border border-indigo-100">
+                        <FileText className="w-12 h-12" />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <h4 className="text-lg font-extrabold text-slate-800">Documento PDF Pronto para Download</h4>
+                        <p className="text-xs text-slate-500 max-w-md leading-relaxed">
+                          A ficha técnica oficial da requisição <strong className="text-slate-700">#{selectedOrder.id}</strong> foi compilada e gerada com sucesso contendo todas as assinaturas e informações.
+                        </p>
+                      </div>
+
+                      {/* PDF Details Grid */}
+                      <div className="grid grid-cols-2 gap-4 w-full max-w-md bg-slate-50 p-4 rounded-xl border border-slate-150 text-left text-xs font-semibold text-slate-600">
+                        <div>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase">Formato do Arquivo</p>
+                          <p className="text-slate-800 font-bold">PDF Document (.pdf)</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase">Tamanho Estimado</p>
+                          <p className="text-slate-800 font-bold">~120 KB</p>
+                        </div>
+                        <div className="col-span-2 pt-2 border-t border-slate-200/60 mt-1">
+                          <p className="text-[10px] text-slate-400 font-bold uppercase">Certificação Digital</p>
+                          <p className="text-indigo-600 font-bold flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full inline-block"></span>
+                            Assinado Eletronicamente
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-md">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const link = document.createElement("a");
+                            link.href = pdfBlobUrl;
+                            link.download = `requisicao-${selectedOrder.id}-${selectedOrder.title.toLowerCase().replace(/\s+/g, "-")}.pdf`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          }}
+                          className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-6 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all"
+                        >
+                          <Download className="w-4 h-4 text-indigo-200" />
+                          Baixar PDF Oficial
+                        </button>
+                        
+                        <button
+                          type="button"
+                          onClick={() => {
+                            window.open(pdfBlobUrl, "_blank");
+                          }}
+                          className="w-full bg-white border border-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider py-3.5 px-6 rounded-xl hover:bg-slate-50 transition-all shadow-xs cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Eye className="w-4 h-4 text-slate-400" />
+                          Abrir em Nova Guia
+                        </button>
+                      </div>
+
+                      <p className="text-[11px] text-slate-400 leading-relaxed max-w-xs">
+                        * Use a aba <strong className="text-slate-500">Ficha Técnica com Fotos (Web)</strong> para visualizar, interagir e imprimir diretamente sem sair do sistema.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center space-y-4 bg-white rounded-2xl border border-slate-200 min-h-[500px]">
+                    <div className="w-8 h-8 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Gerando visualização oficial em formato PDF...</p>
+                  </div>
+                )
               )}
             </div>
           </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder } from "../types";
-import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase } from "lucide-react";
+import { Client, ServiceOrder, Almoxarifado } from "../types";
+import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database } from "lucide-react";
+import { motion } from "motion/react";
 
 interface ClientsProps {
   clients: Client[];
@@ -8,6 +9,7 @@ interface ClientsProps {
   onAddClient: (client: Client) => void;
   onUpdateClient: (client: Client) => void;
   onDeleteClient: (id: string) => void;
+  almoxarifados?: Almoxarifado[];
 }
 
 const formatDoc = (value: string) => {
@@ -61,7 +63,7 @@ const ClientsSkeleton = () => (
   </div>
 );
 
-export default function Clients({ clients, orders, onAddClient, onUpdateClient, onDeleteClient }: ClientsProps) {
+export default function Clients({ clients, orders, onAddClient, onUpdateClient, onDeleteClient, almoxarifados = [] }: ClientsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
@@ -83,6 +85,8 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
   const [notes, setNotes] = useState("");
   const [userType, setUserType] = useState<"requisitante" | "gestor" | "gestor_servicos" | "admin">("requisitante");
   const [password, setPassword] = useState("");
+  const [workLocation, setWorkLocation] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
 
   // Detailed view of client (history of Service Orders)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -107,6 +111,8 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
       setNotes(client.notes);
       setUserType(client.userType || "requisitante");
       setPassword(client.password || "123");
+      setWorkLocation(client.workLocation || "");
+      setWarehouseId(client.warehouseId || "");
     } else {
       setEditingClient(null);
       setName("");
@@ -117,6 +123,8 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
       setNotes("");
       setUserType("requisitante");
       setPassword("123");
+      setWorkLocation("");
+      setWarehouseId("");
     }
     setIsFormOpen(true);
   };
@@ -135,7 +143,9 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
         address,
         notes,
         userType,
-        password: password || "123"
+        password: password || "123",
+        workLocation: workLocation || undefined,
+        warehouseId: warehouseId || undefined
       });
     } else {
       const newClient: Client = {
@@ -149,7 +159,9 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
         createdAt: new Date().toISOString(),
         userType,
         password: password || "123",
-        status: "ativo"
+        status: "ativo",
+        workLocation: workLocation || undefined,
+        warehouseId: warehouseId || undefined
       };
       onAddClient(newClient);
     }
@@ -198,12 +210,15 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredClients.length > 0 ? (
-            filteredClients.map(client => {
+            filteredClients.map((client, index) => {
               const history = getClientOSHistory(client.id);
               const ut = client.userType || "requisitante";
               return (
-                <div 
+                <motion.div 
                   key={client.id} 
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
                   className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:border-slate-300 p-5 transition-all flex flex-col justify-between group"
                 >
                   <div>
@@ -292,7 +307,7 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
                       Ver Histórico
                     </button>
                   </div>
-                </div>
+                </motion.div>
               );
             })
           ) : (
@@ -382,8 +397,14 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
                 
                 <div className="space-y-3">
                   {getClientOSHistory(selectedClient.id).length > 0 ? (
-                    getClientOSHistory(selectedClient.id).map(os => (
-                      <div key={os.id} className="p-4 bg-white border border-slate-200/80 rounded-xl hover:border-slate-300 shadow-xs transition-colors flex flex-col justify-between">
+                    getClientOSHistory(selectedClient.id).map((os, index) => (
+                      <motion.div 
+                        key={os.id} 
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.2) }}
+                        className="p-4 bg-white border border-slate-200/80 rounded-xl hover:border-slate-300 shadow-xs transition-colors flex flex-col justify-between"
+                      >
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
                             <span className="text-xs font-mono font-bold text-slate-500">{os.id}</span>
@@ -407,7 +428,7 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
                           <span>Início: {os.startDate}</span>
                           <span className="font-bold text-slate-800 font-sans">Previsão: {os.endDate || "A definir"}</span>
                         </div>
-                      </div>
+                      </motion.div>
                     ))
                   ) : (
                     <div className="p-6 text-center border border-dashed border-slate-200 rounded-xl text-slate-400">
@@ -571,6 +592,35 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
                     onChange={(e) => setAddress(e.target.value)}
                   />
                 </div>
+
+                {/* Local de Trabalho */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Local de Trabalho</label>
+                  <input
+                    type="text"
+                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-medium text-slate-700"
+                    placeholder="Ex: Almoxarifado Central, Unidade Norte, etc."
+                    value={workLocation}
+                    onChange={(e) => setWorkLocation(e.target.value)}
+                  />
+                </div>
+
+                {/* Almoxarifado selection for gestores */}
+                {(userType === "gestor" || userType === "gestor_servicos" || userType === "admin") && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Almoxarifado de Responsabilidade</label>
+                    <select
+                      className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-medium text-slate-700 cursor-pointer"
+                      value={warehouseId}
+                      onChange={(e) => setWarehouseId(e.target.value)}
+                    >
+                      <option value="">Selecione o almoxarifado responsável...</option>
+                      {almoxarifados.map(alm => (
+                        <option key={alm.id} value={alm.id}>{alm.code} - {alm.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Observações Adicionais</label>

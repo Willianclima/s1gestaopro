@@ -12,6 +12,15 @@ export interface Client {
   status?: "ativo" | "pendente_autorizacao";
   failedAttempts?: number;
   blocked?: boolean;
+  warehouseId?: string; // Almoxarifado responsável (para gestor/adm)
+  workLocation?: string; // Local de trabalho (para requisitante/outro)
+}
+
+export interface Almoxarifado {
+  id: string;
+  name: string;
+  code: string;
+  address: string;
 }
 
 export type OSStatus = 'aberto' | 'em_progresso' | 'aguardando' | 'concluido' | 'cancelado';
@@ -65,6 +74,7 @@ export interface Professional {
   password?: string;
   failedAttempts?: number;
   blocked?: boolean;
+  workLocation?: string; // Local de trabalho
 }
 
 export interface SystemLog {
@@ -80,6 +90,8 @@ export interface CurrentUser {
   name: string;
   document: string;
   userType: "admin" | "gestor" | "gestor_servicos" | "requisitante" | "profissional";
+  warehouseId?: string;
+  workLocation?: string;
 }
 
 export interface Toast {
@@ -124,5 +136,14 @@ export interface LoginAttempt {
   userType: string; // "gestor" | "requisitante" | "profissional" | "desconhecido"
   details: string; // Reason or description of status
 }
+
+export interface BlockedDate {
+  id: string;
+  date: string; // YYYY-MM-DD
+  description: string;
+  type: "holiday" | "day_off";
+  professionalId?: string; // "all" or professional's specific ID
+}
+
 
 

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt } from "./types";
+import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate } from "./types";
 import { 
-  INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS 
+  INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS, INITIAL_ALMOXARIFADOS
 } from "./data/mockData";
 import Dashboard from "./components/Dashboard";
+import BiMetrics from "./components/BiMetrics";
 import Clients from "./components/Clients";
 import ServiceOrders from "./components/ServiceOrders";
 import Scheduler from "./components/Scheduler";
@@ -15,14 +16,15 @@ import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
-  Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff
+  Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff,
+  ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
 import { useSystemTheme } from "./hooks/useSystemTheme";
 
 
 export default function App() {
-  const currentTheme = useSystemTheme();
+  const { themePreference, activeTheme, setThemePreference } = useSystemTheme();
   const { success: toastSuccess, error: toastError, warn: toastWarn, info: toastInfo, critical: toastCritical, system: toastSystem } = useToast();
 
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
@@ -32,10 +34,18 @@ export default function App() {
     return "default";
   });
 
+  const [isInIframe, setIsInIframe] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setIsInIframe(window.self !== window.top);
+    }
+  }, []);
+
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
       setNotificationPermission(Notification.permission);
-      if (Notification.permission === "default") {
+      if (Notification.permission === "default" && window.self === window.top) {
         Notification.requestPermission().then((perm) => {
           setNotificationPermission(perm);
         }).catch(err => console.error("Erro ao solicitar permissão de notificação:", err));
@@ -46,6 +56,13 @@ export default function App() {
   const requestNotificationPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
       toastWarn("Este navegador não suporta notificações de área de trabalho.", "Não Suportado");
+      return;
+    }
+    if (window.self !== window.top) {
+      toastInfo(
+        "Por conta de políticas de segurança de navegadores, as notificações nativas são restritas dentro de um iFrame de Preview. Abra o aplicativo em uma nova aba para testar e ativar as notificações de área de trabalho.",
+        "Notificações no iFrame"
+      );
       return;
     }
     try {
@@ -66,8 +83,9 @@ export default function App() {
   };
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings" | "bi">("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [cadastrosOpen, setCadastrosOpen] = useState(true);
 
   // LGPD CPF Auth State
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => {
@@ -89,10 +107,14 @@ export default function App() {
   const [regPhone, setRegPhone] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regAddress, setRegAddress] = useState("");
+  const [regWorkLocation, setRegWorkLocation] = useState("");
   const [regPassword, setRegPassword] = useState("");
 
   // User self-change password state
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [profileWarehouseId, setProfileWarehouseId] = useState("");
+  const [profileWorkLocation, setProfileWorkLocation] = useState("");
+  const [showPasswordSection, setShowPasswordSection] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
@@ -147,7 +169,8 @@ export default function App() {
       professionals: ["admin", "gestor", "gestor_servicos"],
       reports: ["admin", "gestor"],
       settings: ["admin"],
-      assistant: ["admin", "gestor", "gestor_servicos", "profissional", "requisitante"]
+      assistant: ["admin", "gestor", "gestor_servicos", "profissional", "requisitante"],
+      bi: ["admin", "gestor", "gestor_servicos", "profissional"]
     };
     localStorage.setItem("service_mgt_permissions3", JSON.stringify(defaultPerms));
     return defaultPerms;
@@ -162,11 +185,18 @@ export default function App() {
     if (!currentUser) return false;
     const userRole = currentUser.userType || "requisitante";
     if (userRole === "admin") return true; // master always has access to all resources
+    if (tab === "bi") {
+      return ["gestor", "gestor_servicos", "profissional"].includes(userRole);
+    }
+    if (tab === "settings") {
+      return ["gestor", "gestor_servicos"].includes(userRole);
+    }
     const allowed = permissions[tab] || [];
     return allowed.includes(userRole);
   };
 
   const [clients, setClients] = useState<Client[]>([]);
+  const [almoxarifados, setAlmoxarifados] = useState<Almoxarifado[]>([]);
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
@@ -188,6 +218,7 @@ export default function App() {
     enabled: false
   });
   const [teams, setTeams] = useState<Team[]>([]);
+  const [blockedDates, setBlockedDates] = useState<BlockedDate[]>([]);
 
   // Cross-component routing state (AI Prefills)
   const [selectedOS, setSelectedOS] = useState<ServiceOrder | null>(null);
@@ -215,6 +246,14 @@ export default function App() {
 
     if (cachedWhatsapp) {
       setWhatsappSettings(JSON.parse(cachedWhatsapp));
+    }
+
+    const cachedAlmoxarifados = localStorage.getItem("service_mgt_almoxarifados");
+    if (cachedAlmoxarifados) {
+      setAlmoxarifados(JSON.parse(cachedAlmoxarifados));
+    } else {
+      setAlmoxarifados(INITIAL_ALMOXARIFADOS);
+      localStorage.setItem("service_mgt_almoxarifados", JSON.stringify(INITIAL_ALMOXARIFADOS));
     }
 
     if (cachedClients) {
@@ -323,6 +362,37 @@ export default function App() {
       setLoginAttempts(initialAttempts);
       localStorage.setItem("service_mgt_login_attempts", JSON.stringify(initialAttempts));
     }
+
+    const cachedBlockedDates = localStorage.getItem("service_mgt_blocked_dates");
+    if (cachedBlockedDates) {
+      setBlockedDates(JSON.parse(cachedBlockedDates));
+    } else {
+      const initialBlocked: BlockedDate[] = [
+        {
+          id: "block-1",
+          date: "2026-06-18",
+          description: "Feriado Municipal de Araçatuba",
+          type: "holiday",
+          professionalId: "all"
+        },
+        {
+          id: "block-2",
+          date: "2026-06-25",
+          description: "Dia de Folga - Carlos Henrique",
+          type: "day_off",
+          professionalId: "Carlos Henrique"
+        },
+        {
+          id: "block-3",
+          date: "2026-07-09",
+          description: "Feriado Estadual SP - Revolução Constitucionalista",
+          type: "holiday",
+          professionalId: "all"
+        }
+      ];
+      setBlockedDates(initialBlocked);
+      localStorage.setItem("service_mgt_blocked_dates", JSON.stringify(initialBlocked));
+    }
   }, []);
 
   // Sync state helpers to persistent Storage
@@ -344,6 +414,81 @@ export default function App() {
   const updateTeamsState = (newTeams: Team[]) => {
     setTeams(newTeams);
     localStorage.setItem("service_mgt_teams", JSON.stringify(newTeams));
+  };
+
+  const handleAddBlockedDate = (bDate: BlockedDate) => {
+    const updated = [...blockedDates, bDate];
+    setBlockedDates(updated);
+    localStorage.setItem("service_mgt_blocked_dates", JSON.stringify(updated));
+    addSystemLog(
+      "Bloqueio de Data",
+      `${bDate.type === "holiday" ? "Feriado" : "Folga de Técnico"} cadastrado para ${bDate.date}: ${bDate.description}.`,
+      "sistema"
+    );
+    toastSuccess(`${bDate.type === "holiday" ? "Feriado" : "Folga"} cadastrado para ${bDate.date}!`, "Data Bloqueada");
+  };
+
+  const handleDeleteBlockedDate = (id: string) => {
+    const toDelete = blockedDates.find(b => b.id === id);
+    const updated = blockedDates.filter(b => b.id !== id);
+    setBlockedDates(updated);
+    localStorage.setItem("service_mgt_blocked_dates", JSON.stringify(updated));
+    if (toDelete) {
+      addSystemLog(
+        "Remoção de Bloqueio",
+        `Bloqueio de data para ${toDelete.date} (${toDelete.description}) removido do sistema.`,
+        "sistema"
+      );
+      toastInfo(`Bloqueio de data para ${toDelete.date} removido com sucesso.`, "Bloqueio Removido");
+    }
+  };
+
+  const handleUpdateProfileAllocation = (newWarehouseId: string, newWorkLocation: string) => {
+    if (!currentUser) return;
+    
+    const updatedUser = {
+      ...currentUser,
+      warehouseId: newWarehouseId || undefined,
+      workLocation: newWorkLocation || undefined
+    };
+    
+    setCurrentUser(updatedUser);
+    localStorage.setItem("service_mgt_logged_user", JSON.stringify(updatedUser));
+    
+    // Also persist this change in clients or professionals list
+    if (currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin" || currentUser.userType === "requisitante") {
+      const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
+      const updatedClients = activeClients.map(c => {
+        if (c.id === currentUser.id || c.document.replace(/\D/g, "") === currentUser.document.replace(/\D/g, "")) {
+          return {
+            ...c,
+            warehouseId: newWarehouseId || undefined,
+            workLocation: newWorkLocation || undefined
+          };
+        }
+        return c;
+      });
+      updateClientsState(updatedClients);
+    } else if (currentUser.userType === "profissional") {
+      const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
+      const updatedProfs = activeProfs.map(p => {
+        if (p.id === currentUser.id || (p.document && p.document.replace(/\D/g, "") === currentUser.document.replace(/\D/g, ""))) {
+          return {
+            ...p,
+            workLocation: newWorkLocation || undefined
+          };
+        }
+        return p;
+      });
+      updateProfessionalsState(updatedProfs);
+    }
+    
+    addSystemLog(
+      "Atualização de Perfil",
+      `Usuário "${currentUser.name}" atualizou suas configurações de alocação (Almoxarifado: ${newWarehouseId || 'Nenhum'}, Local: ${newWorkLocation || 'Não especificado'}).`,
+      "sistema"
+    );
+    toastSuccess("Suas configurações de perfil foram atualizadas e refletidas no cabeçalho!", "Perfil Atualizado");
   };
 
   const handleAddTeam = (newTeam: Team) => {
@@ -420,6 +565,16 @@ export default function App() {
     addSystemLog(
       "Configuração SMTP",
       `Parâmetros do servidor SMTP atualizados pelo Gestor (${newSettings.host}:${newSettings.port}).`,
+      "sistema"
+    );
+  };
+
+  const handleSaveAlmoxarifados = (newAlms: Almoxarifado[]) => {
+    setAlmoxarifados(newAlms);
+    localStorage.setItem("service_mgt_almoxarifados", JSON.stringify(newAlms));
+    addSystemLog(
+      "Configuração Almoxarifados",
+      `Lista de almoxarifados atualizada. Total cadastrado: ${newAlms.length}.`,
       "sistema"
     );
   };
@@ -967,7 +1122,9 @@ export default function App() {
         id: matchedClient.id,
         name: matchedClient.name,
         document: matchedClient.document,
-        userType: resolvedUserType
+        userType: resolvedUserType,
+        warehouseId: matchedClient.warehouseId,
+        workLocation: matchedClient.workLocation
       };
       setCurrentUser(clientUser);
       localStorage.setItem("service_mgt_logged_user", JSON.stringify(clientUser));
@@ -1037,7 +1194,8 @@ export default function App() {
         id: matchedProf.id,
         name: matchedProf.name,
         document: matchedProf.document || "",
-        userType: "profissional"
+        userType: "profissional",
+        workLocation: matchedProf.workLocation
       };
       setCurrentUser(profUser);
       localStorage.setItem("service_mgt_logged_user", JSON.stringify(profUser));
@@ -1082,6 +1240,7 @@ export default function App() {
       phone: regPhone,
       email: regEmail,
       address: regAddress,
+      workLocation: regWorkLocation || undefined,
       notes: "Usuário registrado por Auto-Cadastro. Aguardando autorização operacional.",
       createdAt: new Date().toISOString(),
       password: regPassword || "123",
@@ -1105,6 +1264,7 @@ export default function App() {
     setRegPhone("");
     setRegEmail("");
     setRegAddress("");
+    setRegWorkLocation("");
     setRegPassword("");
     setLoginError("");
     setRegSuccessMessage(`Seu cadastro para "${regName}" foi enviado com sucesso! Encontra-se pendente de aprovação pelo Gestor Administrador. Você receberá a permissão de Gestor ou Requisitante.`);
@@ -1349,11 +1509,17 @@ export default function App() {
   };
 
   // Approve pending client
-  const handleApproveClient = (clientId: string, type: "gestor" | "requisitante") => {
+  const handleApproveClient = (clientId: string, type: "gestor" | "requisitante" | "gestor_servicos" | "admin", warehouseId?: string, workLocation?: string) => {
     const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
     const updated = activeClients.map(c => {
       if (c.id === clientId) {
-        return { ...c, status: "ativo" as const, userType: type };
+        return { 
+          ...c, 
+          status: "ativo" as const, 
+          userType: type,
+          warehouseId: warehouseId || undefined,
+          workLocation: workLocation || undefined
+        };
       }
       return c;
     });
@@ -1688,6 +1854,20 @@ export default function App() {
                     onChange={(e) => setRegAddress(e.target.value)}
                     className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
                     placeholder="Rua, Número, Bairro, Cidade - SP"
+                  />
+                </div>
+
+                {/* Local de Trabalho */}
+                <div className="space-y-1.5 text-left">
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                    Local de Trabalho <span className="text-slate-500 font-normal">(Opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={regWorkLocation}
+                    onChange={(e) => setRegWorkLocation(e.target.value)}
+                    className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                    placeholder="Ex: Almoxarifado Central, Oficina Oeste, Setor Administrativo, etc."
                   />
                 </div>
 
@@ -2102,19 +2282,76 @@ export default function App() {
               </button>
             )}
 
-            {/* Requisitantes & GS */}
-            {hasTabPermission("clients") && (
+            {/* Métricas & Estatísticas (B.I) */}
+            {hasTabPermission("bi") && (
               <button
-                onClick={() => { setActiveTab("clients"); setIsSidebarOpen(false); }}
+                onClick={() => { setActiveTab("bi"); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  activeTab === "clients"
+                  activeTab === "bi"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <Users className="w-4 h-4" />
-                Requisitantes & GS
+                <TrendingUp className="w-4 h-4 text-indigo-400" />
+                Métricas & Estatísticas (B.I)
               </button>
+            )}
+
+            {/* Cadastros Collapsible Accordion Block */}
+            {(hasTabPermission("clients") || hasTabPermission("professionals")) && (
+              <div className="space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => setCadastrosOpen(!cadastrosOpen)}
+                  className="w-full flex items-center justify-between px-3 py-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800/40 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-3.5">
+                    <Folder className="w-4 h-4 text-indigo-400" />
+                    <span>Cadastros</span>
+                  </div>
+                  {cadastrosOpen ? (
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+                  )}
+                </button>
+
+                {cadastrosOpen && (
+                  <div className="pl-3 border-l border-slate-800/80 ml-5 space-y-1 my-1">
+                    {/* Requisitantes & GS */}
+                    {hasTabPermission("clients") && (
+                      <button
+                        type="button"
+                        onClick={() => { setActiveTab("clients"); setIsSidebarOpen(false); }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          activeTab === "clients"
+                            ? "bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
+                            : "text-slate-400 hover:text-white hover:bg-slate-800/20"
+                        }`}
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        Requisitantes & GS
+                      </button>
+                    )}
+
+                    {/* Técnico & Equipes */}
+                    {hasTabPermission("professionals") && (
+                      <button
+                        type="button"
+                        onClick={() => { setActiveTab("professionals"); setIsSidebarOpen(false); }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          activeTab === "professionals"
+                            ? "bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
+                            : "text-slate-400 hover:text-white hover:bg-slate-800/20"
+                        }`}
+                      >
+                        <Wrench className="w-3.5 h-3.5" />
+                        Técnico & Equipes
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Requisições de Serviço */}
@@ -2144,21 +2381,6 @@ export default function App() {
               >
                 <Calendar className="w-4 h-4" />
                 {currentUser.userType === "profissional" ? "Minha Agenda" : "Agenda / Calendário"}
-              </button>
-            )}
-
-            {/* Técnicos & Equipe */}
-            {hasTabPermission("professionals") && (
-              <button
-                onClick={() => { setActiveTab("professionals"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  activeTab === "professionals"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
-                }`}
-              >
-                <Wrench className="w-4 h-4" />
-                Técnicos & Equipe
               </button>
             )}
 
@@ -2237,22 +2459,41 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 min-h-screen relative overflow-hidden">
         
         {/* Top Header layout */}
-        <header className="h-16 bg-white border-b border-slate-100 flex items-center justify-between px-6 flex-shrink-0 z-30">
+        <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between px-6 flex-shrink-0 z-30">
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden p-2 hover:bg-slate-50 rounded-lg text-slate-600 transition-colors cursor-pointer"
+              className="md:hidden p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-400 transition-colors cursor-pointer"
               title="Abrir navegação"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider hidden md:block">Prestadora Técnica Executiva</span>
+            <span 
+              className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider hidden md:block truncate max-w-[130px] lg:max-w-[240px]"
+              title={currentUser ? (
+                currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin" ? (
+                  almoxarifados.find(a => a.id === currentUser.warehouseId)?.name || "Almoxarifado Central Araçatuba"
+                ) : (
+                  currentUser.workLocation || "Geral"
+                )
+              ) : "Prestadora Técnica Executiva"}
+            >
+              {currentUser ? (
+                currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin" ? (
+                  almoxarifados.find(a => a.id === currentUser.warehouseId)?.name || "Almoxarifado Central Araçatuba"
+                ) : (
+                  currentUser.workLocation || "Geral"
+                )
+              ) : (
+                "Prestadora Técnica Executiva"
+              )}
+            </span>
           </div>
 
           <div className="flex items-center gap-4 text-xs font-semibold">
             {/* Quick indicators */}
-            <div className="hidden sm:flex items-center gap-1.5 bg-slate-50 border border-slate-100 p-2.5 py-1.5 rounded-xl text-slate-600">
-              <CheckCircle className="w-4 h-4 text-indigo-500" />
+            <div className="hidden sm:flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 p-2.5 py-1.5 rounded-xl text-slate-600 dark:text-slate-400">
+              <CheckCircle className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
               <span>Sessão Encriptada Ativa</span>
             </div>
 
@@ -2260,14 +2501,18 @@ export default function App() {
             <button
               onClick={requestNotificationPermission}
               className={`hidden md:flex items-center gap-1.5 p-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer ${
-                notificationPermission === "granted"
+                isInIframe
+                  ? "bg-amber-50/20 hover:bg-amber-50/40 border-amber-200/50 text-amber-700 dark:bg-amber-950/10 dark:border-amber-900/20 dark:text-amber-400"
+                  : notificationPermission === "granted"
                   ? "bg-emerald-50/50 hover:bg-emerald-50 border-emerald-100 text-emerald-700 dark:bg-emerald-950/20 dark:border-emerald-900/30 dark:text-emerald-400"
                   : notificationPermission === "denied"
                   ? "bg-rose-50/50 hover:bg-rose-50 border-rose-100 text-rose-700 dark:bg-rose-950/20 dark:border-rose-900/30 dark:text-rose-400"
                   : "bg-amber-50/50 hover:bg-amber-50 border-amber-100 text-amber-700 animate-pulse dark:bg-amber-950/20 dark:border-amber-900/30 dark:text-amber-400"
               }`}
               title={
-                notificationPermission === "granted"
+                isInIframe
+                  ? "As notificações estão suspensas devido às políticas de segurança do iFrame (Preview). Clique para saber como ativar em uma nova aba."
+                  : notificationPermission === "granted"
                   ? "Notificações de navegador ativadas!"
                   : notificationPermission === "denied"
                   ? "Notificações bloqueadas. Clique para tentar reativar."
@@ -2276,11 +2521,15 @@ export default function App() {
             >
               {notificationPermission === "granted" ? (
                 <Bell className="w-4 h-4 text-emerald-500 shrink-0" />
+              ) : isInIframe ? (
+                <Bell className="w-4 h-4 text-amber-500 shrink-0" />
               ) : (
                 <BellOff className="w-4 h-4 text-amber-500 shrink-0" />
               )}
               <span>
-                {notificationPermission === "granted"
+                {isInIframe
+                  ? "Notificações (iFrame)"
+                  : notificationPermission === "granted"
                   ? "Notificações Ativas"
                   : notificationPermission === "denied"
                   ? "Notificações Bloqueadas"
@@ -2288,31 +2537,76 @@ export default function App() {
               </span>
             </button>
 
+            {/* Quick Theme Toggle Segmented Control */}
+            <div className="flex items-center gap-0.5 bg-slate-50 dark:bg-slate-800 p-1 rounded-xl border border-slate-200/60 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setThemePreference("light")}
+                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  themePreference === "light"
+                    ? "bg-white text-indigo-600 shadow-xs dark:bg-slate-700 dark:text-indigo-400"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                }`}
+                title="Modo Claro"
+              >
+                <Sun className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setThemePreference("dark")}
+                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  themePreference === "dark"
+                    ? "bg-white text-indigo-600 shadow-xs dark:bg-slate-700 dark:text-indigo-400"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                }`}
+                title="Modo Escuro"
+              >
+                <Moon className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setThemePreference("system")}
+                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  themePreference === "system"
+                    ? "bg-white text-indigo-600 shadow-xs dark:bg-slate-700 dark:text-indigo-400"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                }`}
+                title="Tema Automático"
+              >
+                <Monitor className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             <div className="flex items-center gap-2.5">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-slate-900 border border-slate-200 shadow-xs text-white font-extrabold text-xs flex items-center justify-center uppercase">
+                <div className="w-8 h-8 rounded-full bg-slate-900 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xs text-white font-extrabold text-xs flex items-center justify-center uppercase">
                   {currentUser.name.charAt(0)}
                 </div>
                 <div className="text-left hidden sm:block">
-                  <span className="text-slate-800 font-bold block leading-none max-w-[140px] truncate">{currentUser.name}</span>
-                  <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">
+                  <span className="text-slate-800 dark:text-slate-200 font-bold block leading-none max-w-[140px] truncate">{currentUser.name}</span>
+                  <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
                     {currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
                   </span>
                 </div>
               </div>
               
               <button 
-                onClick={() => setIsChangePasswordOpen(true)}
-                className="bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer flex items-center justify-center gap-1.5"
-                title="Alterar Minha Senha de Segurança"
+                onClick={() => {
+                  setProfileWarehouseId(currentUser.warehouseId || "");
+                  setProfileWorkLocation(currentUser.workLocation || "");
+                  setIsChangePasswordOpen(true);
+                  setShowPasswordSection(false); // Reset password section view initially
+                }}
+                className="bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer flex items-center justify-center gap-1.5 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700"
+                title="Meu Perfil e Preferências"
               >
-                <Lock className="w-3.5 h-3.5" />
-                <span className="text-[10px] font-extrabold uppercase hidden md:inline-block">Alterar Senha</span>
+                <User className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-[10px] font-extrabold uppercase hidden md:inline-block">Meu Perfil</span>
               </button>
 
               <button 
                 onClick={handleLogout}
-                className="bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer"
+                className="bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
                 title="Encerrar sessão segura (LGPD)"
               >
                 <LogOut className="w-4 h-4" />
@@ -2340,6 +2634,26 @@ export default function App() {
                 onApproveClient={handleApproveClient}
                 onRejectClient={handleRejectClient}
                 onResetPassword={handleResetPassword}
+                almoxarifados={almoxarifados}
+              />
+            )}
+
+            {activeTab === "bi" && hasTabPermission("bi") && (
+              <BiMetrics 
+                orders={visibleOrders} 
+                clients={clients} 
+                professionals={professionals}
+                currentUser={currentUser}
+                logs={logs}
+                onNavigate={setActiveTab}
+                onSelectOrder={(os) => {
+                  setSelectedOS(os);
+                  setActiveTab("orders");
+                }}
+                onApproveClient={handleApproveClient}
+                onRejectClient={handleRejectClient}
+                onResetPassword={handleResetPassword}
+                almoxarifados={almoxarifados}
               />
             )}
             
@@ -2350,6 +2664,7 @@ export default function App() {
                 onAddClient={handleAddClient}
                 onUpdateClient={handleUpdateClient}
                 onDeleteClient={handleDeleteClient}
+                almoxarifados={almoxarifados}
               />
             )}
 
@@ -2365,6 +2680,7 @@ export default function App() {
                 onDeleteOrder={handleDeleteOrder}
                 onOpenAiAssistantWithOS={handleOpenAiAssistantWithOS}
                 currentUser={currentUser}
+                blockedDates={blockedDates}
               />
             )}
 
@@ -2373,6 +2689,11 @@ export default function App() {
                 orders={visibleOrders}
                 clients={clients}
                 onQuickScheduleOrder={handleQuickScheduleOrder}
+                currentUser={currentUser}
+                professionalsList={professionals}
+                blockedDates={blockedDates}
+                onAddBlockedDate={handleAddBlockedDate}
+                onDeleteBlockedDate={handleDeleteBlockedDate}
               />
             )}
 
@@ -2388,6 +2709,7 @@ export default function App() {
                 onUpdateTeam={handleUpdateTeam}
                 onDeleteTeam={handleDeleteTeam}
                 orders={orders}
+                almoxarifados={almoxarifados}
               />
             )}
 
@@ -2418,6 +2740,9 @@ export default function App() {
                 onSaveWhatsapp={handleSaveWhatsappSettings}
                 permissions={permissions}
                 onSavePermissions={updatePermissionsState}
+                almoxarifados={almoxarifados}
+                onSaveAlmoxarifados={handleSaveAlmoxarifados}
+                currentUser={currentUser}
                 onNotifyTest={(title, msg, type) => {
                   if (type === "success") toastSuccess(msg, title);
                   else if (type === "error") toastError(msg, title);
@@ -2428,19 +2753,22 @@ export default function App() {
               />
             )}
 
-            {isChangePasswordOpen && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-                <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl border border-slate-100 overflow-hidden flex flex-col">
-                  <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+            {isChangePasswordOpen && currentUser && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+                <div className="bg-white dark:bg-slate-950 rounded-2xl w-full max-w-md shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col transition-all">
+                  
+                  {/* Modal Header */}
+                  <div className="px-6 py-4 bg-slate-900 dark:bg-slate-900 text-white flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
-                      <Lock className="w-4 h-4 text-indigo-400" />
-                      <h3 className="font-extrabold text-sm uppercase tracking-wider">Alterar Minha Senha</h3>
+                      <User className="w-5 h-5 text-indigo-400" />
+                      <h3 className="font-extrabold text-sm uppercase tracking-wider">Meu Perfil & Preferências</h3>
                     </div>
                     <button 
                       onClick={() => {
                         setIsChangePasswordOpen(false);
                         setChangePasswordError("");
                         setChangePasswordSuccess("");
+                        setShowPasswordSection(false);
                       }}
                       className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
                     >
@@ -2448,77 +2776,208 @@ export default function App() {
                     </button>
                   </div>
 
-                  <form onSubmit={handleChangePasswordSubmit} className="p-6 space-y-4">
-                    {changePasswordError && (
-                      <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-xl leading-relaxed">
-                        ⚠️ {changePasswordError}
+                  <div className="p-6 space-y-6 overflow-y-auto max-h-[75vh]">
+                    
+                    {/* User Profile Info Block */}
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/30 space-y-2.5">
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block border-b border-slate-200 dark:border-slate-850 pb-1">
+                        Informações Pessoais (LGPD)
+                      </span>
+                      <div className="grid grid-cols-2 gap-4 text-xs font-semibold pt-1">
+                        <div>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Nome Completo</p>
+                          <p className="text-slate-800 dark:text-slate-200 font-extrabold">{currentUser.name}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Perfil de Acesso</p>
+                          <p className="text-indigo-600 dark:text-indigo-400 font-black uppercase text-[10px] flex items-center gap-1 mt-0.5">
+                            {currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
+                          </p>
+                        </div>
+                        <div className="col-span-2 pt-2 border-t border-slate-150 dark:border-slate-800 mt-1">
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">CPF / Documento de Acesso</p>
+                          <p className="text-slate-700 dark:text-slate-300 font-mono font-medium">{currentUser.id}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Allocation / Work Location Editing Block */}
+                    {(currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin" || currentUser.userType === "profissional") && (
+                      <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
+                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block border-b border-slate-200 dark:border-slate-850 pb-1 flex items-center gap-1.5">
+                          <Settings className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                          Configurações de Alocação
+                        </span>
+                        
+                        {(currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin") ? (
+                          <div className="space-y-1.5">
+                            <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Almoxarifado Vinculado</label>
+                            <select
+                              value={profileWarehouseId}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setProfileWarehouseId(val);
+                                handleUpdateProfileAllocation(val, profileWorkLocation);
+                              }}
+                              className="w-full text-xs font-semibold border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2.5 bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-150 outline-none"
+                            >
+                              <option value="">Nenhum Almoxarifado</option>
+                              {almoxarifados.map((alm) => (
+                                <option key={alm.id} value={alm.id}>
+                                  {alm.name} ({alm.code})
+                                </option>
+                              ))}
+                            </select>
+                            <p className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">Define as permissões de acesso ao estoque e alocação de insumos.</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Local de Trabalho</label>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                placeholder="Ex: EMEB Leda Aparecida Lima Martins"
+                                value={profileWorkLocation}
+                                onChange={(e) => setProfileWorkLocation(e.target.value)}
+                                className="flex-1 text-xs font-semibold border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-150 outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateProfileAllocation(profileWarehouseId, profileWorkLocation)}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-extrabold uppercase px-3 rounded-xl transition-all shadow-xs cursor-pointer"
+                              >
+                                Gravar
+                              </button>
+                            </div>
+                            <p className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">Define a base de atuação ou posto de trabalho para alocação técnica.</p>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {changePasswordSuccess && (
-                      <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold rounded-xl leading-relaxed">
-                        🎉 {changePasswordSuccess}
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Senha Atual *</label>
-                      <input
-                        type="password"
-                        required
-                        className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold"
-                        placeholder="Sua senha de segurança atual"
-                        value={currentPassword}
-                        onChange={(e) => setCurrentPassword(e.target.value)}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Nova Senha *</label>
-                      <input
-                        type="password"
-                        required
-                        className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold"
-                        placeholder="Informe a nova senha (min 3 caracteres)"
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Confirmar Nova Senha *</label>
-                      <input
-                        type="password"
-                        required
-                        className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-semibold"
-                        placeholder="Repita a nova senha criada"
-                        value={confirmNewPassword}
-                        onChange={(e) => setConfirmNewPassword(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="pt-2 flex gap-3 text-xs shrink-0">
+                    {/* Collapsible Password Change Option */}
+                    {!showPasswordSection ? (
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsChangePasswordOpen(false);
-                          setChangePasswordError("");
-                          setChangePasswordSuccess("");
-                        }}
-                        className="flex-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl transition-all shadow-sm cursor-pointer"
+                        onClick={() => setShowPasswordSection(true)}
+                        className="w-full bg-slate-50 hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-850 text-slate-700 dark:text-slate-300 font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl transition-all border border-slate-200/60 dark:border-slate-800 cursor-pointer flex items-center justify-center gap-2"
                       >
-                        Cancelar
+                        <Lock className="w-4 h-4 text-indigo-500" />
+                        Alterar Senha de Segurança
                       </button>
-                      <button
-                        type="submit"
-                        disabled={!!changePasswordSuccess}
-                        className="flex-1 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-bold py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <Lock className="w-4 h-4 text-emerald-400" />
-                        Gravar Nova Senha
-                      </button>
-                    </div>
-                  </form>
+                    ) : (
+                      <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/30 space-y-4 animate-fade-in">
+                        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-850 pb-1.5">
+                          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <Lock className="w-3.5 h-3.5 text-indigo-500" />
+                            Alteração de Senha
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPasswordSection(false);
+                              setChangePasswordError("");
+                              setChangePasswordSuccess("");
+                            }}
+                            className="text-[10px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-bold uppercase transition-colors"
+                          >
+                            Ocultar
+                          </button>
+                        </div>
+
+                        <form onSubmit={handleChangePasswordSubmit} className="space-y-4">
+                          {changePasswordError && (
+                            <div className="p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-400 text-xs font-semibold rounded-xl leading-relaxed">
+                              ⚠️ {changePasswordError}
+                            </div>
+                          )}
+
+                          {changePasswordSuccess && (
+                            <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-400 text-xs font-bold rounded-xl leading-relaxed">
+                              🎉 {changePasswordSuccess}
+                            </div>
+                          )}
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Senha Atual *</label>
+                            <input
+                              type="password"
+                              required
+                              className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 dark:focus:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-150 transition-all font-semibold"
+                              placeholder="Sua senha de segurança atual"
+                              value={currentPassword}
+                              onChange={(e) => setCurrentPassword(e.target.value)}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Nova Senha *</label>
+                            <input
+                              type="password"
+                              required
+                              className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 dark:focus:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-150 transition-all font-semibold"
+                              placeholder="Mínimo de 3 caracteres"
+                              value={newPassword}
+                              onChange={(e) => setNewPassword(e.target.value)}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Confirmar Nova Senha *</label>
+                            <input
+                              type="password"
+                              required
+                              className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 dark:focus:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-150 transition-all font-semibold"
+                              placeholder="Repita a nova senha"
+                              value={confirmNewPassword}
+                              onChange={(e) => setConfirmNewPassword(e.target.value)}
+                            />
+                          </div>
+
+                          <div className="pt-2 flex gap-3 text-xs shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPasswordSection(false);
+                                setChangePasswordError("");
+                                setChangePasswordSuccess("");
+                              }}
+                              className="flex-1 bg-white border border-slate-200 dark:bg-slate-950 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold py-3 rounded-xl transition-all shadow-sm cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={!!changePasswordSuccess}
+                              className="flex-1 bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 disabled:bg-slate-400 text-white font-bold py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                              <Lock className="w-4 h-4 text-emerald-400" />
+                              Gravar Nova Senha
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+
+                    {/* Standard close button at bottom if password section is not open */}
+                    {!showPasswordSection && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleUpdateProfileAllocation(profileWarehouseId, profileWorkLocation);
+                            setIsChangePasswordOpen(false);
+                            setChangePasswordError("");
+                            setChangePasswordSuccess("");
+                          }}
+                          className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-750 text-white font-bold text-xs uppercase tracking-wider py-3 rounded-xl shadow-md transition-all cursor-pointer text-center"
+                        >
+                          Fechar e Salvar
+                        </button>
+                      </div>
+                    )}
+
+                  </div>
                 </div>
               </div>
             )}

@@ -1,4 +1,10 @@
-import { Client, ServiceOrder, ServiceCategory, Professional } from "../types";
+import { Client, ServiceOrder, ServiceCategory, Professional, Almoxarifado } from "../types";
+
+export const INITIAL_ALMOXARIFADOS: Almoxarifado[] = [
+  { id: "alm-1", name: "Almoxarifado Central Araçatuba", code: "ALM-CENTRAL", address: "Rua Marcílio Dias, 1500 - Araçatuba - SP" },
+  { id: "alm-2", name: "Almoxarifado Zona Norte", code: "ALM-ZONANORTE", address: "Av. Prestes Maia, 250 - Araçatuba - SP" },
+  { id: "alm-3", name: "Almoxarifado Oficina Sul", code: "ALM-OFICINASUL", address: "Rua Saudade, 890 - Araçatuba - SP" }
+];
 
 export const INITIAL_CATEGORIES: ServiceCategory[] = [
   { id: "cat-1", name: "Suporte de TI & Redes", color: "blue" },

@@ -78,6 +78,65 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
+// Cache local em memória para respostas do Gemini para otimizar tokens e tolerar picos de demanda
+const geminiCache = new Map<string, { resultText: string; timestamp: number }>();
+const CACHE_TTL_MS = 1000 * 60 * 15; // 15 minutos de TTL
+const MAX_CACHE_SIZE = 150;
+
+function generateCacheKey(body: any): string {
+  const { action, title, clientName, price, category, description, categoriesList, professionalsList, teamsList } = body;
+  return JSON.stringify({
+    action: action || "",
+    title: title || "",
+    clientName: clientName || "",
+    price: price || "",
+    category: category || "",
+    description: description || "",
+    categoriesList: categoriesList || [],
+    professionalsList: professionalsList || [],
+    teamsList: teamsList || []
+  });
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function generateContentWithRetry(ai: any, model: string, contents: string, maxAttempts = 4, initialDelayMs = 1000) {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+      });
+      return response;
+    } catch (error: any) {
+      attempt++;
+      const errorMsg = error?.message || String(error);
+      const isRetryable = 
+        errorMsg.includes("503") || 
+        errorMsg.includes("UNAVAILABLE") || 
+        errorMsg.includes("high demand") || 
+        errorMsg.includes("temporary") || 
+        errorMsg.includes("429") || 
+        errorMsg.includes("ResourceExhausted") ||
+        errorMsg.includes("Overloaded") ||
+        errorMsg.includes("rate limit") ||
+        attempt < maxAttempts;
+      
+      if (!isRetryable || attempt >= maxAttempts) {
+        throw error;
+      }
+      
+      // Cálculo de backoff exponencial: initialDelayMs * 2^(attempt-1) + jitter aleatório
+      const jitter = Math.random() * 200; // jitter para evitar que retentativas simultâneas congestionem o servidor
+      const backoffDelay = initialDelayMs * Math.pow(2, attempt - 1) + jitter;
+      console.warn(`[Gemini Retry] Tentativa ${attempt} falhou devido a alta demanda ou indisponibilidade temporária. Retentando em ${Math.round(backoffDelay)}ms... Erro: ${errorMsg}`);
+      await delay(backoffDelay);
+    }
+  }
+  throw new Error("Falha ao se comunicar com o serviço do Gemini após múltiplas tentativas.");
+}
+
 // API: AI Service Assistants
 app.post("/api/gemini/assist", async (req, res) => {
   try {
@@ -85,6 +144,16 @@ app.post("/api/gemini/assist", async (req, res) => {
     
     if (!action) {
       return res.status(400).json({ error: "Parâmetro 'action' é obrigatório." });
+    }
+
+    // 1. Verificar Cache Local para otimização e mitigação de indisponibilidade
+    const cacheKey = generateCacheKey(req.body);
+    const cachedEntry = geminiCache.get(cacheKey);
+    const now = Date.now();
+    
+    if (cachedEntry && (now - cachedEntry.timestamp < CACHE_TTL_MS)) {
+      console.log(`[Gemini Cache] Hit! Retornando resposta em cache para a ação: "${action}"`);
+      return res.json({ result: cachedEntry.resultText, cached: true });
     }
 
     const ai = getAiClient();
@@ -162,14 +231,36 @@ app.post("/api/gemini/assist", async (req, res) => {
         "whyAssignee": "motivo de sua indicação"
       }`;
     }
+    else if (action === "analyze_os_details") {
+      prompt = `Você é um engenheiro de planejamento e alocação de serviços técnicos de campo de alta performance.
+      Por favor, analise detalhadamente a Ordem de Serviço (OS) abaixo para sugerir automaticamente possíveis materiais necessários, ferramentas de precisão e a equipe ideal para o atendimento.
+
+      DADOS DA ORDEM DE SERVIÇO:
+      - Título da OS: "${title}"
+      - Categoria Cadastrada: "${category || 'Geral'}"
+      - Descrição do Problema: "${description || 'Não detalhado'}"
+
+      Por favor, retorne uma resposta técnica formatada em markdown com as seguintes seções estruturadas:
+      
+      ### 📋 Diagnóstico Inicial IA
+      Uma breve análise técnica em 2-3 linhas do que possivelmente está causando o problema relatado.
+
+      ### 🛠️ Materiais & Peças Recomendadas
+      Uma lista em tópicos dos materiais, insumos, peças de reposição e componentes necessários para realizar este atendimento específico.
+
+      ### 🧰 Ferramentas & EPIs Necessários
+      Quais equipamentos de proteção, ferramentas especializadas e aparelhos de medição (ex: multímetro, chaves específicas) o técnico/equipe deve levar.
+
+      ### 👥 Tipo de Equipe & Especialidade Ideal
+      Qual o perfil ideal do profissional ou equipe (ex: dupla de eletricistas, técnico sênior de TI, mecânico hidráulico) e justificativa técnica do porquê.
+      
+      Mantenha um tom profissional, extremamente técnico e prático, voltado para manutenção de campo e prestação de serviços no Brasil.`;
+    }
     else {
       return res.status(400).json({ error: "Ação desconhecida ou inválida." });
     }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-    });
+    const response = await generateContentWithRetry(ai, "gemini-2.5-flash", prompt);
 
     let resultText = response.text || "Erro ao gerar resposta com a IA. Tente novamente.";
     
@@ -185,11 +276,29 @@ app.post("/api/gemini/assist", async (req, res) => {
       resultText = cleanText.trim();
     }
 
-    return res.json({ result: resultText });
+    // Salvar no cache local para otimização e resiliência a picos de carga
+    if (geminiCache.size >= MAX_CACHE_SIZE) {
+      const firstKey = geminiCache.keys().next().value;
+      if (firstKey) {
+        geminiCache.delete(firstKey);
+      }
+    }
+    geminiCache.set(cacheKey, { resultText, timestamp: Date.now() });
+
+    return res.json({ result: resultText, cached: false });
     
   } catch (error: any) {
     console.error("Gemini API error:", error);
-    return res.status(500).json({ error: error?.message || "Ocorreu um erro interno no servidor ao falar com a IA." });
+    let userMsg = error?.message || "Ocorreu um erro interno no servidor ao falar com a IA.";
+    if (typeof userMsg === "string" && (
+      userMsg.includes("high demand") || 
+      userMsg.includes("UNAVAILABLE") || 
+      userMsg.includes("503") || 
+      userMsg.includes("temporary")
+    )) {
+      userMsg = "O serviço de Inteligência Artificial do Gemini está sob alta demanda ou temporariamente indisponível. Por favor, tente clicar novamente no botão em alguns instantes.";
+    }
+    return res.status(500).json({ error: userMsg });
   }
 });
 

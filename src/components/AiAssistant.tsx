@@ -94,7 +94,14 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Falha ao se conectar com o servidor.");
+        let errMsg = "Falha ao se conectar com o servidor.";
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) {
+            errMsg = errData.error;
+          }
+        } catch (_) {}
+        throw new Error(errMsg);
       }
 
       const data = await response.json();
