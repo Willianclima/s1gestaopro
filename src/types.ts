@@ -14,6 +14,10 @@ export interface Client {
   blocked?: boolean;
   warehouseId?: string; // Almoxarifado responsável (para gestor/adm)
   workLocation?: string; // Local de trabalho (para requisitante/outro)
+  isTechnician?: boolean;
+  specialty?: string;
+  specialties?: string[];
+  technicalRole?: string;
 }
 
 export interface Almoxarifado {

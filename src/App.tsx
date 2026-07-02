@@ -12,6 +12,7 @@ import Professionals from "./components/Professionals";
 import AiAssistant from "./components/AiAssistant";
 import ReportsAndLogs from "./components/ReportsAndLogs";
 import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
+import NotificationDiagnosticModal from "./components/NotificationDiagnosticModal";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
@@ -50,6 +51,17 @@ export default function App() {
           setNotificationPermission(perm);
         }).catch(err => console.error("Erro ao solicitar permissão de notificação:", err));
       }
+    }
+
+    // Registro automático do Service Worker fora do iFrame para suporte a notificações em tempo real
+    if (typeof window !== "undefined" && "serviceWorker" in navigator && window.self === window.top) {
+      navigator.serviceWorker.register("/sw.js")
+        .then((reg) => {
+          console.log("[App] Service Worker registrado automaticamente com sucesso! Escopo:", reg.scope);
+        })
+        .catch((err) => {
+          console.error("[App] Falha ao registrar Service Worker automaticamente:", err);
+        });
     }
   }, []);
 
@@ -112,6 +124,8 @@ export default function App() {
 
   // User self-change password state
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isNotificationDiagOpen, setIsNotificationDiagOpen] = useState(false);
+  const [settingsSubTab, setSettingsSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic" | undefined>(undefined);
   const [profileWarehouseId, setProfileWarehouseId] = useState("");
   const [profileWorkLocation, setProfileWorkLocation] = useState("");
   const [showPasswordSection, setShowPasswordSection] = useState(false);
@@ -257,14 +271,42 @@ export default function App() {
     }
 
     if (cachedClients) {
-      setClients(JSON.parse(cachedClients));
+      try {
+        const parsed = JSON.parse(cachedClients) as Client[];
+        const uniqueClients: Client[] = [];
+        const seen = new Set<string>();
+        parsed.forEach(c => {
+          if (c && c.id && !seen.has(c.id)) {
+            seen.add(c.id);
+            uniqueClients.push(c);
+          }
+        });
+        setClients(uniqueClients);
+        localStorage.setItem("service_mgt_clients2", JSON.stringify(uniqueClients));
+      } catch (e) {
+        setClients(INITIAL_CLIENTS);
+      }
     } else {
       setClients(INITIAL_CLIENTS);
       localStorage.setItem("service_mgt_clients2", JSON.stringify(INITIAL_CLIENTS));
     }
 
     if (cachedOrders) {
-      setOrders(JSON.parse(cachedOrders));
+      try {
+        const parsed = JSON.parse(cachedOrders) as ServiceOrder[];
+        const uniqueOrders: ServiceOrder[] = [];
+        const seen = new Set<string>();
+        parsed.forEach(o => {
+          if (o && o.id && !seen.has(o.id)) {
+            seen.add(o.id);
+            uniqueOrders.push(o);
+          }
+        });
+        setOrders(uniqueOrders);
+        localStorage.setItem("service_mgt_orders2", JSON.stringify(uniqueOrders));
+      } catch (e) {
+        setOrders(INITIAL_ORDERS);
+      }
     } else {
       setOrders(INITIAL_ORDERS);
       localStorage.setItem("service_mgt_orders2", JSON.stringify(INITIAL_ORDERS));
@@ -394,6 +436,224 @@ export default function App() {
       localStorage.setItem("service_mgt_blocked_dates", JSON.stringify(initialBlocked));
     }
   }, []);
+
+  // 1. Real-time synchronization across multiple browser tabs (same local storage)
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.newValue) return;
+      
+      try {
+        if (e.key === "service_mgt_orders2") {
+          const parsed = JSON.parse(e.newValue) as ServiceOrder[];
+          const uniqueOrders: ServiceOrder[] = [];
+          const seen = new Set<string>();
+          parsed.forEach(o => {
+            if (o && o.id && !seen.has(o.id)) {
+              seen.add(o.id);
+              uniqueOrders.push(o);
+            }
+          });
+          setOrders(uniqueOrders);
+        } else if (e.key === "service_mgt_clients2") {
+          const parsed = JSON.parse(e.newValue) as Client[];
+          const uniqueClients: Client[] = [];
+          const seen = new Set<string>();
+          parsed.forEach(c => {
+            if (c && c.id && !seen.has(c.id)) {
+              seen.add(c.id);
+              uniqueClients.push(c);
+            }
+          });
+          setClients(uniqueClients);
+        } else if (e.key === "service_mgt_professionals2") {
+          setProfessionals(JSON.parse(e.newValue));
+        } else if (e.key === "service_mgt_logs2") {
+          setLogs(JSON.parse(e.newValue));
+        } else if (e.key === "service_mgt_logged_user") {
+          setCurrentUser(JSON.parse(e.newValue));
+        }
+      } catch (err) {
+        console.warn("Error synchronizing storage event:", err);
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
+
+  // 2. Comprehensive cross-user, role-specific Notification Engine
+  useEffect(() => {
+    if (!currentUser) {
+      console.log("[NotificationEngine] No logged-in user. Notification engine idle.");
+      return;
+    }
+
+    console.log(`[NotificationEngine] Initializing trace for user: "${currentUser.name}" (Role: "${currentUser.userType}", ID: "${currentUser.id}")`);
+    console.log(`[NotificationEngine] Current orders in state: ${orders.length}`);
+
+    const friendlyStatus: Record<string, string> = {
+      aberto: "Aberto",
+      em_progresso: "Em Progresso / Atendimento",
+      aguardando: "Aguardando Peças/Materiais",
+      concluido: "Concluído / Encerrado",
+      cancelado: "Cancelado / Suspenso"
+    };
+
+    // A. ADMINS, GESTORES, GESTORES DE SERVIÇOS: Notify about new open/unassigned requests
+    if (["admin", "gestor", "gestor_servicos"].includes(currentUser.userType)) {
+      const seenStorageKey = `service_mgt_seen_orders_${currentUser.id}`;
+      let seenIds: string[] = [];
+      try {
+        const cachedSeen = localStorage.getItem(seenStorageKey);
+        seenIds = cachedSeen ? JSON.parse(cachedSeen) : [];
+      } catch (e) {
+        console.error("[NotificationEngine] Error reading seen orders cache:", e);
+      }
+
+      const openOrders = orders.filter(order => order.status === "aberto");
+      console.log(`[NotificationEngine] Admin/Gestor check. Total open orders in system: ${openOrders.length}. Seen IDs:`, seenIds);
+
+      // Find unassigned orders in 'aberto' status that this user hasn't been notified of yet
+      const unseenOpenOrders = openOrders.filter((order) => !seenIds.includes(order.id));
+      console.log(`[NotificationEngine] Unseen open orders that will trigger notification:`, unseenOpenOrders);
+
+      if (unseenOpenOrders.length > 0) {
+        unseenOpenOrders.forEach((order) => {
+          const client = clients.find((c) => c.id === order.clientId);
+          const clientName = client ? client.name : "Requisitante";
+
+          console.log(`[NotificationEngine] TRIGGERING NOTIFICATION for Admin/Gestor: New OS #${order.id} by ${clientName}`);
+
+          // Trigger custom toast notification
+          toastSystem(
+            `Nova requisição #${order.id} aberta por ${clientName}: "${order.title}"`,
+            "Nova Solicitação Recebida"
+          );
+
+          // Native Browser Notification (optional, if outside iframe and allowed)
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            try {
+              new Notification(`Nova Ordem de Serviço #${order.id}`, {
+                body: `A OS "${order.title}" foi aberta por ${clientName} na categoria ${order.category}.`,
+                icon: "/favicon.ico",
+              });
+            } catch (e) {
+              console.error("[NotificationEngine] Error triggering native notification:", e);
+            }
+          }
+
+          seenIds.push(order.id);
+        });
+
+        localStorage.setItem(seenStorageKey, JSON.stringify(seenIds));
+        console.log(`[NotificationEngine] Updated seen orders cache key "${seenStorageKey}" with:`, seenIds);
+      }
+    }
+
+    // B. PROFESSIONALS/TECHNICIANS: Notify about newly assigned orders
+    if (currentUser.userType === "profissional") {
+      const seenStorageKey = `service_mgt_seen_assignments_${currentUser.id}`;
+      let seenIds: string[] = [];
+      try {
+        const cachedSeen = localStorage.getItem(seenStorageKey);
+        seenIds = cachedSeen ? JSON.parse(cachedSeen) : [];
+      } catch (e) {
+        console.error("[NotificationEngine] Error reading seen assignments cache:", e);
+      }
+
+      const matchedAssignedOrders = orders.filter(
+        (order) =>
+          (order.assignedTo === currentUser.name || order.assignedTo === currentUser.id) &&
+          order.status === "em_progresso"
+      );
+      console.log(`[NotificationEngine] Professional check. Assigned in-progress orders: ${matchedAssignedOrders.length}. Already seen IDs:`, seenIds);
+
+      // Find orders assigned to this professional in 'em_progresso' that aren't yet notified
+      const unseenAssignedOrders = matchedAssignedOrders.filter((order) => !seenIds.includes(order.id));
+      console.log(`[NotificationEngine] Unseen assigned orders that will trigger notification:`, unseenAssignedOrders);
+
+      if (unseenAssignedOrders.length > 0) {
+        unseenAssignedOrders.forEach((order) => {
+          console.log(`[NotificationEngine] TRIGGERING NOTIFICATION for Professional: New Assignment OS #${order.id}`);
+          toastInfo(
+            `Você foi designado para a OS #${order.id}: "${order.title}"`,
+            "Nova Atribuição de Serviço"
+          );
+
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            try {
+              new Notification(`Nova Atribuição #${order.id}`, {
+                body: `Você foi designado para realizar a OS: "${order.title}"`,
+                icon: "/favicon.ico",
+              });
+            } catch (e) {
+              console.error("[NotificationEngine] Error triggering native notification:", e);
+            }
+          }
+
+          seenIds.push(order.id);
+        });
+
+        localStorage.setItem(seenStorageKey, JSON.stringify(seenIds));
+        console.log(`[NotificationEngine] Updated seen assignments cache key "${seenStorageKey}" with:`, seenIds);
+      }
+    }
+
+    // C. REQUISITANTES (CLIENTS): Notify when order status changes
+    if (currentUser.userType === "requisitante") {
+      const seenStorageKey = `service_mgt_seen_statuses_${currentUser.id}`;
+      let seenStatuses: Record<string, string> = {};
+      try {
+        const cachedSeen = localStorage.getItem(seenStorageKey);
+        seenStatuses = cachedSeen ? JSON.parse(cachedSeen) : {};
+      } catch (e) {
+        console.error("[NotificationEngine] Error reading seen statuses cache:", e);
+      }
+
+      // Find user's own orders
+      const userOrders = orders.filter((order) => order.clientId === currentUser.id);
+      console.log(`[NotificationEngine] Client/Requisitante check. Total orders created by client: ${userOrders.length}. Seen statuses record:`, seenStatuses);
+      let updated = false;
+
+      userOrders.forEach((order) => {
+        const previousStatus = seenStatuses[order.id];
+        console.log(`[NotificationEngine] Order #${order.id} ("${order.title}"): Previous tracked status = "${previousStatus || 'NONE'}", Current status = "${order.status}"`);
+        
+        // If the order has a recorded status, but it changed, we alert!
+        if (previousStatus && previousStatus !== order.status) {
+          console.log(`[NotificationEngine] TRIGGERING NOTIFICATION for Client: Status changed from "${previousStatus}" to "${order.status}" for OS #${order.id}`);
+          toastSuccess(
+            `O status da sua OS #${order.id} ("${order.title}") foi atualizado para "${friendlyStatus[order.status]}".`,
+            "Atualização de Chamado"
+          );
+
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            try {
+              new Notification(`Atualização na OS #${order.id}`, {
+                body: `Status alterado para "${friendlyStatus[order.status]}" para "${order.title}"`,
+                icon: "/favicon.ico",
+              });
+            } catch (e) {
+              console.error("[NotificationEngine] Error triggering native notification:", e);
+            }
+          }
+          
+          seenStatuses[order.id] = order.status;
+          updated = true;
+        } else if (!previousStatus) {
+          // Store initial status on first load without triggering alerts
+          console.log(`[NotificationEngine] Initializing status cache for OS #${order.id} as "${order.status}" without alerting.`);
+          seenStatuses[order.id] = order.status;
+          updated = true;
+        }
+      });
+
+      if (updated) {
+        localStorage.setItem(seenStorageKey, JSON.stringify(seenStatuses));
+        console.log(`[NotificationEngine] Updated seen statuses cache key "${seenStorageKey}" with:`, seenStatuses);
+      }
+    }
+  }, [orders, currentUser, clients]);
 
   // Sync state helpers to persistent Storage
   const updateClientsState = (newClients: Client[]) => {
@@ -595,9 +855,87 @@ export default function App() {
     toastWarn("Os registros de auditoria do sistema foram expurgados.", "Logs Limpados");
   };
 
+  // Synchronize Client to Professional
+  const syncClientToProfessional = (client: Client, currentProfs: Professional[]): Professional[] => {
+    if (client.isTechnician) {
+      const existingProf = currentProfs.find(p => p.document === client.document || p.id === client.id);
+      if (existingProf) {
+        return currentProfs.map(p => (p.document === client.document || p.id === client.id) ? {
+          ...p,
+          name: client.name,
+          document: client.document,
+          email: client.email,
+          password: client.password || "123",
+          role: client.technicalRole || p.role || "Técnico",
+          specialty: client.specialty || p.specialty || "Geral",
+          specialties: client.specialty ? [client.specialty] : p.specialties || ["Geral"],
+          workLocation: client.workLocation || p.workLocation
+        } : p);
+      } else {
+        const newProf: Professional = {
+          id: "prof-" + Math.random().toString(36).substr(2, 9),
+          name: client.name,
+          document: client.document,
+          email: client.email,
+          password: client.password || "123",
+          role: client.technicalRole || "Técnico",
+          specialty: client.specialty || "Geral",
+          specialties: [client.specialty || "Geral"],
+          userType: "profissional",
+          workLocation: client.workLocation
+        };
+        return [...currentProfs, newProf];
+      }
+    } else {
+      // Remove professional if no longer a technician
+      return currentProfs.filter(p => p.document !== client.document && p.id !== client.id);
+    }
+  };
+
+  // Synchronize Professional to Client
+  const syncProfessionalToClient = (prof: Professional, currentClients: Client[]): Client[] => {
+    const existingClient = currentClients.find(c => (prof.document && c.document === prof.document) || c.id === prof.id);
+    if (existingClient) {
+      return currentClients.map(c => c.id === existingClient.id ? {
+        ...c,
+        name: prof.name,
+        document: prof.document || c.document,
+        email: prof.email || c.email,
+        password: prof.password || "123",
+        isTechnician: true,
+        specialty: prof.specialty,
+        specialties: prof.specialties,
+        technicalRole: prof.role,
+        workLocation: prof.workLocation || c.workLocation
+      } : c);
+    } else {
+      const newClient: Client = {
+        id: "cli-" + Math.random().toString(36).substr(2, 9),
+        name: prof.name,
+        document: prof.document || "",
+        phone: "",
+        email: prof.email || "",
+        address: "",
+        notes: "Criado automaticamente via Corpo Técnico.",
+        createdAt: new Date().toISOString(),
+        userType: "requisitante",
+        password: prof.password || "123",
+        status: "ativo",
+        isTechnician: true,
+        specialty: prof.specialty,
+        specialties: prof.specialties,
+        technicalRole: prof.role,
+        workLocation: prof.workLocation
+      };
+      return [newClient, ...currentClients];
+    }
+  };
+
   // Client Callback implementations
   const handleAddClient = (client: Client) => {
+    const newProfs = syncClientToProfessional(client, professionals);
     updateClientsState([client, ...clients]);
+    updateProfessionalsState(newProfs);
     addSystemLog(
       "Cadastro de Requisitante",
       `Novo requisitante "${client.name}" (${client.document}) cadastrado com sucesso.`,
@@ -609,6 +947,9 @@ export default function App() {
   const handleUpdateClient = (updatedClient: Client) => {
     const oldClient = clients.find(c => c.id === updatedClient.id);
     updateClientsState(clients.map(c => c.id === updatedClient.id ? updatedClient : c));
+    
+    const newProfs = syncClientToProfessional(updatedClient, professionals);
+    updateProfessionalsState(newProfs);
     
     let logDetail = `Os dados cadastrais do requisitante "${updatedClient.name}" foram atualizados.`;
     if (oldClient && oldClient.password !== updatedClient.password) {
@@ -626,6 +967,12 @@ export default function App() {
   const handleDeleteClient = (id: string) => {
     const client = clients.find(c => c.id === id);
     updateClientsState(clients.filter(c => c.id !== id));
+    
+    if (client) {
+      const newProfs = professionals.filter(p => p.document !== client.document && p.id !== client.id);
+      updateProfessionalsState(newProfs);
+    }
+
     addSystemLog(
       "Remoção de Requisitante",
       `Requisitante "${client ? client.name : id}" removido do sistema de gestão integrada.`,
@@ -745,6 +1092,10 @@ export default function App() {
   // Professionals Callback implementations
   const handleAddProfessional = (newProf: Professional) => {
     updateProfessionalsState([...professionals, newProf]);
+    
+    const newClients = syncProfessionalToClient(newProf, clients);
+    updateClientsState(newClients);
+
     addSystemLog(
       "Cadastro de Técnico",
       `Novo profissional do corpo técnico, "${newProf.name}" (${newProf.specialty}), integrado ao sistema.`,
@@ -756,6 +1107,16 @@ export default function App() {
   const handleDeleteProfessional = (id: string) => {
     const prof = professionals.find(p => p.id === id);
     updateProfessionalsState(professionals.filter(p => p.id !== id));
+    
+    if (prof) {
+      const updatedClients = clients.map(c => 
+        (prof.document && c.document === prof.document) || c.id === prof.id
+          ? { ...c, isTechnician: false, specialty: undefined, technicalRole: undefined }
+          : c
+      );
+      updateClientsState(updatedClients);
+    }
+
     addSystemLog(
       "Exclusão de Técnico",
       `${prof ? `Técnico "${prof.name}"` : `Técnico de ID ${id}`} desligado da equipe de campo no sistema de requisições.`,
@@ -767,6 +1128,9 @@ export default function App() {
   const handleUpdateProfessional = (updatedProf: Professional) => {
     const oldProf = professionals.find(p => p.id === updatedProf.id);
     updateProfessionalsState(professionals.map(p => p.id === updatedProf.id ? updatedProf : p));
+
+    const newClients = syncProfessionalToClient(updatedProf, clients);
+    updateClientsState(newClients);
 
     let logDetail = `Os dados cadastrais e especialidades do técnico de campo "${updatedProf.name}" foram editados e atualizados pelo Gestor.`;
     if (oldProf && oldProf.password !== updatedProf.password) {
@@ -1569,12 +1933,12 @@ export default function App() {
   // Filter orders dynamically according to currently logged in profile, maintaining hard LGPD Isolation
   const visibleOrders = orders.filter(os => {
     if (!currentUser) return false;
-    if (currentUser.userType === "gestor") {
-      return true; // Gestores see all requisitions
+    if (["admin", "gestor", "gestor_servicos"].includes(currentUser.userType)) {
+      return true; // Admins and managers see all requisitions
     }
     if (currentUser.userType === "profissional") {
-      // Technicians see orders specifically assigned to their name
-      return os.assignedTo === currentUser.name;
+      // Technicians see orders specifically assigned to their name or ID
+      return os.assignedTo === currentUser.name || os.assignedTo === currentUser.id;
     }
     if (currentUser.userType === "requisitante") {
       // Regular customers/claimants ONLY see orders created by them
@@ -2318,7 +2682,7 @@ export default function App() {
 
                 {cadastrosOpen && (
                   <div className="pl-3 border-l border-slate-800/80 ml-5 space-y-1 my-1">
-                    {/* Requisitantes & GS */}
+                    {/* Usuários */}
                     {hasTabPermission("clients") && (
                       <button
                         type="button"
@@ -2330,7 +2694,7 @@ export default function App() {
                         }`}
                       >
                         <Users className="w-3.5 h-3.5" />
-                        Requisitantes & GS
+                        Usuários
                       </button>
                     )}
 
@@ -2402,7 +2766,11 @@ export default function App() {
             {/* Configurações SMTP / Painel de Governança */}
             {hasTabPermission("settings") && (
               <button
-                onClick={() => { setActiveTab("settings"); setIsSidebarOpen(false); }}
+                onClick={() => { 
+                  setSettingsSubTab(undefined);
+                  setActiveTab("settings"); 
+                  setIsSidebarOpen(false); 
+                }}
                 className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === "settings"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
@@ -2410,7 +2778,7 @@ export default function App() {
                 }`}
               >
                 <Settings className="w-4 h-4" />
-                Configurações & Governança
+                Configurações & Almoxarifados
               </button>
             )}
 
@@ -2499,7 +2867,7 @@ export default function App() {
 
             {/* Browser Notifications Indicator */}
             <button
-              onClick={requestNotificationPermission}
+              onClick={() => setIsNotificationDiagOpen(true)}
               className={`hidden md:flex items-center gap-1.5 p-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer ${
                 isInIframe
                   ? "bg-amber-50/20 hover:bg-amber-50/40 border-amber-200/50 text-amber-700 dark:bg-amber-950/10 dark:border-amber-900/20 dark:text-amber-400"
@@ -2509,15 +2877,7 @@ export default function App() {
                   ? "bg-rose-50/50 hover:bg-rose-50 border-rose-100 text-rose-700 dark:bg-rose-950/20 dark:border-rose-900/30 dark:text-rose-400"
                   : "bg-amber-50/50 hover:bg-amber-50 border-amber-100 text-amber-700 animate-pulse dark:bg-amber-950/20 dark:border-amber-900/30 dark:text-amber-400"
               }`}
-              title={
-                isInIframe
-                  ? "As notificações estão suspensas devido às políticas de segurança do iFrame (Preview). Clique para saber como ativar em uma nova aba."
-                  : notificationPermission === "granted"
-                  ? "Notificações de navegador ativadas!"
-                  : notificationPermission === "denied"
-                  ? "Notificações bloqueadas. Clique para tentar reativar."
-                  : "Clique para ativar notificações de navegador para novas OS e atualizações."
-              }
+              title="Clique para abrir o painel de diagnóstico de notificações e Service Worker."
             >
               {notificationPermission === "granted" ? (
                 <Bell className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -2537,59 +2897,8 @@ export default function App() {
               </span>
             </button>
 
-            {/* Quick Theme Toggle Segmented Control */}
-            <div className="flex items-center gap-0.5 bg-slate-50 dark:bg-slate-800 p-1 rounded-xl border border-slate-200/60 dark:border-slate-700">
-              <button
-                type="button"
-                onClick={() => setThemePreference("light")}
-                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                  themePreference === "light"
-                    ? "bg-white text-indigo-600 shadow-xs dark:bg-slate-700 dark:text-indigo-400"
-                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                }`}
-                title="Modo Claro"
-              >
-                <Sun className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setThemePreference("dark")}
-                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                  themePreference === "dark"
-                    ? "bg-white text-indigo-600 shadow-xs dark:bg-slate-700 dark:text-indigo-400"
-                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                }`}
-                title="Modo Escuro"
-              >
-                <Moon className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setThemePreference("system")}
-                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                  themePreference === "system"
-                    ? "bg-white text-indigo-600 shadow-xs dark:bg-slate-700 dark:text-indigo-400"
-                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                }`}
-                title="Tema Automático"
-              >
-                <Monitor className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
             <div className="flex items-center gap-2.5">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-slate-900 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xs text-white font-extrabold text-xs flex items-center justify-center uppercase">
-                  {currentUser.name.charAt(0)}
-                </div>
-                <div className="text-left hidden sm:block">
-                  <span className="text-slate-800 dark:text-slate-200 font-bold block leading-none max-w-[140px] truncate">{currentUser.name}</span>
-                  <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
-                    {currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
-                  </span>
-                </div>
-              </div>
-              
+              {/* Clean Profile Button - Theme Selector moved inside Popup */}
               <button 
                 onClick={() => {
                   setProfileWarehouseId(currentUser.warehouseId || "");
@@ -2597,11 +2906,18 @@ export default function App() {
                   setIsChangePasswordOpen(true);
                   setShowPasswordSection(false); // Reset password section view initially
                 }}
-                className="bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer flex items-center justify-center gap-1.5 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700"
+                className="flex items-center gap-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 p-1.5 px-3 rounded-xl transition-all border border-slate-200/60 dark:border-slate-700 cursor-pointer text-left shrink-0 shadow-xs"
                 title="Meu Perfil e Preferências"
               >
-                <User className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                <span className="text-[10px] font-extrabold uppercase hidden md:inline-block">Meu Perfil</span>
+                <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 shadow-xs text-white font-extrabold text-[11px] flex items-center justify-center uppercase shrink-0">
+                  {currentUser.name.charAt(0)}
+                </div>
+                <div className="text-left hidden sm:block">
+                  <span className="text-slate-800 dark:text-slate-200 font-extrabold text-xs block leading-none max-w-[120px] truncate">{currentUser.name}</span>
+                  <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
+                    {currentUser.userType === "admin" ? "⚡ Administrador" : currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "gestor_servicos" ? "📋 Gestor de Serviços" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
+                  </span>
+                </div>
               </button>
 
               <button 
@@ -2622,6 +2938,7 @@ export default function App() {
             {activeTab === "dashboard" && hasTabPermission("dashboard") && (
               <Dashboard 
                 orders={visibleOrders} 
+                rawOrders={orders}
                 clients={clients} 
                 professionals={professionals}
                 currentUser={currentUser}
@@ -2635,6 +2952,9 @@ export default function App() {
                 onRejectClient={handleRejectClient}
                 onResetPassword={handleResetPassword}
                 almoxarifados={almoxarifados}
+                notificationPermission={notificationPermission}
+                isInIframe={isInIframe}
+                onRequestNotificationPermission={requestNotificationPermission}
               />
             )}
 
@@ -2665,12 +2985,14 @@ export default function App() {
                 onUpdateClient={handleUpdateClient}
                 onDeleteClient={handleDeleteClient}
                 almoxarifados={almoxarifados}
+                categories={categories}
               />
             )}
 
             {activeTab === "orders" && hasTabPermission("orders") && (
               <ServiceOrders 
                 orders={visibleOrders}
+                globalOrders={orders}
                 clients={clients}
                 categories={categories.map(c => c.name)}
                 professionalsList={professionals}
@@ -2710,6 +3032,7 @@ export default function App() {
                 onDeleteTeam={handleDeleteTeam}
                 orders={orders}
                 almoxarifados={almoxarifados}
+                clients={clients}
               />
             )}
 
@@ -2743,6 +3066,8 @@ export default function App() {
                 almoxarifados={almoxarifados}
                 onSaveAlmoxarifados={handleSaveAlmoxarifados}
                 currentUser={currentUser}
+                initialSubTab={settingsSubTab}
+                clients={clients}
                 onNotifyTest={(title, msg, type) => {
                   if (type === "success") toastSuccess(msg, title);
                   else if (type === "error") toastError(msg, title);
@@ -2791,12 +3116,65 @@ export default function App() {
                         <div>
                           <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Perfil de Acesso</p>
                           <p className="text-indigo-600 dark:text-indigo-400 font-black uppercase text-[10px] flex items-center gap-1 mt-0.5">
-                            {currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
+                            {currentUser.userType === "admin" ? "⚡ Administrador" : currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "gestor_servicos" ? "📋 Gestor de Serviços" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
                           </p>
                         </div>
                         <div className="col-span-2 pt-2 border-t border-slate-150 dark:border-slate-800 mt-1">
                           <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">CPF / Documento de Acesso</p>
                           <p className="text-slate-700 dark:text-slate-300 font-mono font-medium">{currentUser.id}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Preferências de Tema Visual */}
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block border-b border-slate-200 dark:border-slate-850 pb-1 flex items-center gap-1.5">
+                        <Sun className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        Tema Visual do Sistema
+                      </span>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight">Escolha como prefere visualizar as cores do painel administrativo.</p>
+                        
+                        <div className="flex items-center gap-0.5 bg-white dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800/80 shadow-xs shrink-0 self-start sm:self-center">
+                          <button
+                            type="button"
+                            onClick={() => setThemePreference("light")}
+                            className={`p-1.5 px-2.5 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1 ${
+                              themePreference === "light"
+                                ? "bg-slate-900 text-white shadow-xs dark:bg-slate-850 dark:text-indigo-400"
+                                : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                            }`}
+                            title="Modo Claro"
+                          >
+                            <Sun className="w-3.5 h-3.5" />
+                            <span>Claro</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setThemePreference("dark")}
+                            className={`p-1.5 px-2.5 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1 ${
+                              themePreference === "dark"
+                                ? "bg-slate-900 text-white shadow-xs dark:bg-slate-850 dark:text-indigo-400"
+                                : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                            }`}
+                            title="Modo Escuro"
+                          >
+                            <Moon className="w-3.5 h-3.5" />
+                            <span>Escuro</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setThemePreference("system")}
+                            className={`p-1.5 px-2.5 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1 ${
+                              themePreference === "system"
+                                ? "bg-slate-900 text-white shadow-xs dark:bg-slate-850 dark:text-indigo-400"
+                                : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                            }`}
+                            title="Tema Automático"
+                          >
+                            <Monitor className="w-3.5 h-3.5" />
+                            <span>Auto</span>
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -2828,7 +3206,23 @@ export default function App() {
                                 </option>
                               ))}
                             </select>
-                            <p className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">Define as permissões de acesso ao estoque e alocação de insumos.</p>
+                            <div className="flex items-center justify-between gap-2 mt-1">
+                              <p className="text-[9px] text-slate-400 dark:text-slate-500 font-medium leading-tight">Define as permissões de acesso ao estoque e alocação de insumos.</p>
+                              {hasTabPermission("settings") && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsChangePasswordOpen(false);
+                                    setSettingsSubTab("almoxarifados");
+                                    setActiveTab("settings");
+                                    toastInfo("Redirecionando para o Cadastro de Almoxarifados...", "Gerenciador");
+                                  }}
+                                  className="text-[9px] text-indigo-600 dark:text-indigo-400 font-extrabold hover:underline uppercase tracking-wider bg-transparent border-none cursor-pointer p-0 shrink-0 select-none"
+                                >
+                                  ⚙️ Gerenciar Nomes
+                                </button>
+                              )}
+                            </div>
                           </div>
                         ) : (
                           <div className="space-y-1.5">
@@ -3204,6 +3598,15 @@ export default function App() {
 
                 </div>
               </div>
+            )}
+
+            {isNotificationDiagOpen && (
+              <NotificationDiagnosticModal
+                isOpen={isNotificationDiagOpen}
+                onClose={() => setIsNotificationDiagOpen(false)}
+                onRequestPermission={requestNotificationPermission}
+                currentPermission={notificationPermission}
+              />
             )}
           </div>
         </main>

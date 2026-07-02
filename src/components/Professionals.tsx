@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Professional, ServiceCategory, Team, ServiceOrder, Almoxarifado } from "../types";
-import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star } from "lucide-react";
+import { Professional, ServiceCategory, Team, ServiceOrder, Almoxarifado, Client } from "../types";
+import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Check, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star } from "lucide-react";
 
 interface ProfessionalsProps {
   professionals: Professional[];
@@ -14,6 +14,7 @@ interface ProfessionalsProps {
   onDeleteTeam?: (id: string) => void;
   orders?: ServiceOrder[];
   almoxarifados?: Almoxarifado[];
+  clients?: Client[];
 }
 
 export default function Professionals({
@@ -27,7 +28,8 @@ export default function Professionals({
   onUpdateTeam,
   onDeleteTeam,
   orders = [],
-  almoxarifados = []
+  almoxarifados = [],
+  clients = []
 }: ProfessionalsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -50,6 +52,11 @@ export default function Professionals({
   const [password, setPassword] = useState("");
   const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
   const [workLocation, setWorkLocation] = useState("");
+
+  // State variables for importing/linking existing user
+  const [isImportingUser, setIsImportingUser] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [userSearchTerm, setUserSearchTerm] = useState("");
 
   const filteredProfessionals = professionals.filter(p => {
     return p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -106,9 +113,15 @@ export default function Professionals({
     setPassword("");
     setSelectedSpecialties([]);
     setWorkLocation("");
+    setIsImportingUser(false);
+    setSelectedClientId("");
+    setUserSearchTerm("");
   };
 
   const handleOpenForm = (prof?: Professional) => {
+    setIsImportingUser(false);
+    setSelectedClientId("");
+    setUserSearchTerm("");
     if (prof) {
       setEditingProfessional(prof);
       setName(prof.name);
@@ -569,6 +582,93 @@ export default function Professionals({
 
             <form onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0">
               <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                {/* Import/Link from existing system users */}
+                {!editingProfessional && clients && clients.length > 0 && (
+                  <div className="p-4 bg-indigo-50/50 dark:bg-slate-850/40 border border-indigo-100/60 dark:border-slate-800/80 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wide">
+                        Vincular Usuário Existente?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newVal = !isImportingUser;
+                          setIsImportingUser(newVal);
+                          if (!newVal) {
+                            setSelectedClientId("");
+                            setName("");
+                            setDocument("");
+                            setPassword("123");
+                          }
+                        }}
+                        className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline uppercase tracking-wider cursor-pointer bg-transparent border-none p-0"
+                      >
+                        {isImportingUser ? "Preencher Manual" : "Selecionar do Sistema"}
+                      </button>
+                    </div>
+
+                    {isImportingUser && (
+                      <div className="space-y-2.5">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Buscar usuário por nome ou CPF..."
+                            value={userSearchTerm}
+                            onChange={(e) => setUserSearchTerm(e.target.value)}
+                            className="w-full text-xs border border-slate-200 rounded-lg pl-9 pr-3 py-2 bg-white dark:bg-slate-750 font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+
+                        <div className="max-h-36 overflow-y-auto border border-slate-200/80 rounded-xl bg-white dark:bg-slate-800/50 p-1.5 divide-y divide-slate-100 dark:divide-slate-800/80">
+                          {clients
+                            .filter(c => 
+                              c.name.toLowerCase().includes(userSearchTerm.toLowerCase()) || 
+                              c.document.includes(userSearchTerm)
+                            )
+                            .map(c => {
+                              const isSelected = selectedClientId === c.id;
+                              return (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedClientId(c.id);
+                                    setName(c.name);
+                                    setDocument(c.document);
+                                    setPassword(c.password || "123");
+                                    if (c.workLocation) {
+                                      setWorkLocation(c.workLocation);
+                                    }
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs rounded-lg transition-all flex items-center justify-between ${
+                                    isSelected 
+                                      ? "bg-indigo-50 dark:bg-slate-700/80 text-indigo-700 dark:text-indigo-300 font-extrabold shadow-sm" 
+                                      : "hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300 font-semibold"
+                                  }`}
+                                >
+                                  <div className="min-w-0 pr-2">
+                                    <span className="block truncate font-bold text-[11px]">{c.name}</span>
+                                    <span className="text-[9px] text-slate-400 dark:text-slate-500 font-medium leading-none block mt-0.5">
+                                      CPF: {c.document} | Perfil: {c.userType === "gestor" ? "Gestor" : c.userType === "gestor_servicos" ? "GS" : "Requisitante"}
+                                    </span>
+                                  </div>
+                                  {isSelected && <Check className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          {clients.filter(c => 
+                            c.name.toLowerCase().includes(userSearchTerm.toLowerCase()) || 
+                            c.document.includes(userSearchTerm)
+                          ).length === 0 && (
+                            <p className="text-center text-[10px] text-slate-400 dark:text-slate-500 py-3 font-medium">Nenhum usuário encontrado.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Name */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Nome Completo *</label>

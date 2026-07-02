@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder, Almoxarifado } from "../types";
+import { Client, ServiceOrder, Almoxarifado, ServiceCategory } from "../types";
 import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -10,6 +10,7 @@ interface ClientsProps {
   onUpdateClient: (client: Client) => void;
   onDeleteClient: (id: string) => void;
   almoxarifados?: Almoxarifado[];
+  categories?: ServiceCategory[];
 }
 
 const formatDoc = (value: string) => {
@@ -63,7 +64,15 @@ const ClientsSkeleton = () => (
   </div>
 );
 
-export default function Clients({ clients, orders, onAddClient, onUpdateClient, onDeleteClient, almoxarifados = [] }: ClientsProps) {
+export default function Clients({ 
+  clients, 
+  orders, 
+  onAddClient, 
+  onUpdateClient, 
+  onDeleteClient, 
+  almoxarifados = [],
+  categories = []
+}: ClientsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
@@ -87,6 +96,11 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
   const [password, setPassword] = useState("");
   const [workLocation, setWorkLocation] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
+  
+  // Technician synchronization fields
+  const [isTechnician, setIsTechnician] = useState(false);
+  const [specialty, setSpecialty] = useState("");
+  const [technicalRole, setTechnicalRole] = useState("Técnico");
 
   // Detailed view of client (history of Service Orders)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -113,6 +127,9 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
       setPassword(client.password || "123");
       setWorkLocation(client.workLocation || "");
       setWarehouseId(client.warehouseId || "");
+      setIsTechnician(client.isTechnician || false);
+      setSpecialty(client.specialty || "");
+      setTechnicalRole(client.technicalRole || "Técnico");
     } else {
       setEditingClient(null);
       setName("");
@@ -125,6 +142,9 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
       setPassword("123");
       setWorkLocation("");
       setWarehouseId("");
+      setIsTechnician(false);
+      setSpecialty("");
+      setTechnicalRole("Técnico");
     }
     setIsFormOpen(true);
   };
@@ -145,7 +165,10 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
         userType,
         password: password || "123",
         workLocation: workLocation || undefined,
-        warehouseId: warehouseId || undefined
+        warehouseId: warehouseId || undefined,
+        isTechnician,
+        specialty: isTechnician ? (specialty || (categories[0]?.name || "Geral")) : undefined,
+        technicalRole: isTechnician ? technicalRole : undefined
       });
     } else {
       const newClient: Client = {
@@ -161,7 +184,10 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
         password: password || "123",
         status: "ativo",
         workLocation: workLocation || undefined,
-        warehouseId: warehouseId || undefined
+        warehouseId: warehouseId || undefined,
+        isTechnician,
+        specialty: isTechnician ? (specialty || (categories[0]?.name || "Geral")) : undefined,
+        technicalRole: isTechnician ? technicalRole : undefined
       };
       onAddClient(newClient);
     }
@@ -179,8 +205,8 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
       {/* Top Header Controls */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Requisitantes & Gestores (GS)</h1>
-          <p className="text-sm text-slate-500 font-medium">Controle de cadastros administrativos (requisitantes e gestores) e histórico integrado de solicitações.</p>
+          <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Cadastro & Gestão de Usuários</h1>
+          <p className="text-sm text-slate-500 font-medium">Controle de cadastros administrativos, requisitantes, gestores e histórico integrado de solicitações do sistema.</p>
         </div>
 
         <button
@@ -188,7 +214,7 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
           className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider py-3 px-5 rounded-xl shadow-lg shadow-slate-950/5 active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
         >
           <Plus className="w-4 h-4 text-emerald-400" />
-          Cadastrar Requisitante / Gestor
+          Cadastrar Usuário
         </button>
       </div>
 
@@ -459,7 +485,7 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white shrink-0">
-              <h3 className="font-bold text-base">{editingClient ? "Editar Requisitante / Gestor" : "Cadastrar Requisitante / Gestor"}</h3>
+              <h3 className="font-bold text-base">{editingClient ? "Editar Usuário" : "Cadastrar Usuário"}</h3>
               <button 
                 onClick={() => setIsFormOpen(false)}
                 className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
@@ -621,6 +647,59 @@ export default function Clients({ clients, orders, onAddClient, onUpdateClient, 
                     </select>
                   </div>
                 )}
+
+                {/* Integração com Corpo Técnico */}
+                <div className="p-4 bg-indigo-50/90 dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-900 rounded-2xl space-y-3.5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-black text-indigo-900 dark:text-indigo-200 uppercase tracking-wide">Vincular como Técnico?</h4>
+                      <p className="text-[10px] text-indigo-800 dark:text-indigo-300 mt-0.5 leading-tight font-medium">Se ativado, este usuário será incluído automaticamente no corpo técnico e poderá receber ordens de serviço.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer select-none">
+                      <input 
+                        type="checkbox" 
+                        checked={isTechnician} 
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setIsTechnician(checked);
+                          if (checked && !specialty) {
+                            setSpecialty(categories[0]?.name || "Geral");
+                          }
+                        }}
+                        className="sr-only peer" 
+                      />
+                      <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+
+                  {isTechnician && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2.5 border-t border-indigo-200/50 dark:border-indigo-950">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-900 dark:text-slate-100 uppercase tracking-wider mb-1">Cargo / Função Técnica</label>
+                        <input
+                          type="text"
+                          className="w-full text-xs border-2 border-slate-300 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 transition-all font-bold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-600 shadow-xs"
+                          placeholder="Ex: Eletricista, Técnico Pleno"
+                          value={technicalRole}
+                          onChange={(e) => setTechnicalRole(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-900 dark:text-slate-100 uppercase tracking-wider mb-1">Especialidade Principal *</label>
+                        <select
+                          className="w-full text-xs border-2 border-slate-300 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 transition-all font-bold text-slate-900 dark:text-slate-100 cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-600 shadow-xs"
+                          value={specialty}
+                          onChange={(e) => setSpecialty(e.target.value)}
+                        >
+                          {categories.map(cat => (
+                            <option key={cat.id} value={cat.name}>{cat.name}</option>
+                          ))}
+                          <option value="Geral">Serviços Gerais / Outro</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Observações Adicionais</label>

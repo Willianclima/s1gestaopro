@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ServiceOrder, Client, BlockedDate, Professional, CurrentUser } from "../types";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, User, CheckCircle, ArrowRight, Plus, Lock, Trash2, ShieldAlert, Sparkles } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, User, CheckCircle, ArrowRight, Plus, Lock, Trash2, ShieldAlert, Sparkles, AlertTriangle, HelpCircle } from "lucide-react";
 
 interface SchedulerProps {
   orders: ServiceOrder[];
@@ -31,6 +31,11 @@ export default function Scheduler({
   const [newBlockType, setNewBlockType] = useState<"holiday" | "day_off">("holiday");
   const [newBlockProfId, setNewBlockProfId] = useState("all");
   const [blockError, setBlockError] = useState("");
+
+  // New features for viewing and filtering holidays/days off
+  const [viewMode, setViewMode] = useState<"general" | "blocked_calendar">("general");
+  const [blockFilterType, setBlockFilterType] = useState<"all" | "holiday" | "day_off">("all");
+  const [blockFilterProf, setBlockFilterProf] = useState<string>("all");
 
   const handleCreateBlock = (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,12 +112,53 @@ export default function Scheduler({
 
   const selectedDayOrders = getOrdersForDate(selectedDateStr);
 
+  // Month-specific blocks calculation for the interactive calendar filters and timeline
+  const currentMonthBlocks = blockedDates.filter(b => {
+    const [bYear, bMonth] = b.date.split("-").map(Number);
+    return bYear === year && (bMonth - 1) === month;
+  }).filter(b => {
+    if (blockFilterType === "holiday" && b.type !== "holiday") return false;
+    if (blockFilterType === "day_off" && b.type !== "day_off") return false;
+    if (blockFilterProf !== "all" && b.type === "day_off" && b.professionalId !== blockFilterProf) return false;
+    return true;
+  }).sort((a, b) => a.date.localeCompare(b.date));
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Agenda de Atendimentos</h1>
-        <p className="text-sm text-slate-500 font-medium font-sans">Acompanhe os prazos de início e conclusão de serviços e as visitas marcadas na semana.</p>
+      {/* Header and Mode Selector */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Agenda de Atendimentos</h1>
+          <p className="text-sm text-slate-500 font-medium font-sans">Acompanhe prazos de início/conclusão de serviços ou planeje feriados e folgas técnicas.</p>
+        </div>
+        
+        {/* Modern Segmented Control */}
+        <div className="flex bg-slate-100 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800 p-1 rounded-xl self-start md:self-center shadow-xs">
+          <button
+            type="button"
+            onClick={() => setViewMode("general")}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              viewMode === "general"
+                ? "bg-white text-slate-900 shadow-xs dark:bg-slate-800 dark:text-white"
+                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-400"
+            }`}
+          >
+            <CalendarIcon className="w-3.5 h-3.5 text-slate-500" />
+            <span>Calendário de Serviços</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("blocked_calendar")}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              viewMode === "blocked_calendar"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-400"
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Feriados & Folgas do Mês</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Grid */}
@@ -120,27 +166,108 @@ export default function Scheduler({
         {/* Calendar visual column */}
         <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
           {/* Calendar Controller Header */}
-          <div className="flex items-center justify-between mb-6">
-            <span className="font-extrabold text-base text-slate-800 tracking-tight">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+            <span className="font-extrabold text-base text-slate-800 tracking-tight flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${viewMode === "blocked_calendar" ? "bg-indigo-600" : "bg-emerald-500"}`}></span>
               {monthNames[month]} de {year}
             </span>
-            <div className="flex bg-slate-50 border border-slate-200/55 rounded-xl p-1 gap-0.5">
-              <button
-                onClick={handlePrevMonth}
-                className="p-1 px-2.5 rounded-lg hover:bg-white text-slate-600 hover:text-slate-900 transition-all font-semibold"
-                title="Mês anterior"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleNextMonth}
-                className="p-1 px-2.5 rounded-lg hover:bg-white text-slate-600 hover:text-slate-900 transition-all font-semibold"
-                title="Próximo mês"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+            
+            <div className="flex items-center gap-2">
+              <div className="flex bg-slate-50 border border-slate-200/55 rounded-xl p-1 gap-0.5">
+                <button
+                  onClick={handlePrevMonth}
+                  className="p-1 px-2.5 rounded-lg hover:bg-white text-slate-600 hover:text-slate-900 transition-all font-semibold cursor-pointer"
+                  title="Mês anterior"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleNextMonth}
+                  className="p-1 px-2.5 rounded-lg hover:bg-white text-slate-600 hover:text-slate-900 transition-all font-semibold cursor-pointer"
+                  title="Próximo mês"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Intuitively integrated filter bar for the Holidays/Days Off calendar view */}
+          {viewMode === "blocked_calendar" && (
+            <div className="mb-6 p-4 bg-indigo-50/40 border border-indigo-100 rounded-2xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-indigo-750 block">Filtros do Calendário</span>
+                  <p className="text-[10px] text-slate-500 font-medium">Selecione o tipo de bloqueio ou filtre por técnico.</p>
+                </div>
+                <span className="text-[10px] text-indigo-700 font-extrabold bg-indigo-100/70 border border-indigo-200/60 px-2.5 py-0.5 rounded-full uppercase tracking-wide">
+                  {currentMonthBlocks.length} {currentMonthBlocks.length === 1 ? "registro" : "registros"}
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Type Filter */}
+                <div className="flex bg-white border border-slate-200 rounded-xl p-0.5 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBlockFilterType("all")}
+                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
+                      blockFilterType === "all"
+                        ? "bg-slate-900 text-white shadow-xs"
+                        : "text-slate-400 hover:text-slate-700"
+                    }`}
+                  >
+                    Todos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBlockFilterType("holiday");
+                      setBlockFilterProf("all");
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
+                      blockFilterType === "holiday"
+                        ? "bg-rose-600 text-white shadow-xs"
+                        : "text-slate-400 hover:text-slate-700"
+                    }`}
+                  >
+                    Feriados
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBlockFilterType("day_off")}
+                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
+                      blockFilterType === "day_off"
+                        ? "bg-amber-600 text-white shadow-xs"
+                        : "text-slate-400 hover:text-slate-700"
+                    }`}
+                  >
+                    Folgas
+                  </button>
+                </div>
+
+                {/* Professional Filter (only relevant if type is not strictly holidays) */}
+                <div className="flex items-center gap-1.5">
+                  <select
+                    disabled={blockFilterType === "holiday"}
+                    value={blockFilterProf}
+                    onChange={(e) => setBlockFilterProf(e.target.value)}
+                    className="w-full text-[10px] font-extrabold uppercase tracking-wider border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-slate-700 outline-none disabled:opacity-50 disabled:bg-slate-50 cursor-pointer"
+                  >
+                    <option value="all">👥 Todos os Técnicos</option>
+                    {professionalsList
+                      .filter(p => !p.userType || p.userType === "profissional")
+                      .map(p => (
+                        <option key={p.id} value={p.name}>
+                          🔧 {p.name}
+                        </option>
+                      ))
+                    }
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Calendar grid titles */}
           <div className="grid grid-cols-7 text-center text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-3">
@@ -167,37 +294,77 @@ export default function Scheduler({
               // Highlight today if matching current mock time (June 15, 2026)
               const isToday = fullDateStr === "2026-06-15";
 
+              // Find active blocks on this date
               const dayBlocks = blockedDates.filter(b => b.date === fullDateStr);
-              const hasHoliday = dayBlocks.some(b => b.type === "holiday");
-              const hasDayOff = dayBlocks.some(b => b.type === "day_off");
+              
+              // Apply active filters if we are in blocked_calendar view mode
+              const filteredDayBlocks = dayBlocks.filter(b => {
+                if (viewMode === "blocked_calendar") {
+                  if (blockFilterType === "holiday" && b.type !== "holiday") return false;
+                  if (blockFilterType === "day_off" && b.type !== "day_off") return false;
+                  if (blockFilterProf !== "all" && b.type === "day_off" && b.professionalId !== blockFilterProf) return false;
+                }
+                return true;
+              });
+
+              const hasHoliday = filteredDayBlocks.some(b => b.type === "holiday");
+              const hasDayOff = filteredDayBlocks.some(b => b.type === "day_off");
+              const isBlockedDay = filteredDayBlocks.length > 0;
+
+              // Define custom style pairings depending on current view mode
+              let dayBgStyle = "bg-white hover:bg-slate-50 border-slate-100 hover:border-slate-200 text-slate-700";
+              let textStyle = "text-slate-750";
+
+              if (isSelected) {
+                dayBgStyle = viewMode === "blocked_calendar"
+                  ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-600/20"
+                  : "bg-slate-900 border-slate-900 text-white shadow-md shadow-slate-950/10";
+                textStyle = "text-white";
+              } else if (isToday) {
+                dayBgStyle = "bg-emerald-50 border-emerald-200 text-emerald-800 font-extrabold";
+                textStyle = "text-emerald-800";
+              } else if (viewMode === "blocked_calendar") {
+                // Specialized block highlighting mode
+                if (hasHoliday) {
+                  dayBgStyle = "bg-rose-50 border-rose-200 text-rose-900 hover:bg-rose-100/80 shadow-xs";
+                  textStyle = "text-rose-700 font-extrabold";
+                } else if (hasDayOff) {
+                  dayBgStyle = "bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100/80 shadow-xs";
+                  textStyle = "text-amber-800 font-extrabold";
+                } else {
+                  // Mute normal days to make unavailability stand out immediately!
+                  dayBgStyle = "bg-slate-50/50 hover:bg-slate-100/60 border-slate-150/40 text-slate-400";
+                  textStyle = "text-slate-400/80 font-medium";
+                }
+              } else {
+                // General style
+                if (hasHoliday) {
+                  dayBgStyle = "bg-rose-50/70 border-rose-200 text-rose-900 hover:bg-rose-100/50";
+                  textStyle = "text-rose-700";
+                } else if (hasDayOff) {
+                  dayBgStyle = "bg-amber-50/70 border-amber-200 text-amber-900 hover:bg-amber-100/50";
+                  textStyle = "text-amber-800";
+                }
+              }
 
               return (
                 <button
                   key={idx}
                   onClick={() => setSelectedDateStr(fullDateStr)}
-                  className={`aspect-square rounded-xl p-1.5 flex flex-col justify-between items-stretch border transition-all text-left ${
-                    isSelected
-                      ? "bg-slate-900 border-slate-900 text-white shadow-md shadow-slate-950/10"
-                      : isToday
-                      ? "bg-emerald-50 border-emerald-200 text-emerald-800 font-extrabold"
-                      : hasHoliday
-                      ? "bg-red-50/70 border-red-200 text-red-900 hover:bg-red-100/50"
-                      : hasDayOff
-                      ? "bg-amber-50/70 border-amber-200 text-amber-900 hover:bg-amber-100/50"
-                      : "bg-white hover:bg-slate-50 border-slate-100 hover:border-slate-200 text-slate-700"
-                  }`}
+                  className={`relative group aspect-square rounded-xl p-1.5 flex flex-col justify-between items-stretch border transition-all text-left cursor-pointer ${dayBgStyle}`}
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className={`text-[11px] font-bold ${isSelected ? "text-white" : hasHoliday ? "text-red-700" : hasDayOff ? "text-amber-800" : "text-slate-750"}`}>
+                    <span className={`text-[11px] font-bold ${textStyle}`}>
                       {day}
                     </span>
-                    {dayBlocks.length > 0 && !isSelected && (
-                      <span className={`text-[9px] ${hasHoliday ? "text-red-600" : "text-amber-600"}`} title={dayBlocks.map(b => b.description).join(", ")}>
+                    {isBlockedDay && !isSelected && (
+                      <span className={`text-[9px] ${hasHoliday ? "text-rose-600" : "text-amber-600"}`} title={filteredDayBlocks.map(b => b.description).join(", ")}>
                         <Lock className="w-2.5 h-2.5 shrink-0" />
                       </span>
                     )}
                   </div>
 
+                  {/* Render service order indicator dots (muted in blocked mode) */}
                   {dayOrders.length > 0 && (
                     <div className="flex gap-0.5 mt-auto flex-wrap">
                       {dayOrders.slice(0, 3).map((order) => (
@@ -216,6 +383,35 @@ export default function Scheduler({
                       )}
                     </div>
                   )}
+
+                  {/* Beautiful Tooltip on Hover for Blocked Days */}
+                  {isBlockedDay && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 w-52 bg-slate-900 text-white text-[10px] rounded-xl p-3 shadow-xl border border-slate-800 z-50 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all duration-200 scale-90 origin-bottom group-hover:scale-100">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5 border-b border-slate-800 pb-1.5">
+                          <Lock className={`w-3.5 h-3.5 ${hasHoliday ? "text-rose-400" : "text-amber-400"}`} />
+                          <span className={`font-black uppercase tracking-wider text-[8px] ${hasHoliday ? "text-rose-400" : "text-amber-400"}`}>
+                            {hasHoliday ? "Feriado / Bloqueio" : "Folga do Técnico"}
+                          </span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {filteredDayBlocks.map((b) => (
+                            <div key={b.id} className="space-y-0.5 text-left">
+                              <p className="font-bold text-slate-100 leading-snug">{b.description}</p>
+                              {b.type === "day_off" && b.professionalId && (
+                                <p className="text-amber-300 font-extrabold text-[9px] flex items-center gap-1">
+                                  <span>🔧</span>
+                                  <span>{b.professionalId}</span>
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {/* Tooltip triangle arrow */}
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900"></div>
+                    </div>
+                  )}
                 </button>
               );
             })}
@@ -223,22 +419,46 @@ export default function Scheduler({
         </div>
 
         {/* Selected Date Details Column */}
-        <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-100 p-5 shadow-sm self-stretch flex flex-col justify-between min-h-[400px]">
+        <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-100 p-5 shadow-sm self-stretch flex flex-col justify-between min-h-[440px]">
           <div>
-            <div className="flex items-center gap-3 border-b border-slate-50 pb-4 mb-4">
-              <div className="p-2.5 bg-slate-100 rounded-xl text-slate-700">
-                <CalendarIcon className="w-5 h-5" />
+            {/* Header Title depending on Mode */}
+            {viewMode === "blocked_calendar" ? (
+              <div className="flex items-center gap-3 border-b border-slate-50 pb-4 mb-4">
+                <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-700">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-base">Feriados & Folgas do Dia</h3>
+                  <p className="text-xs text-slate-500 font-medium">Dia {new Date(selectedDateStr + "T12:00:00").toLocaleDateString("pt-BR")}</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-extrabold text-slate-800 text-base">Atendimentos no Dia</h3>
-                <p className="text-xs text-slate-500 font-medium">Dia {new Date(selectedDateStr + "T12:00:00").toLocaleDateString("pt-BR")}</p>
+            ) : (
+              <div className="flex items-center gap-3 border-b border-slate-50 pb-4 mb-4">
+                <div className="p-2.5 bg-slate-100 rounded-xl text-slate-700">
+                  <CalendarIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-base">Atendimentos no Dia</h3>
+                  <p className="text-xs text-slate-500 font-medium">Dia {new Date(selectedDateStr + "T12:00:00").toLocaleDateString("pt-BR")}</p>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Blocked Dates (Holidays/Days off) alert banner */}
+            {/* Blocked Dates (Holidays/Days off) details/alerts */}
             {(() => {
               const selectedDateBlocks = blockedDates.filter(b => b.date === selectedDateStr);
-              if (selectedDateBlocks.length === 0) return null;
+              if (selectedDateBlocks.length === 0) {
+                if (viewMode === "blocked_calendar") {
+                  return (
+                    <div className="py-6 px-4 mb-4 text-center border border-dashed border-slate-150 rounded-xl bg-slate-50/20 text-slate-400 flex flex-col items-center justify-center">
+                      <CheckCircle className="w-7 h-7 text-slate-350 mb-1" />
+                      <p className="font-bold text-[11px] text-slate-700">Data Livre / Disponível</p>
+                      <p className="text-[10px] text-slate-450 mt-0.5">Nenhum feriado ou folga cadastrada nesta data.</p>
+                    </div>
+                  );
+                }
+                return null;
+              }
               return (
                 <div className="space-y-2 mb-4">
                   {selectedDateBlocks.map((block) => (
@@ -246,18 +466,18 @@ export default function Scheduler({
                       key={block.id} 
                       className={`p-3 rounded-xl border flex items-start gap-2.5 ${
                         block.type === "holiday" 
-                          ? "bg-red-50/50 border-red-150 text-red-900" 
-                          : "bg-amber-50/50 border-amber-150 text-amber-950"
+                          ? "bg-rose-50/70 border-rose-150 text-rose-950" 
+                          : "bg-amber-50/70 border-amber-150 text-amber-955"
                       }`}
                     >
-                      <Lock className={`w-4 h-4 shrink-0 mt-0.5 ${block.type === "holiday" ? "text-red-500" : "text-amber-500"}`} />
+                      <Lock className={`w-4 h-4 shrink-0 mt-0.5 ${block.type === "holiday" ? "text-rose-500" : "text-amber-500"}`} />
                       <div className="text-xs">
-                        <span className="font-extrabold uppercase tracking-wider block text-[9px] opacity-75">
+                        <span className="font-extrabold uppercase tracking-wider block text-[9px] opacity-80">
                           {block.type === "holiday" ? "🚨 Feriado / Data Bloqueada" : "🔒 Dia de Folga Técnico"}
                         </span>
                         <p className="font-bold mt-0.5">{block.description}</p>
                         {block.type === "day_off" && block.professionalId !== "all" && (
-                          <p className="text-[10px] text-amber-700 font-semibold mt-0.5">Técnico dispensado: {block.professionalId}</p>
+                          <p className="text-[10px] text-amber-800 font-extrabold mt-0.5">Técnico dispensado: {block.professionalId}</p>
                         )}
                       </div>
                     </div>
@@ -266,49 +486,122 @@ export default function Scheduler({
               );
             })()}
 
-            {/* Services scheduled */}
-            <div className="space-y-3 flex-1 overflow-y-auto max-h-[280px] pr-1">
-              {selectedDayOrders.length > 0 ? (
-                selectedDayOrders.map((os) => (
-                  <div key={os.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200/50 hover:border-slate-300 duration-150 relative">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[9px] font-bold font-mono text-slate-400 uppercase">{os.id}</span>
-                      <span className={`text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
-                        os.status === "concluido" ? "bg-green-100 text-green-800" :
-                        os.status === "em_progresso" ? "bg-blue-100 text-blue-800" :
-                        os.status === "aguardando" ? "bg-orange-100 text-orange-850" : "bg-slate-200 text-slate-650"
-                      }`}>
-                        {os.status === "concluido" ? "Concluído" :
-                         os.status === "em_progresso" ? "Em Execução" :
-                         os.status === "aguardando" ? "Aguardando Peças" :
-                         os.status === "aberto" ? "Aberto" : "Cancelado"}
-                      </span>
-                    </div>
-
-                    <h4 className="font-bold text-slate-850 text-xs leading-snug">{os.title}</h4>
-                    <p className="text-[10px] text-slate-500 font-medium mt-1">Requisitante: {getClientName(os.clientId)}</p>
-
-                    <div className="flex items-center gap-1.5 text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-3.5 pt-2 border-t border-slate-200/40">
-                      <Clock className="w-3.5 h-3.5 text-slate-350" />
-                      <span>{os.startDate === selectedDateStr ? "ENTRADA / INÍCIO" : "PRAZO ENTREGA"}</span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-xl">
-                  <CheckCircle className="w-8 h-8 text-slate-300 mb-1.5" />
-                  <p className="font-bold text-xs">Agenda livre nesta data!</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Nenhum atendimento ou prazo agendado.</p>
+            {/* Interactive Conflict alert inside blocked_calendar mode */}
+            {viewMode === "blocked_calendar" && selectedDayOrders.length > 0 && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-950 text-xs mb-4 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold uppercase text-[9px] text-red-700">
+                  <AlertTriangle className="w-4 h-4 animate-bounce" />
+                  <span>Conflito de Escala!</span>
                 </div>
-              )}
-            </div>
+                <p className="font-semibold text-[11px] leading-snug">Existem {selectedDayOrders.length} ordens de serviço ativas no dia desse bloqueio técnico ou geral.</p>
+              </div>
+            )}
+
+            {/* Services scheduled */}
+            {viewMode === "general" ? (
+              <div className="space-y-3 flex-1 overflow-y-auto max-h-[280px] pr-1">
+                {selectedDayOrders.length > 0 ? (
+                  selectedDayOrders.map((os) => (
+                    <div key={os.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200/50 hover:border-slate-300 duration-150 relative">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[9px] font-bold font-mono text-slate-400 uppercase">{os.id}</span>
+                        <span className={`text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                          os.status === "concluido" ? "bg-green-100 text-green-800" :
+                          os.status === "em_progresso" ? "bg-blue-100 text-blue-800" :
+                          os.status === "aguardando" ? "bg-orange-100 text-orange-850" : "bg-slate-200 text-slate-650"
+                        }`}>
+                          {os.status === "concluido" ? "Concluído" :
+                           os.status === "em_progresso" ? "Em Execução" :
+                           os.status === "aguardando" ? "Aguardando Peças" :
+                           os.status === "aberto" ? "Aberto" : "Cancelado"}
+                        </span>
+                      </div>
+
+                      <h4 className="font-bold text-slate-850 text-xs leading-snug">{os.title}</h4>
+                      <p className="text-[10px] text-slate-500 font-medium mt-1">Requisitante: {getClientName(os.clientId)}</p>
+
+                      <div className="flex items-center gap-1.5 text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-3.5 pt-2 border-t border-slate-200/40">
+                        <Clock className="w-3.5 h-3.5 text-slate-350" />
+                        <span>{os.startDate === selectedDateStr ? "ENTRADA / INÍCIO" : "PRAZO ENTREGA"}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-xl">
+                    <CheckCircle className="w-8 h-8 text-slate-300 mb-1.5" />
+                    <p className="font-bold text-xs">Agenda livre nesta data!</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Nenhum atendimento ou prazo agendado.</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* In Blocked mode: Render the Chronological Timeline of the selected month so users can see holidays/days off in order */
+              <div className="mt-2 flex-1 flex flex-col min-h-[180px]">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-2.5">Linha do Tempo do Mês ({monthNames[month]})</span>
+                
+                {currentMonthBlocks.length > 0 ? (
+                  <div className="space-y-2 overflow-y-auto max-h-[220px] pr-1">
+                    {currentMonthBlocks.map((block) => {
+                      const blockDay = block.date.split("-")[2];
+                      const isSelectedBlock = selectedDateStr === block.date;
+                      
+                      return (
+                        <button
+                          type="button"
+                          key={block.id}
+                          onClick={() => setSelectedDateStr(block.date)}
+                          className={`w-full text-left p-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 cursor-pointer ${
+                            isSelectedBlock
+                              ? "bg-slate-900 border-slate-900 text-white shadow-xs"
+                              : block.type === "holiday"
+                              ? "bg-rose-50/45 border-rose-100 hover:bg-rose-50/80 text-rose-955"
+                              : "bg-amber-50/45 border-amber-100 hover:bg-amber-50/80 text-amber-955"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center shrink-0 ${
+                              isSelectedBlock 
+                                ? "bg-white/15 text-white" 
+                                : block.type === "holiday" 
+                                ? "bg-rose-100 text-rose-700 border border-rose-200/50" 
+                                : "bg-amber-100 text-amber-800 border border-amber-200/50"
+                            }`}>
+                              {blockDay}
+                            </span>
+                            <div className="min-w-0 text-xs">
+                              <p className="font-bold truncate leading-snug">{block.description}</p>
+                              <span className={`text-[8px] font-black uppercase tracking-wide ${
+                                isSelectedBlock 
+                                  ? "text-indigo-300" 
+                                  : block.type === "holiday" 
+                                  ? "text-rose-600" 
+                                  : "text-amber-700"
+                              }`}>
+                                {block.type === "holiday" ? "Feriado Geral" : `Folga: ${block.professionalId}`}
+                              </span>
+                            </div>
+                          </div>
+                          <ArrowRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${isSelectedBlock ? "text-white translate-x-0.5" : "text-slate-350"}`} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center border border-dashed border-slate-150 rounded-xl bg-slate-50/20">
+                    <HelpCircle className="w-8 h-8 text-slate-350 mb-1.5" />
+                    <p className="font-bold text-[11px] text-slate-500">Sem registros neste mês</p>
+                    <p className="text-[9px] text-slate-400 mt-0.5">Use os filtros acima ou navegue entre os meses.</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Quick schedule dispatch callback */}
-          {onQuickScheduleOrder && (
+          {/* Quick schedule dispatch callback (only in General calendar mode) */}
+          {onQuickScheduleOrder && viewMode === "general" && (
             <button
               onClick={() => onQuickScheduleOrder(selectedDateStr)}
-              className="mt-6 w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 rounded-xl shadow-lg shadow-slate-950/5 active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
+              className="mt-6 w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 rounded-xl shadow-lg shadow-slate-950/5 active:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <Plus className="w-4 h-4 text-emerald-400" />
               Propor OS nesta Data

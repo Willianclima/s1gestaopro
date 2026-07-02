@@ -12,6 +12,7 @@ import { motion } from "motion/react";
 
 interface ServiceOrdersProps {
   orders: ServiceOrder[];
+  globalOrders?: ServiceOrder[];
   clients: Client[];
   categories: string[];
   professionalsList: Professional[]; // Full list of professionals with specialties
@@ -90,7 +91,7 @@ const PRESET_COMPLETED_IMAGES = [
 ];
 
 export default function ServiceOrders({ 
-  orders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = []
+  orders, globalOrders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = []
 }: ServiceOrdersProps) {
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
@@ -587,20 +588,55 @@ export default function ServiceOrders({
       );
       if (response.ok) {
         const data = await response.json();
-        const results = data.map((item: any) => {
+        const results = data.map((item: any, idx: number) => {
           const parts = item.display_name.split(",");
           // take up to 4 parts to look cleaner in dropdown
           const shortName = parts.slice(0, 4).join(",").trim();
           return {
-            id: item.place_id,
+            id: item.place_id ? `${item.place_id}-${idx}` : `nom-${idx}-${Math.random()}`,
             display: shortName,
             full: item.display_name
           };
         });
         setLocationSearchResults(results);
+      } else {
+        throw new Error(`Nominatim responded with status ${response.status}`);
       }
     } catch (err) {
-      console.error("Erro Nominatim:", err);
+      console.warn("Erro Nominatim (Ativando busca local de Araçatuba):", err);
+      // Fallback local search based on well-known Araçatuba neighborhoods and avenues
+      const localLocations = [
+        "Centro, Araçatuba - SP",
+        "Jardim Alvorada, Araçatuba - SP",
+        "Guanabara, Araçatuba - SP",
+        "Concórdia, Araçatuba - SP",
+        "Ipanema, Araçatuba - SP",
+        "Umuarama, Araçatuba - SP",
+        "Av. Brasília, Araçatuba - SP",
+        "Av. Araçás, Araçatuba - SP",
+        "Av. Pompeu de Toledo, Araçatuba - SP",
+        "Av. João Arruda Brasil, Araçatuba - SP",
+        "Av. Saudade, Araçatuba - SP",
+        "Jardim Morada dos Nobres, Araçatuba - SP",
+        "Pinheiros, Araçatuba - SP",
+        "Vila Estádio, Araçatuba - SP",
+        "Vila Bandeirantes, Araçatuba - SP",
+        "Água Branca, Araçatuba - SP",
+        "São Rafael, Araçatuba - SP",
+        "Nova York, Araçatuba - SP"
+      ];
+      const normalizedQuery = query.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const filtered = localLocations.filter(loc => {
+        const normalizedLoc = loc.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return normalizedLoc.includes(normalizedQuery);
+      });
+
+      const results = filtered.map((loc, idx) => ({
+        id: `local-fallback-${idx}-${Math.random()}`,
+        display: loc,
+        full: `${loc}, Brasil`
+      }));
+      setLocationSearchResults(results);
     } finally {
       setIsSearchingLocation(false);
     }
@@ -874,7 +910,12 @@ export default function ServiceOrders({
       
       onUpdateOrder(updatedOS);
     } else {
-      const newOSId = "req-" + (1000 + orders.length + 1);
+      const ordersForIdCalc = globalOrders || orders;
+      const numericIds = ordersForIdCalc
+        .map(o => parseInt(o.id.replace("req-", ""), 10))
+        .filter(num => !isNaN(num));
+      const maxId = numericIds.length > 0 ? Math.max(...numericIds) : 1000;
+      const newOSId = "req-" + (maxId + 1);
       const newOS: ServiceOrder = {
         id: newOSId,
         clientId,
@@ -2376,9 +2417,9 @@ export default function ServiceOrders({
                       <div className="bg-slate-50 px-3 py-1.5 text-[9px] text-slate-400 font-bold uppercase tracking-wider border-b border-slate-100">
                         Resultados de Araçatuba - SP (Selecione):
                       </div>
-                      {locationSearchResults.map((res) => (
+                      {locationSearchResults.map((res, idx) => (
                         <button
-                          key={res.id}
+                          key={`${res.id}-${idx}`}
                           type="button"
                           onClick={() => {
                             setServiceLocation(res.display);

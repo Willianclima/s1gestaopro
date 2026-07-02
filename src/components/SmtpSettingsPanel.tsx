@@ -2,9 +2,10 @@ import React, { useState } from "react";
 import { 
   Mail, ShieldCheck, Key, Server, Hash, Send, RefreshCw, 
   CheckCircle, AlertTriangle, Eye, EyeOff, Sparkles, Terminal, Smartphone, HelpCircle,
-  Database, Download, Upload, X, Check, Save
+  Database, Download, Upload, X, Check, Save,
+  Bell, BellOff, Info, Lock, ExternalLink, Activity, ShieldAlert, Settings
 } from "lucide-react";
-import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser } from "../types";
+import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser, Client } from "../types";
 
 interface SmtpSettingsPanelProps {
   settings: SmtpSettings;
@@ -17,6 +18,8 @@ interface SmtpSettingsPanelProps {
   almoxarifados?: Almoxarifado[];
   onSaveAlmoxarifados?: (newAlms: Almoxarifado[]) => void;
   currentUser?: CurrentUser | null;
+  initialSubTab?: "smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic";
+  clients?: Client[];
 }
 
 export default function SmtpSettingsPanel({ 
@@ -29,13 +32,21 @@ export default function SmtpSettingsPanel({
   onNotifyTest,
   almoxarifados = [],
   onSaveAlmoxarifados,
-  currentUser
+  currentUser,
+  initialSubTab,
+  clients = []
 }: SmtpSettingsPanelProps) {
   
   // Tab control
-  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados">(
-    currentUser?.userType === "admin" ? "smtp" : "almoxarifados"
+  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic">(
+    initialSubTab || (currentUser?.userType === "admin" ? "smtp" : "almoxarifados")
   );
+
+  React.useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
 
   // Almoxarifado management local state
   const [isAlmFormOpen, setIsAlmFormOpen] = useState(false);
@@ -43,6 +54,15 @@ export default function SmtpSettingsPanel({
   const [almName, setAlmName] = useState("");
   const [almCode, setAlmCode] = useState("");
   const [almAddress, setAlmAddress] = useState("");
+
+  // Permission logic
+  const canManageAlmoxarifados = currentUser?.userType === "admin" || currentUser?.userType === "gestor";
+
+  const isAlmoxarifadoLinked = (almId: string) => {
+    const isLinkedToClient = clients.some(c => c.warehouseId === almId);
+    const isLinkedToCurrentUser = currentUser?.warehouseId === almId;
+    return isLinkedToClient || isLinkedToCurrentUser;
+  };
 
   // SMTP States
   const [host, setHost] = useState(settings.host || "smtp.aracatubaservicos.com.br");
@@ -63,6 +83,227 @@ export default function SmtpSettingsPanel({
   const [isCredentialsVerified, setIsCredentialsVerified] = useState<"untested" | "testing" | "success" | "failed">("untested");
   const [credentialsLogs, setCredentialsLogs] = useState<string[]>([]);
   const [showNotValidatedPrompt, setShowNotValidatedPrompt] = useState(false);
+
+  // Service Worker & Push Notifications Diagnostic States
+  const [swSupported, setSwSupported] = useState<boolean | null>(null);
+  const [pushSupported, setPushSupported] = useState<boolean | null>(null);
+  const [notifSupported, setNotifSupported] = useState<boolean | null>(null);
+  const [permissionState, setPermissionState] = useState<string>("default");
+  const [isIframe, setIsIframe] = useState<boolean>(false);
+  const [swRegState, setSwRegState] = useState<"untested" | "registering" | "registered" | "failed" | "unregistered">("untested");
+  const [swRegError, setSwRegError] = useState<string>("");
+  const [swScope, setSwScope] = useState<string>("");
+  const [activeSwCount, setActiveSwCount] = useState<number>(0);
+  const [swLogs, setSwLogs] = useState<string[]>([]);
+
+  // Function to run diagnostics
+  const runDiagnostic = async () => {
+    const logs: string[] = [];
+    logs.push(`[${new Date().toLocaleTimeString()}] [DIAGNOSTIC] Iniciando análise de compatibilidade do navegador...`);
+    
+    const hasSW = typeof navigator !== "undefined" && "serviceWorker" in navigator;
+    const hasPush = typeof window !== "undefined" && "PushManager" in window;
+    const hasNotif = typeof window !== "undefined" && "Notification" in window;
+    const currentPermission = typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default";
+    const inIframe = typeof window !== "undefined" && window.self !== window.top;
+
+    setSwSupported(hasSW);
+    setPushSupported(hasPush);
+    setNotifSupported(hasNotif);
+    setPermissionState(currentPermission);
+    setIsIframe(inIframe);
+
+    logs.push(`✓ Suporte a Service Worker: ${hasSW ? "Disponível" : "Não disponível"}`);
+    logs.push(`✓ Suporte a Push API (PushManager): ${hasPush ? "Disponível" : "Não disponível"}`);
+    logs.push(`✓ Suporte a API de Notificação: ${hasNotif ? "Disponível" : "Não disponível"}`);
+    logs.push(`✓ Permissão de Notificação Atual: "${currentPermission}"`);
+    logs.push(`✓ Detecção de Ambiente (iFrame): ${inIframe ? "⚠️ Detectado dentro de iFrame (Restrito)" : "✓ Executando diretamente (Origem confiável)"}`);
+
+    if (hasSW) {
+      try {
+        logs.push("[DIAGNOSTIC] Buscando registros ativos de Service Worker...");
+        const regs = await navigator.serviceWorker.getRegistrations();
+        setActiveSwCount(regs.length);
+        logs.push(`[DIAGNOSTIC] Encontrado(s) ${regs.length} Service Worker(s) registrado(s) nesta origem.`);
+        regs.forEach((r, i) => {
+          logs.push(`  - Registro #${i + 1}: escopo = "${r.scope}" (status active = ${r.active ? "sim" : "não"})`);
+        });
+        
+        const hasMockSw = regs.some(r => r.scope.includes("mock-sw") || r.scope === window.location.origin + "/");
+        if (hasMockSw) {
+          setSwRegState("registered");
+          const targetReg = regs.find(r => r.scope.includes("mock-sw") || r.scope === window.location.origin + "/");
+          setSwScope(targetReg?.scope || "");
+        }
+      } catch (err: any) {
+        logs.push(`[DIAGNOSTIC] Erro ao buscar registros ativos: ${err.message || err}`);
+      }
+    }
+    setSwLogs(logs);
+  };
+
+  // Run registration
+  const registerServiceWorker = async () => {
+    setSwRegState("registering");
+    const logs = [...swLogs];
+    logs.push(`[${new Date().toLocaleTimeString()}] [REGISTRATION] Tentando registrar o Service Worker "/mock-sw.js"...`);
+    setSwLogs([...logs]);
+
+    try {
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("Service Worker não é suportado neste navegador.");
+      }
+
+      if (window.self !== window.top) {
+        logs.push("[REGISTRATION] ⚠️ Aviso: Registros de Service Worker em iFrames geralmente falham ou são bloqueados pelo navegador (política sandbox de terceiro-origin).");
+      }
+
+      const registration = await navigator.serviceWorker.register("/mock-sw.js", {
+        scope: "/",
+      });
+
+      logs.push(`[REGISTRATION] ✓ Registro concluído com sucesso!`);
+      logs.push(`  - Escopo do Service Worker: ${registration.scope}`);
+      if (registration.installing) logs.push("  - Estado atual: Instalando (installing)...");
+      else if (registration.waiting) logs.push("  - Estado atual: Aguardando ativação (waiting)...");
+      else if (registration.active) logs.push("  - Estado atual: Ativo e operacional (active)!");
+
+      setSwRegState("registered");
+      setSwScope(registration.scope);
+      setSwRegError("");
+      
+      const regs = await navigator.serviceWorker.getRegistrations();
+      setActiveSwCount(regs.length);
+      onNotifyTest("Service Worker Registrado", "O Service Worker foi registrado com sucesso na sua sessão do navegador!", "success");
+    } catch (err: any) {
+      console.error("Erro no registro do SW:", err);
+      logs.push(`[REGISTRATION] ❌ Falha catastrófica no registro do Service Worker.`);
+      logs.push(`  - Erro detalhado: ${err.message || err}`);
+      logs.push("  - Sugestão: Se você estiver vendo este erro no painel do AI Studio, abra o aplicativo em uma NOVA ABA do navegador. Registros de SW em iFrames de origens diferentes são bloqueados.");
+      
+      setSwRegState("failed");
+      setSwRegError(err.message || String(err));
+      onNotifyTest("Erro de Registro", `Falha ao registrar o Service Worker: ${err.message || err}`, "error");
+    }
+    setSwLogs(logs);
+  };
+
+  // Run unregister
+  const unregisterServiceWorkers = async () => {
+    const logs = [...swLogs];
+    logs.push(`[${new Date().toLocaleTimeString()}] [UNREGISTER] Buscando Service Workers para remover...`);
+    setSwLogs([...logs]);
+
+    try {
+      if (!("serviceWorker" in navigator)) return;
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      
+      if (registrations.length === 0) {
+        logs.push("[UNREGISTER] Nenhum registro ativo encontrado para ser removido.");
+        setSwLogs([...logs]);
+        return;
+      }
+
+      let removedCount = 0;
+      for (const reg of registrations) {
+        const success = await reg.unregister();
+        if (success) {
+          logs.push(`[UNREGISTER] ✓ Service Worker removido com sucesso: escopo = "${reg.scope}"`);
+          removedCount++;
+        } else {
+          logs.push(`[UNREGISTER] ❌ Falha ao desregistrar Service Worker: escopo = "${reg.scope}"`);
+        }
+      }
+
+      setSwRegState("unregistered");
+      setSwScope("");
+      setActiveSwCount(0);
+      onNotifyTest("Service Workers Removidos", `${removedCount} Service Worker(s) desregistrado(s) com sucesso.`, "info");
+    } catch (err: any) {
+      logs.push(`[UNREGISTER] Erro durante a remoção: ${err.message || err}`);
+      onNotifyTest("Erro de Desregistro", `Erro ao desregistrar Service Workers: ${err.message || err}`, "error");
+    }
+    setSwLogs(logs);
+  };
+
+  // Request notifications permission
+  const requestNotificationPermission = async () => {
+    const logs = [...swLogs];
+    logs.push(`[${new Date().toLocaleTimeString()}] [PERMISSION] Solicitando permissão para envio de notificações nativas...`);
+    setSwLogs([...logs]);
+
+    if (!("Notification" in window)) {
+      logs.push("[PERMISSION] ❌ Erro: O navegador não possui a API de Notificações disponível.");
+      setSwLogs([...logs]);
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setPermissionState(permission);
+      logs.push(`[PERMISSION] Resposta da solicitação: "${permission}"`);
+      
+      if (permission === "granted") {
+        logs.push("[PERMISSION] ✓ Permissão concedida pelo usuário!");
+        onNotifyTest("Permissão Concedida", "Agora o sistema está autorizado a exibir notificações na sua área de trabalho.", "success");
+      } else {
+        logs.push("[PERMISSION] ⚠️ Permissão negada ou fechada. Os alertas nativos serão bloqueados.");
+        onNotifyTest("Permissão Bloqueada", "Não será possível exibir notificações nativas de área de trabalho.", "error");
+      }
+    } catch (err: any) {
+      logs.push(`[PERMISSION] Erro ao solicitar permissão: ${err.message || err}`);
+    }
+    setSwLogs(logs);
+  };
+
+  // Trigger test SW notification
+  const triggerSwNotification = async () => {
+    const logs = [...swLogs];
+    logs.push(`[${new Date().toLocaleTimeString()}] [NOTIFICATION] Disparando notificação de teste em segundo plano através do Service Worker...`);
+    setSwLogs([...logs]);
+
+    try {
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("Service Worker não é suportado.");
+      }
+
+      const regs = await navigator.serviceWorker.getRegistrations();
+      if (regs.length === 0) {
+        throw new Error("Nenhum Service Worker está registrado e ativo nesta origem. Por favor, registre o Service Worker primeiro.");
+      }
+
+      if (Notification.permission !== "granted") {
+        throw new Error("Permissão de notificação não concedida. Por favor, autorize as notificações primeiro.");
+      }
+
+      const activeReg = regs.find(r => r.active) || regs[0];
+      if (!activeReg) {
+        throw new Error("Nenhum Service Worker está no estado ativo/operacional.");
+      }
+
+      logs.push(`[NOTIFICATION] Usando registro ativo com escopo: "${activeReg.scope}"`);
+      
+      await activeReg.showNotification("Ordem de Serviço #1092 - Teste SW", {
+        body: "Teste bem-sucedido de Push Notification e Service Worker! Canal de eventos ativo.",
+        icon: "/favicon.ico",
+        badge: "/favicon.ico",
+        tag: "sw-diagnostic-test"
+      });
+
+      logs.push("[NOTIFICATION] ✓ Solicitação de exibição de notificação enviada ao Service Worker.");
+      onNotifyTest("Notificação Enviada", "Notificação via Service Worker disparada! Verifique sua área de trabalho.", "success");
+    } catch (err: any) {
+      logs.push(`[NOTIFICATION] ❌ Erro ao disparar notificação: ${err.message || err}`);
+      onNotifyTest("Erro de Notificação", `Falha ao disparar notificação de teste: ${err.message || err}`, "error");
+    }
+    setSwLogs(logs);
+  };
+
+  React.useEffect(() => {
+    if (activeSubTab === "push_diagnostic") {
+      runDiagnostic();
+    }
+  }, [activeSubTab]);
 
   // WhatsApp States
   const [waProvider, setWaProvider] = useState<"twilio" | "cloud_api" | "custom">(whatsappSettings.provider || "custom");
@@ -546,8 +787,8 @@ export default function SmtpSettingsPanel({
       {/* Page Title Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 text-white p-6 rounded-3xl border border-slate-850 shadow-md">
         <div>
-          <h1 className="text-2xl font-extrabold tracking-tight">Servidor de Comunicação & Governança</h1>
-          <p className="text-xs text-slate-400 font-medium mt-1">Configure as chaves, e-mails, alertas corporativos e baixe diagnósticos completos da base de dados Araçatuba.</p>
+          <h1 className="text-2xl font-extrabold tracking-tight">Configurações, Governança & Almoxarifados</h1>
+          <p className="text-xs text-slate-400 font-medium mt-1">Gerencie os servidores SMTP de e-mail, alertas automáticos de WhatsApp, permissões modulares de acesso e o cadastro/edição de todos os Almoxarifados da rede.</p>
         </div>
         {currentUser?.userType === "admin" && (
           <button
@@ -627,6 +868,18 @@ export default function SmtpSettingsPanel({
         >
           <Database className="w-4 h-4 text-sky-500" />
           Cadastro de Almoxarifados
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("push_diagnostic")}
+          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+            activeSubTab === "push_diagnostic"
+              ? "border-indigo-600 text-indigo-600 font-black"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <Bell className="w-4 h-4 text-rose-500" />
+          Diagnóstico de Notificações & SW
         </button>
       </div>
 
@@ -1502,7 +1755,7 @@ export default function SmtpSettingsPanel({
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                   {[
                     { id: "dashboard", label: "Painel Geral / Dashboard", desc: "Métricas consolidadas, avisos de bloqueio e relatórios compactados." },
-                    { id: "clients", label: "Requisitantes & GS", desc: "Cadastro e homologação de munícipes, gestores e novos perfis." },
+                    { id: "clients", label: "Usuários", desc: "Cadastro e homologação de munícipes, gestores e novos perfis." },
                     { id: "orders", label: "Requisições de Serviço", desc: "Listagem, triagem, edição, deleção e emissão de PDFs de Ordens." },
                     { id: "scheduler", label: "Agenda / Calendário", desc: "Cronograma de manutenções em tempo integral e alocações de técnicos." },
                     { id: "professionals", label: "Técnicos & Equipe", desc: "Cadastro de equipes de campo e controle de materiais em estoque." },
@@ -1629,27 +1882,56 @@ export default function SmtpSettingsPanel({
         {activeSubTab === "almoxarifados" && (
           <div className="lg:col-span-3 space-y-6">
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-6 shadow-sm">
+              
+              {!canManageAlmoxarifados && (
+                <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-xl flex items-start gap-3 text-amber-800 dark:text-amber-300 text-xs font-semibold leading-relaxed">
+                  <AlertTriangle className="w-5 h-5 shrink-0 text-amber-500 mt-0.5 animate-pulse" />
+                  <div>
+                    <strong className="font-bold text-amber-900 dark:text-amber-200">Apenas Visualização / Sem Permissão</strong>
+                    <p className="mt-0.5 text-[11px] font-medium">Seu perfil não possui permissão para adicionar, editar ou excluir almoxarifados. Apenas Administradores (admin) e Gestores (gestor) podem modificar estes registros.</p>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                 <div>
                   <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Almoxarifados Cadastrados</h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-semibold">Gerencie os almoxarifados físicos utilizados para armazenar peças, equipamentos e materiais de serviço.</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-semibold">
+                    Gerencie as bases físicas de alocação de equipes e técnicos de serviços. <span className="text-amber-600 dark:text-amber-400 font-extrabold">(Este sistema não faz controle de estoque de materiais)</span>
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingAlm(null);
-                    setAlmName("");
-                    setAlmCode("");
-                    setAlmAddress("");
-                    setIsAlmFormOpen(true);
-                  }}
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-indigo-600/10 cursor-pointer flex items-center gap-1.5"
-                >
-                  Adicionar Almoxarifado
-                </button>
+                {canManageAlmoxarifados && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingAlm(null);
+                      setAlmName("");
+                      setAlmCode("");
+                      setAlmAddress("");
+                      setIsAlmFormOpen(true);
+                    }}
+                    className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-indigo-600/10 cursor-pointer flex items-center gap-1.5"
+                  >
+                    Adicionar Almoxarifado
+                  </button>
+                )}
               </div>
 
-              {isAlmFormOpen && (
+              {/* Informational Scope Alert */}
+              <div className="mb-6 p-4 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex items-start gap-3">
+                <HelpCircle className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                <div className="text-xs leading-relaxed text-slate-600 dark:text-slate-350">
+                  <strong className="font-bold text-slate-800 dark:text-slate-200 block text-[10px] uppercase tracking-wider mb-1">Escopo Operacional & Históricos de Serviços</strong>
+                  <p className="font-medium">
+                    O sistema é focado exclusivamente no **gerenciamento de serviços**, trabalhando ativamente com alertas e mensagens automatizadas para registrar o histórico completo de ordens de trabalho (**Realizadas, Paradas ou Canceladas**).
+                  </p>
+                  <p className="mt-1 font-medium text-[11px] text-slate-500 dark:text-slate-400">
+                    💡 Caso falte material de serviço no local do requisitante, o técnico pode marcar o serviço como <strong>Parado</strong> ou <strong>Cancelado</strong> para que a coordenação e os gestores sejam alertados instantaneamente, com todo o histórico devidamente registrado.
+                  </p>
+                </div>
+              </div>
+
+              {isAlmFormOpen && canManageAlmoxarifados && (
                 <div className="mb-6 p-5 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                   <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-3">
                     <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
@@ -1710,6 +1992,10 @@ export default function SmtpSettingsPanel({
                     <button
                       type="button"
                       onClick={() => {
+                        if (!canManageAlmoxarifados) {
+                          onNotifyTest("Sem Permissão", "Seu perfil de usuário não possui permissão para salvar almoxarifados.", "error");
+                          return;
+                        }
                         if (!almName || !almCode) {
                           onNotifyTest("Campos Obrigatórios", "Por favor, informe ao menos o Nome e Código do almoxarifado.", "error");
                           return;
@@ -1746,65 +2032,418 @@ export default function SmtpSettingsPanel({
                 </div>
               )}
 
-              <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-2xl">
-                <table className="w-full text-left border-collapse">
+              <div className="overflow-x-auto border border-slate-200 rounded-2xl bg-white shadow-xs">
+                <table className="w-full text-left border-collapse bg-white">
                   <thead>
-                    <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-800">
-                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Código</th>
-                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Nome / Identificação</th>
-                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Endereço físico</th>
-                      <th className="px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400 text-right">Ações</th>
+                    <tr className="bg-slate-100 border-b border-slate-200">
+                      <th className="px-5 py-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500">Código</th>
+                      <th className="px-5 py-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500">Nome / Identificação</th>
+                      <th className="px-5 py-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500">Endereço físico</th>
+                      <th className="px-5 py-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500 text-right">Ações</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="bg-white">
                     {almoxarifados.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="px-5 py-8 text-center text-xs text-slate-400 font-semibold">
-                          Nenhum almoxarifado cadastrado. Clique em "Adicionar Almoxarifado" para registrar o primeiro.
+                        <td colSpan={4} className="px-5 py-10 text-center text-xs text-slate-400 font-semibold bg-white">
+                          Nenhum almoxarifado cadastrado.
                         </td>
                       </tr>
                     ) : (
-                      almoxarifados.map(alm => (
-                        <tr key={alm.id} className="border-b border-slate-50 dark:border-slate-850 hover:bg-slate-50/50 dark:hover:bg-slate-950/50 transition-colors">
-                          <td className="px-5 py-4 font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase">{alm.code}</td>
-                          <td className="px-5 py-4 text-xs font-bold text-slate-800 dark:text-slate-100">{alm.name}</td>
-                          <td className="px-5 py-4 text-xs text-slate-500 dark:text-slate-400">{alm.address || "Sem endereço cadastrado"}</td>
-                          <td className="px-5 py-4 text-right space-x-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingAlm(alm);
-                                setAlmName(alm.name);
-                                setAlmCode(alm.code);
-                                setAlmAddress(alm.address || "");
-                                setIsAlmFormOpen(true);
-                              }}
-                              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 text-[10px] font-bold uppercase rounded-md transition-all cursor-pointer"
-                            >
-                              Editar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (confirm(`Tem certeza que deseja excluir o almoxarifado "${alm.name}"?`)) {
-                                  const updated = almoxarifados.filter(a => a.id !== alm.id);
-                                  if (onSaveAlmoxarifados) {
-                                    onSaveAlmoxarifados(updated);
-                                  }
-                                  onNotifyTest("Almoxarifado Excluído", `O almoxarifado "${alm.name}" foi removido do sistema.`, "system");
-                                }
-                              }}
-                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950 dark:hover:bg-rose-900 text-rose-600 text-[10px] font-bold uppercase rounded-md transition-all cursor-pointer"
-                            >
-                              Excluir
-                            </button>
-                          </td>
-                        </tr>
-                      ))
+                      almoxarifados.map(alm => {
+                        const linked = isAlmoxarifadoLinked(alm.id);
+                        return (
+                          <tr key={alm.id} className="border-b border-slate-100 bg-white hover:bg-slate-50/80 transition-colors">
+                            <td className="px-5 py-4 font-mono text-xs font-bold text-indigo-600 uppercase">{alm.code}</td>
+                            <td className="px-5 py-4 text-xs font-bold text-slate-800 flex items-center gap-2">
+                              <span>{alm.name}</span>
+                              {linked && (
+                                <span className="bg-amber-50 text-amber-700 text-[9px] font-extrabold px-2 py-0.5 rounded-full border border-amber-200 uppercase tracking-wide">
+                                  Vinculado
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-5 py-4 text-xs text-slate-500">{alm.address || "Sem endereço cadastrado"}</td>
+                            <td className="px-5 py-4 text-right space-x-2">
+                              {canManageAlmoxarifados ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingAlm(alm);
+                                      setAlmName(alm.name);
+                                      setAlmCode(alm.code);
+                                      setAlmAddress(alm.address || "");
+                                      setIsAlmFormOpen(true);
+                                    }}
+                                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 text-[10px] font-bold uppercase rounded-md transition-all cursor-pointer border border-slate-200/50"
+                                  >
+                                    Editar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (linked) {
+                                        onNotifyTest(
+                                          "Operação Não Permitida",
+                                          `Não é possível excluir o almoxarifado "${alm.name}" pois ele está atualmente vinculado a um ou mais usuários do sistema. Remova o vínculo primeiro.`,
+                                          "error"
+                                        );
+                                        return;
+                                      }
+                                      if (confirm(`Tem certeza que deseja excluir o almoxarifado "${alm.name}"?`)) {
+                                        const updated = almoxarifados.filter(a => a.id !== alm.id);
+                                        if (onSaveAlmoxarifados) {
+                                          onSaveAlmoxarifados(updated);
+                                        }
+                                        onNotifyTest("Almoxarifado Excluído", `O almoxarifado "${alm.name}" foi removido do sistema.`, "system");
+                                      }
+                                    }}
+                                    className={`px-2 py-1 text-[10px] font-bold uppercase rounded-md transition-all cursor-pointer border ${
+                                      linked
+                                        ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60 border-slate-200/50"
+                                        : "bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-100"
+                                    }`}
+                                    title={linked ? "Este almoxarifado possui usuários vinculados e não pode ser excluído" : "Excluir Almoxarifado"}
+                                  >
+                                    Excluir
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide">Apenas Visualização</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: PUSH NOTIFICATIONS & SERVICE WORKER DIAGNOSTIC */}
+        {activeSubTab === "push_diagnostic" && (
+          <div className="lg:col-span-3 space-y-6">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/60 dark:border-slate-800/80 p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 border-b border-slate-100 dark:border-slate-800 pb-4 text-left">
+                <div>
+                  <h3 className="text-base font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-rose-500" />
+                    Diagnóstico de Service Worker & Push Notifications
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-semibold leading-relaxed">
+                    Valide a compatibilidade de recursos em segundo plano no seu navegador. O registro correto de um <strong className="text-slate-700 dark:text-slate-200">Service Worker (SW)</strong> é mandatório para permitir que as notificações cheguem mesmo quando a aplicação está em segundo plano ou fechada.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={runDiagnostic}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-extrabold rounded-xl text-xs transition-all flex items-center gap-2 cursor-pointer border border-slate-200 dark:border-slate-700 shadow-xs"
+                >
+                  <RefreshCw className="w-4.5 h-4.5" />
+                  Reavaliar Tudo
+                </button>
+              </div>
+
+              {/* Iframe Warning Alert */}
+              {isIframe && (
+                <div className="mb-6 p-5 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-2xl flex items-start gap-4 text-amber-800 dark:text-amber-300 text-xs font-semibold leading-relaxed shadow-sm text-left">
+                  <Lock className="w-6 h-6 shrink-0 text-amber-500 mt-0.5 animate-bounce" />
+                  <div className="space-y-1">
+                    <strong className="font-extrabold text-sm text-amber-900 dark:text-amber-200 uppercase tracking-wide block">🔒 Restrição Ativa: Executando dentro de um iFrame (Visualização do AI Studio)</strong>
+                    <p className="font-medium text-amber-700/90 dark:text-amber-400/90">
+                      O Google AI Studio renderiza este aplicativo em um contêiner sandbox de origem cruzada (iFrame). Por motivos de segurança cibernética (Políticas de Sandbox), os navegadores modernos <strong>bloqueiam ativamente</strong> o registro de Service Workers e solicitações de permissão de notificação quando executados de forma aninhada.
+                    </p>
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => window.open(window.location.href, "_blank")}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold rounded-xl transition-all cursor-pointer text-[10.5px] uppercase tracking-wider flex items-center gap-1.5 shadow-md shadow-indigo-600/10"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Abrir em Nova Aba Independente
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Multi-Step Pipeline Visualizer */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 text-left">
+                {/* Step 1 */}
+                <div className={`p-4.5 rounded-2xl border flex flex-col justify-between space-y-3 ${
+                  swSupported 
+                    ? "bg-emerald-50/20 dark:bg-emerald-950/5 border-emerald-200/50 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300"
+                    : "bg-rose-50/20 dark:bg-rose-950/5 border-rose-200/50 dark:border-rose-900/40 text-rose-800 dark:text-rose-300"
+                }`}>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Passo 1</span>
+                    <h4 className="font-extrabold text-xs text-slate-800 dark:text-slate-200 uppercase mt-1">Service Worker</h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium leading-relaxed">
+                      Capacidade do navegador de executar códigos em segundo plano (Background workers).
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
+                    {swSupported ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span>Suportado</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <span>Incompatível</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Step 2 */}
+                <div className={`p-4.5 rounded-2xl border flex flex-col justify-between space-y-3 ${
+                  pushSupported 
+                    ? "bg-emerald-50/20 dark:bg-emerald-950/5 border-emerald-200/50 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300"
+                    : "bg-rose-50/20 dark:bg-rose-950/5 border-rose-200/50 dark:border-rose-900/40 text-rose-800 dark:text-rose-300"
+                }`}>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Passo 2</span>
+                    <h4 className="font-extrabold text-xs text-slate-800 dark:text-slate-200 uppercase mt-1">Push Manager API</h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium leading-relaxed">
+                      Gerenciador nativo de conexões Push de servidores para recebimento em tempo real.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
+                    {pushSupported ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span>Suportado</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <span>Incompatível</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Step 3 */}
+                <div className={`p-4.5 rounded-2xl border flex flex-col justify-between space-y-3 ${
+                  permissionState === "granted"
+                    ? "bg-emerald-50/20 dark:bg-emerald-950/5 border-emerald-200/50 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300"
+                    : permissionState === "denied"
+                    ? "bg-rose-50/20 dark:bg-rose-950/5 border-rose-200/50 dark:border-rose-900/40 text-rose-800 dark:text-rose-300"
+                    : "bg-indigo-50/20 dark:bg-indigo-950/5 border-indigo-200/50 dark:border-indigo-900/40 text-indigo-800 dark:text-indigo-300"
+                }`}>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Passo 3</span>
+                    <h4 className="font-extrabold text-xs text-slate-800 dark:text-slate-200 uppercase mt-1">Permissão do Usuário</h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium leading-relaxed">
+                      Consentimento do navegador para permitir mostrar alertas visuais na área de trabalho.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
+                    {permissionState === "granted" ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span>Autorizado (Granted)</span>
+                      </>
+                    ) : permissionState === "denied" ? (
+                      <>
+                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <span>Bloqueado (Denied)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Bell className="w-4 h-4 text-indigo-505 shrink-0" />
+                        <span>Pendente (Default)</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Step 4 */}
+                <div className={`p-4.5 rounded-2xl border flex flex-col justify-between space-y-3 ${
+                  swRegState === "registered"
+                    ? "bg-emerald-50/20 dark:bg-emerald-950/5 border-emerald-200/50 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300"
+                    : swRegState === "failed"
+                    ? "bg-rose-50/20 dark:bg-rose-950/5 border-rose-200/50 dark:border-rose-900/40 text-rose-800 dark:text-rose-300"
+                    : "bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-750 dark:text-slate-400"
+                }`}>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Passo 4</span>
+                    <h4 className="font-extrabold text-xs text-slate-800 dark:text-slate-200 uppercase mt-1">Registro de SW</h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium leading-relaxed">
+                      O Service worker está registrado ativamente nesta origem e ouvindo a rede.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
+                    {swRegState === "registered" ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span>Registrado & Ativo</span>
+                      </>
+                    ) : swRegState === "failed" ? (
+                      <>
+                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <span>Falha no Registro</span>
+                      </>
+                    ) : swRegState === "registering" ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 text-indigo-500 shrink-0 animate-spin" />
+                        <span>Registrando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <BellOff className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span>Não Iniciado</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
+                
+                {/* Manual SW Action Panel */}
+                <div className="lg:col-span-2 space-y-6">
+                  
+                  {/* Action Dashboard Cards */}
+                  <div className="bg-slate-50 dark:bg-slate-950/30 p-5 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-4">
+                    <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                      <Settings className="w-4.5 h-4.5 text-slate-500" />
+                      Painel de Controle e Testes do Service Worker
+                    </h4>
+                    
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold leading-relaxed">
+                      Com o Service Worker registrado e a permissão de notificações concedida, o navegador poderá interceptar chamadas push em segundo plano e exibir notificações na área de trabalho mesmo se a janela estiver fechada.
+                    </p>
+
+                    <div className="flex flex-wrap gap-2.5 pt-2">
+                      {/* Button 1: Register permission */}
+                      <button
+                        type="button"
+                        onClick={requestNotificationPermission}
+                        disabled={permissionState === "granted" || isIframe}
+                        className={`p-2 px-3.5 font-bold rounded-xl text-[11px] uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
+                          permissionState === "granted"
+                            ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200/50 dark:border-slate-750 cursor-not-allowed"
+                            : isIframe
+                            ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200/50 dark:border-slate-750 cursor-not-allowed"
+                            : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/10"
+                        }`}
+                      >
+                        <Bell className="w-3.5 h-3.5" />
+                        {permissionState === "granted" ? "Permissão Concedida" : "Permitir Notificações"}
+                      </button>
+
+                      {/* Button 2: Register SW */}
+                      <button
+                        type="button"
+                        onClick={registerServiceWorker}
+                        disabled={swRegState === "registered" || !swSupported || isIframe}
+                        className={`p-2 px-3.5 font-bold rounded-xl text-[11px] uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
+                          swRegState === "registered"
+                            ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/10"
+                            : !swSupported || isIframe
+                            ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200/50 dark:border-slate-750 cursor-not-allowed"
+                            : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/10"
+                        }`}
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${swRegState === "registering" ? "animate-spin" : ""}`} />
+                        {swRegState === "registered" ? "SW Registrado (Re-registrar)" : "Registrar Service Worker"}
+                      </button>
+
+                      {/* Button 3: Remove SW */}
+                      <button
+                        type="button"
+                        onClick={unregisterServiceWorkers}
+                        disabled={activeSwCount === 0 || !swSupported}
+                        className={`p-2 px-3.5 font-bold rounded-xl text-[11px] uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
+                          activeSwCount === 0 || !swSupported
+                            ? "bg-slate-100 dark:bg-slate-850 text-slate-400 dark:text-slate-500 border border-slate-200/50 dark:border-slate-800 cursor-not-allowed"
+                            : "bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-900/30 text-rose-600 dark:text-rose-400 border border-rose-100 dark:border-rose-900/35"
+                        }`}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        Remover Workers
+                      </button>
+
+                      {/* Button 4: Show notification via SW */}
+                      <button
+                        type="button"
+                        onClick={triggerSwNotification}
+                        disabled={permissionState !== "granted" || activeSwCount === 0}
+                        className={`p-2 px-3.5 font-bold rounded-xl text-[11px] uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
+                          permissionState !== "granted" || activeSwCount === 0
+                            ? "bg-slate-100 dark:bg-slate-850 text-slate-400 dark:text-slate-500 border border-slate-200/50 dark:border-slate-800 cursor-not-allowed"
+                            : "bg-slate-800 hover:bg-slate-700 dark:bg-slate-750 dark:hover:bg-slate-650 text-white"
+                        }`}
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        Disparar Alerta SW
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Information Details Card */}
+                  <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 space-y-3 leading-relaxed">
+                    <h4 className="font-extrabold text-slate-800 dark:text-slate-100 uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                      <Info className="w-4.5 h-4.5 text-indigo-500" />
+                      Por que Notification.permission sozinho não garante entrega em segundo plano?
+                    </h4>
+                    <p>
+                      Muitos desenvolvedores assumem erroneamente que chamar <code>Notification.requestPermission()</code> e receber <code>"granted"</code> é suficiente para Push Notifications reais. No entanto:
+                    </p>
+                    <ul className="list-disc list-inside space-y-1.5 font-medium pl-1 text-slate-500 dark:text-slate-400">
+                      <li>
+                        <strong>Aba Ativa vs. Aba Inativa</strong>: Sem um Service Worker registrado, o navegador só pode exibir notificações se a sua aba da aplicação estiver ativa e em foco.
+                      </li>
+                      <li>
+                        <strong>Entrega em Segundo Plano</strong>: Quando o sistema operacional ou navegador suspende a aba inativa para economizar RAM/bateria, a thread principal morre. O único canal capaz de "acordar" o sistema e disparar o som e banner é o <strong>Service Worker</strong>, que opera em uma thread dedicada do kernel do navegador.
+                      </li>
+                      <li>
+                        <strong>Subscrição com PushManager</strong>: Para conectar seu app a serviços reais de Push (como Firebase Cloud Messaging ou WebPush nativo), o navegador exige um Service Worker ativo para registrar a subscrição e associar o endpoint seguro criptografado.
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Log Terminal Block */}
+                <div className="bg-slate-950 rounded-2xl border border-slate-900 p-4.5 flex flex-col h-[350px] relative">
+                  <div className="flex items-center justify-between border-b border-slate-900 pb-2.5 mb-3">
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                      <Terminal className="w-4 h-4 text-indigo-400 animate-pulse" />
+                      Terminal de Rastreamento (SW)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSwLogs([])}
+                      className="text-[9px] font-extrabold uppercase text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
+                    >
+                      Limpar logs
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto font-mono text-[10.5px] text-emerald-400 text-left space-y-1.5 leading-relaxed pr-1 custom-scrollbar">
+                    {swLogs.length === 0 ? (
+                      <span className="text-slate-600 italic block pt-4">Nenhum log registrado. Clique em "Reavaliar Tudo" ou "Registrar" para começar...</span>
+                    ) : (
+                      swLogs.map((log, index) => (
+                        <p key={index} className="break-all whitespace-pre-wrap">
+                          {log}
+                        </p>
+                      ))
+                    )}
+                  </div>
+                  <div className="absolute bottom-2.5 right-4 pointer-events-none">
+                    <span className="text-[8px] font-bold text-slate-600 tracking-widest uppercase select-none font-mono">sw_logger_active</span>
+                  </div>
+                </div>
+
+              </div>
+
             </div>
           </div>
         )}
