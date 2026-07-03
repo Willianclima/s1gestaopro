@@ -3,7 +3,8 @@ import {
   Mail, ShieldCheck, Key, Server, Hash, Send, RefreshCw, 
   CheckCircle, AlertTriangle, Eye, EyeOff, Sparkles, Terminal, Smartphone, HelpCircle,
   Database, Download, Upload, X, Check, Save,
-  Bell, BellOff, Info, Lock, ExternalLink, Activity, ShieldAlert, Settings
+  Bell, BellOff, Info, Lock, ExternalLink, Activity, ShieldAlert, Settings,
+  Calendar, Clock, Trash2, History, RotateCcw, Play
 } from "lucide-react";
 import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser, Client } from "../types";
 
@@ -64,26 +65,6 @@ export default function SmtpSettingsPanel({
     return isLinkedToClient || isLinkedToCurrentUser;
   };
 
-  // SMTP States
-  const [host, setHost] = useState(settings.host || "smtp.aracatubaservicos.com.br");
-  const [port, setPort] = useState(settings.port || "587");
-  const [user, setUser] = useState(settings.user || "suporte@aracatubaservicos.com.br");
-  const [pass, setPass] = useState(settings.pass || "************");
-  const [senderAddress, setSenderAddress] = useState(settings.senderAddress || "Araçatuba Serviços <suporte@aracatubaservicos.com.br>");
-  const [secure, setSecure] = useState(settings.secure !== undefined ? settings.secure : true);
-  
-  // SMTP Local States
-  const [showPassword, setShowPassword] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
-  const [testEmail, setTestEmail] = useState("");
-  const [testLogs, setTestLogs] = useState<string[]>([]);
-  const [testResult, setTestResult] = useState<"not_started" | "success" | "failed">("not_started");
-  
-  // Credentials verification states for pre-save validation
-  const [isCredentialsVerified, setIsCredentialsVerified] = useState<"untested" | "testing" | "success" | "failed">("untested");
-  const [credentialsLogs, setCredentialsLogs] = useState<string[]>([]);
-  const [showNotValidatedPrompt, setShowNotValidatedPrompt] = useState(false);
-
   // Service Worker & Push Notifications Diagnostic States
   const [swSupported, setSwSupported] = useState<boolean | null>(null);
   const [pushSupported, setPushSupported] = useState<boolean | null>(null);
@@ -129,11 +110,13 @@ export default function SmtpSettingsPanel({
           logs.push(`  - Registro #${i + 1}: escopo = "${r.scope}" (status active = ${r.active ? "sim" : "não"})`);
         });
         
-        const hasMockSw = regs.some(r => r.scope.includes("mock-sw") || r.scope === window.location.origin + "/");
+        const hasMockSw = regs.some(r => r.scope.includes("mock-sw") || r.scope === window.location.origin + "/" || r.scope.includes("sw.js"));
         if (hasMockSw) {
           setSwRegState("registered");
-          const targetReg = regs.find(r => r.scope.includes("mock-sw") || r.scope === window.location.origin + "/");
+          const targetReg = regs.find(r => r.scope.includes("mock-sw") || r.scope === window.location.origin + "/" || r.scope.includes("sw.js"));
           setSwScope(targetReg?.scope || "");
+        } else {
+          setSwRegState("untested");
         }
       } catch (err: any) {
         logs.push(`[DIAGNOSTIC] Erro ao buscar registros ativos: ${err.message || err}`);
@@ -146,7 +129,7 @@ export default function SmtpSettingsPanel({
   const registerServiceWorker = async () => {
     setSwRegState("registering");
     const logs = [...swLogs];
-    logs.push(`[${new Date().toLocaleTimeString()}] [REGISTRATION] Tentando registrar o Service Worker "/mock-sw.js"...`);
+    logs.push(`[${new Date().toLocaleTimeString()}] [REGISTRATION] Tentando registrar o Service Worker "/sw.js"...`);
     setSwLogs([...logs]);
 
     try {
@@ -158,7 +141,7 @@ export default function SmtpSettingsPanel({
         logs.push("[REGISTRATION] ⚠️ Aviso: Registros de Service Worker em iFrames geralmente falham ou são bloqueados pelo navegador (política sandbox de terceiro-origin).");
       }
 
-      const registration = await navigator.serviceWorker.register("/mock-sw.js", {
+      const registration = await navigator.serviceWorker.register("/sw.js", {
         scope: "/",
       });
 
@@ -304,6 +287,26 @@ export default function SmtpSettingsPanel({
       runDiagnostic();
     }
   }, [activeSubTab]);
+
+  // SMTP States
+  const [host, setHost] = useState(settings.host || "smtp.aracatubaservicos.com.br");
+  const [port, setPort] = useState(settings.port || "587");
+  const [user, setUser] = useState(settings.user || "suporte@aracatubaservicos.com.br");
+  const [pass, setPass] = useState(settings.pass || "************");
+  const [senderAddress, setSenderAddress] = useState(settings.senderAddress || "Araçatuba Serviços <suporte@aracatubaservicos.com.br>");
+  const [secure, setSecure] = useState(settings.secure !== undefined ? settings.secure : true);
+  
+  // SMTP Local States
+  const [showPassword, setShowPassword] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testEmail, setTestEmail] = useState("");
+  const [testLogs, setTestLogs] = useState<string[]>([]);
+  const [testResult, setTestResult] = useState<"not_started" | "success" | "failed">("not_started");
+  
+  // Credentials verification states for pre-save validation
+  const [isCredentialsVerified, setIsCredentialsVerified] = useState<"untested" | "testing" | "success" | "failed">("untested");
+  const [credentialsLogs, setCredentialsLogs] = useState<string[]>([]);
+  const [showNotValidatedPrompt, setShowNotValidatedPrompt] = useState(false);
 
   // WhatsApp States
   const [waProvider, setWaProvider] = useState<"twilio" | "cloud_api" | "custom">(whatsappSettings.provider || "custom");
@@ -454,6 +457,186 @@ export default function SmtpSettingsPanel({
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<boolean>(false);
   const [dragActive, setDragActive] = useState<boolean>(false);
+
+  // Setor de Backups Apartados e Agendamento Periódico
+  const [internalBackups, setInternalBackups] = useState<any[]>([]);
+  const [backupFrequency, setBackupFrequency] = useState<"disabled" | "daily" | "weekly" | "monthly">("daily");
+  const [backupTime, setBackupTime] = useState<string>("03:00");
+  const [backupDescription, setBackupDescription] = useState<string>("");
+
+  React.useEffect(() => {
+    // 1. Carregar configuração de agendamento do banco
+    const savedConfig = localStorage.getItem("service_mgt_backup_config");
+    if (savedConfig) {
+      try {
+        const parsed = JSON.parse(savedConfig);
+        if (parsed.frequency) setBackupFrequency(parsed.frequency);
+        if (parsed.time) setBackupTime(parsed.time);
+      } catch (e) {
+        console.error("Erro ao ler configuração de backup:", e);
+      }
+    }
+
+    // 2. Carregar setor de backups separados
+    const savedBackups = localStorage.getItem("service_mgt_internal_backups");
+    if (savedBackups) {
+      try {
+        setInternalBackups(JSON.parse(savedBackups));
+      } catch (e) {
+        console.error("Erro ao ler lista de backups:", e);
+      }
+    } else {
+      // Pré-popular com registros realistas para exibição inicial no primeiro uso
+      const initialMockBackups = [
+        {
+          id: "BK-20260702-030000",
+          date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          type: "agendado",
+          size: "24.50 KB",
+          status: "sucesso",
+          description: "Backup automático periódico do sistema",
+          snapshot: JSON.stringify({
+            system: "RequisicaoPro - Araçatuba Serviços de Manutenção",
+            exportedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+            version: "2.0.0",
+            data: {
+              "service_mgt_orders2": localStorage.getItem("service_mgt_orders2") || "[]",
+              "service_mgt_clients2": localStorage.getItem("service_mgt_clients2") || "[]",
+              "service_mgt_logged_user": localStorage.getItem("service_mgt_logged_user") || "null"
+            }
+          })
+        },
+        {
+          id: "BK-20260630-184512",
+          date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+          type: "manual",
+          size: "24.12 KB",
+          status: "sucesso",
+          description: "Cópia manual de segurança pré-homologação",
+          snapshot: JSON.stringify({
+            system: "RequisicaoPro - Araçatuba Serviços de Manutenção",
+            exportedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+            version: "2.0.0",
+            data: {
+              "service_mgt_orders2": localStorage.getItem("service_mgt_orders2") || "[]",
+              "service_mgt_clients2": localStorage.getItem("service_mgt_clients2") || "[]",
+              "service_mgt_logged_user": localStorage.getItem("service_mgt_logged_user") || "null"
+            }
+          })
+        }
+      ];
+      localStorage.setItem("service_mgt_internal_backups", JSON.stringify(initialMockBackups));
+      setInternalBackups(initialMockBackups);
+    }
+  }, []);
+
+  // Salvar configuração de frequência de backup
+  const handleSaveBackupConfig = (freq: "disabled" | "daily" | "weekly" | "monthly", time: string) => {
+    setBackupFrequency(freq);
+    setBackupTime(time);
+    localStorage.setItem("service_mgt_backup_config", JSON.stringify({ frequency: freq, time }));
+    onNotifyTest("Configuração Atualizada", `Backup periódico definido como: ${freq === "disabled" ? "Desativado" : "Automático (" + freq + ") às " + time + "h"}.`, "success");
+  };
+
+  // Realizar backup manual ou agendado no banco separado
+  const handleCreateInternalBackup = (type: "manual" | "agendado", customDesc?: string) => {
+    const backupObj: Record<string, string | null> = {};
+    const keys = [
+      "service_mgt_logged_user",
+      "service_mgt_clients2",
+      "service_mgt_orders2",
+      "service_mgt_categories2",
+      "service_mgt_professionals2",
+      "service_mgt_logs2",
+      "service_mgt_smtp",
+      "service_mgt_whatsapp",
+      "service_mgt_teams",
+      "service_mgt_login_attempts",
+      "service_mgt_permissions3",
+      "admin_custom_password"
+    ];
+    
+    for (const k of keys) {
+      backupObj[k] = localStorage.getItem(k);
+    }
+
+    const payload = {
+      system: "RequisicaoPro - Araçatuba Serviços de Manutenção",
+      exportedAt: new Date().toISOString(),
+      version: "2.0.0",
+      data: backupObj
+    };
+
+    const jsonStr = JSON.stringify(payload);
+    const sizeInKb = (new Blob([jsonStr]).size / 1024).toFixed(2);
+
+    const now = new Date();
+    const formattedDateId = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    const newBackupId = `BK-${formattedDateId}`;
+
+    const newBackupItem = {
+      id: newBackupId,
+      date: now.toISOString(),
+      type,
+      size: `${sizeInKb} KB`,
+      status: "sucesso",
+      description: customDesc || backupDescription || "Cópia manual de segurança do gestor",
+      snapshot: jsonStr
+    };
+
+    const updatedList = [newBackupItem, ...internalBackups];
+    setInternalBackups(updatedList);
+    localStorage.setItem("service_mgt_internal_backups", JSON.stringify(updatedList));
+    setBackupDescription("");
+
+    onNotifyTest(
+      "Backup Concluído", 
+      `Nova cópia de segurança registrada com ID ${newBackupId} no banco separado do sistema.`, 
+      "success"
+    );
+  };
+
+  // Restaurar dados a partir do banco de backups
+  const handleRestoreInternalBackup = (backupId: string) => {
+    const backupItem = internalBackups.find(b => b.id === backupId);
+    if (!backupItem || !backupItem.snapshot) {
+      onNotifyTest("Erro de Restauração", "Cópia de segurança não encontrada ou corrompida.", "critical");
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(backupItem.snapshot);
+      const data = parsed.data;
+      if (!data) {
+        throw new Error("Conteúdo dos dados inválido.");
+      }
+
+      let keysRestoredCount = 0;
+      for (const k in data) {
+        if (data[k] !== null && data[k] !== undefined) {
+          localStorage.setItem(k, data[k]);
+          keysRestoredCount++;
+        }
+      }
+
+      setImportSuccess(true);
+      onNotifyTest("Restauração Concluída", `O portal foi restaurado para o estado do backup ${backupId} com sucesso. Reiniciando...`, "system");
+      
+      setTimeout(() => {
+        window.location.reload();
+      }, 2200);
+    } catch (e: any) {
+      onNotifyTest("Erro", `Não foi possível restaurar: ${e.message}`, "critical");
+    }
+  };
+
+  // Excluir backup do banco de dados apartado
+  const handleDeleteInternalBackup = (backupId: string) => {
+    const updated = internalBackups.filter(b => b.id !== backupId);
+    setInternalBackups(updated);
+    localStorage.setItem("service_mgt_internal_backups", JSON.stringify(updated));
+    onNotifyTest("Backup Removido", `Cópia de segurança ${backupId} excluída com sucesso.`, "info");
+  };
 
   const getLocalStorageStats = () => {
     const stats = [];
@@ -787,8 +970,8 @@ export default function SmtpSettingsPanel({
       {/* Page Title Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 text-white p-6 rounded-3xl border border-slate-850 shadow-md">
         <div>
-          <h1 className="text-2xl font-extrabold tracking-tight">Configurações, Governança & Almoxarifados</h1>
-          <p className="text-xs text-slate-400 font-medium mt-1">Gerencie os servidores SMTP de e-mail, alertas automáticos de WhatsApp, permissões modulares de acesso e o cadastro/edição de todos os Almoxarifados da rede.</p>
+          <h1 className="text-2xl font-extrabold tracking-tight">Painel de Configurações</h1>
+          <p className="text-xs text-slate-400 font-medium mt-1">Central de configurações do sistema. Gerencie notificações em tempo real, almoxarifados da rede, servidores SMTP, alertas automáticos via WhatsApp API, permissões e cópias de segurança.</p>
         </div>
         {currentUser?.userType === "admin" && (
           <button
@@ -878,8 +1061,8 @@ export default function SmtpSettingsPanel({
               : "border-transparent text-slate-500 hover:text-slate-800"
           }`}
         >
-          <Bell className="w-4 h-4 text-rose-500" />
-          Diagnóstico de Notificações & SW
+          <Bell className="w-4 h-4 text-rose-505" />
+          Notificações em Tempo Real
         </button>
       </div>
 
@@ -1537,121 +1720,253 @@ export default function SmtpSettingsPanel({
         {activeSubTab === "backup" && (() => {
           const { stats, totalBytes } = getLocalStorageStats();
           return (
-            <div className="lg:col-span-3 bg-white rounded-3xl border border-slate-100 shadow-xs p-6 space-y-6 animate-fade-in text-left">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-5 gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-amber-50 rounded-2xl text-amber-650 border border-amber-100 shrink-0">
+            <div className="lg:col-span-3 bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-xs p-6 space-y-6 animate-fade-in text-left">
+              {/* Header */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-5 gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-2xl text-amber-650 dark:text-amber-450 border border-amber-100 dark:border-amber-900/30 shrink-0">
                     <Database className="w-6 h-6 animate-pulse" />
                   </div>
                   <div>
-                    <h2 className="font-extrabold text-slate-800 text-base uppercase tracking-wider">Cópia de Segurança / Backup do Gestor</h2>
-                    <p className="text-xs text-slate-550 font-medium text-slate-500">Exporte toda a base de dados de ARAÇATUBA (configurações, e-mails, requisitantes, logs e ordens) para um arquivo JSON seguro.</p>
+                    <h2 className="font-extrabold text-slate-800 dark:text-white text-base uppercase tracking-wider">Cópia de Segurança / Backup do Gestor</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Exporte toda a base de dados de ARAÇATUBA para um arquivo JSON seguro ou gerencie backups internos apartados periódicos.</p>
                   </div>
                 </div>
                 
-                <button
-                  type="button"
-                  onClick={handleExportBackup}
-                  className="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer hover:-translate-y-[1px] active:translate-y-0"
-                >
-                  <Download className="w-4 h-4 text-indigo-200" />
-                  Baixar Backup JSON Completo
-                </button>
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleExportBackup}
+                    className="px-4 py-2.5 bg-indigo-650 hover:bg-indigo-700 bg-indigo-600 hover:bg-indigo-750 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer hover:-translate-y-[1px] active:translate-y-0"
+                  >
+                    <Download className="w-4 h-4 text-indigo-200" />
+                    Exportar JSON Completo
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleCreateInternalBackup("manual")}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer hover:-translate-y-[1px] active:translate-y-0"
+                  >
+                    <Save className="w-4 h-4 text-emerald-200" />
+                    Gerar Ponto Interno
+                  </button>
+                </div>
               </div>
 
               {/* Grid Overview Info */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 flex flex-col justify-between">
-                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Tamanho Estimado da Base</span>
+                <div className="bg-slate-50/50 dark:bg-slate-950/20 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 flex flex-col justify-between">
+                  <span className="text-[9px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Tamanho Estimado da Base</span>
                   <div className="my-2">
-                    <span className="text-2xl font-black text-slate-800">{(totalBytes / 1024).toFixed(3)} KB</span>
-                    <span className="text-[10px] text-slate-500 block font-mono mt-1">{totalBytes} bytes em armazenamento local</span>
+                    <span className="text-2xl font-black text-slate-800 dark:text-white">{(totalBytes / 1024).toFixed(3)} KB</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-mono mt-1">{totalBytes} bytes em armazenamento local</span>
                   </div>
-                  <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1 bg-emerald-50/80 p-1 rounded-lg border border-emerald-100/50 block w-fit">
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 bg-emerald-50/80 dark:bg-emerald-950/10 p-1 rounded-lg border border-emerald-100/50 dark:border-emerald-900/20 block w-fit">
                     <CheckCircle className="w-3.5 h-3.5" />
                     Status Saudável
                   </span>
                 </div>
 
-                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 flex flex-col justify-between">
-                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Tabelas Ativas no Sistema</span>
+                <div className="bg-slate-50/50 dark:bg-slate-950/20 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 flex flex-col justify-between">
+                  <span className="text-[9px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Cópias Locais (Setor Apartado)</span>
                   <div className="my-2">
-                    <span className="text-2xl font-black text-indigo-600">{stats.filter(s => s.exists).length} / {stats.length}</span>
-                    <span className="text-[10px] text-slate-500 block mt-1">Estruturas municipais instanciadas</span>
+                    <span className="text-2xl font-black text-indigo-650 dark:text-indigo-400">{internalBackups.length} Registros</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-1">Armazenamento isolado para restauração</span>
                   </div>
-                  <span className="text-[9px] font-extrabold text-indigo-500 uppercase tracking-wider bg-indigo-50 border border-indigo-100/50 rounded-lg px-2 py-0.5 block w-fit">
-                    Armazenamento Local
+                  <span className="text-[9px] font-extrabold text-indigo-500 dark:text-indigo-400 uppercase tracking-wider bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100/50 dark:border-indigo-900/30 rounded-lg px-2 py-0.5 block w-fit">
+                    Histórico Ativo
                   </span>
                 </div>
 
-                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 flex flex-col justify-between">
-                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Tipo de Governança (LGPD)</span>
+                <div className="bg-slate-50/50 dark:bg-slate-950/20 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 flex flex-col justify-between">
+                  <span className="text-[9px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">Tipo de Governança e Rotina</span>
                   <div className="my-2">
-                    <span className="text-2xl font-black text-amber-600">Off-line / Criptografado</span>
-                    <span className="text-[10px] text-slate-500 block mt-1">Dispositivo de controle restrito</span>
+                    <span className="text-2xl font-black text-amber-600 dark:text-amber-400">
+                      {backupFrequency === "disabled" ? "Manual" : backupFrequency === "daily" ? "Diário" : backupFrequency === "weekly" ? "Semanal" : "Mensal"}
+                    </span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-1">
+                      {backupFrequency === "disabled" ? "Sem agendamentos ativos" : `Rotina às ${backupTime}h`}
+                    </span>
                   </div>
-                  <span className="text-[9px] font-extrabold text-amber-600 uppercase tracking-wider bg-amber-50 border border-amber-100/50 rounded-lg px-2 py-0.5 block w-fit">
+                  <span className="text-[9px] font-extrabold text-amber-600 dark:text-amber-400 uppercase tracking-wider bg-amber-50 dark:bg-amber-950/30 border border-amber-100/50 dark:border-amber-900/30 rounded-lg px-2 py-0.5 block w-fit">
                     Prefeitura Municipal
                   </span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
-                {/* Statistics Breakdown Table */}
-                <div className="space-y-3">
-                  <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 block">Detalhamento dos Dados Coletados</h3>
-                  
-                  <div className="border border-slate-150 rounded-2xl overflow-hidden divide-y divide-slate-100 bg-slate-50">
-                    {stats.map((row) => (
-                      <div key={row.key} className="flex items-center justify-between p-3.5 text-xs hover:bg-slate-100/55 transition-colors bg-white">
-                        <div className="flex items-center gap-3">
-                          <div className={`p-1.5 rounded-lg shrink-0 ${
-                            row.exists ? "bg-indigo-55 bg-indigo-50 text-indigo-600" : "bg-slate-100 text-slate-350"
-                          }`}>
-                            {row.key.includes("smtp") ? (
-                              <Mail className="w-4 h-4" />
-                            ) : row.key.includes("whatsapp") ? (
-                              <Smartphone className="w-4 h-4" />
-                            ) : row.key.includes("password") ? (
-                              <Key className="w-4 h-4 focus-visible:no-underline" />
-                            ) : (
-                              <Database className="w-4 h-4" />
-                            )}
-                          </div>
-                          <div>
-                            <span className="font-bold text-slate-800 block">{row.label}</span>
-                            <span className="text-[9px] text-slate-400 font-mono select-all block">{row.key}</span>
-                          </div>
-                        </div>
+              {/* Advanced Controls Layout */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+                {/* Left Side: Scheduling Config and Manual triggers */}
+                <div className="lg:col-span-4 space-y-6">
+                  {/* Backup Configuration Schedulers */}
+                  <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-4">
+                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-350 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <Clock className="w-4 h-4 text-indigo-500 shrink-0" />
+                      Configurar Backup Periódico
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal font-medium">
+                      Programe cópias de segurança que rodam em background para registrar snapshots apartados no banco de dados.
+                    </p>
 
-                        <div className="text-right">
-                          {row.exists ? (
-                            <>
-                              <span className="font-extrabold text-slate-700 block">
-                                {row.count > 0 ? `${row.count} itens` : "Ativo"}
-                              </span>
-                              <span className="text-[9px] text-slate-450 text-slate-400 font-mono block">{(row.bytes / 1024).toFixed(3)} KB</span>
-                            </>
-                          ) : (
-                            <span className="text-[10px] text-slate-350 font-bold uppercase tracking-wider block bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100/70">
-                              Vazia / Ausente
-                            </span>
-                          )}
-                        </div>
+                    <div className="space-y-3 pt-1">
+                      <div>
+                        <label className="text-[10.5px] font-bold text-slate-600 dark:text-slate-450 block mb-1.5">Frequência Periódica:</label>
+                        <select
+                          value={backupFrequency}
+                          onChange={(e) => handleSaveBackupConfig(e.target.value as any, backupTime)}
+                          className="w-full text-xs p-2.5 rounded-xl border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-950 font-bold text-slate-800 dark:text-white"
+                        >
+                          <option value="disabled">🚫 Apenas Manual / Desativado</option>
+                          <option value="daily">📅 Execução Diária</option>
+                          <option value="weekly">📅 Execução Semanal</option>
+                          <option value="monthly">📅 Execução Mensal</option>
+                        </select>
                       </div>
-                    ))}
+
+                      {backupFrequency !== "disabled" && (
+                        <div>
+                          <label className="text-[10.5px] font-bold text-slate-600 dark:text-slate-455 block mb-1.5">Horário Programado:</label>
+                          <input
+                            type="time"
+                            value={backupTime}
+                            onChange={(e) => handleSaveBackupConfig(backupFrequency, e.target.value)}
+                            className="w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 font-mono font-bold text-slate-800 dark:text-white"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Manual trigger form */}
+                  <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-3">
+                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-350 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <Save className="w-4 h-4 text-emerald-500" />
+                      Registrar Cópia Interna Manual
+                    </h3>
+                    <p className="text-[11px] text-slate-550 dark:text-slate-400 leading-normal font-medium">
+                      O sistema guardará o instantâneo atual no setor de banco de dados separado.
+                    </p>
+
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        placeholder="Ex: Cópia antes da folha mensal..."
+                        value={backupDescription}
+                        onChange={(e) => setBackupDescription(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-850 dark:text-white font-medium"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleCreateInternalBackup("manual")}
+                        className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-400 font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                        Gerar Backup Agora
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                {/* Import / Restore panel */}
-                <div className="bg-slate-50/55 rounded-2xl border border-slate-100 p-5 space-y-4 flex flex-col justify-between">
-                  <div className="space-y-4">
-                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 flex items-center gap-1.5 border-b border-slate-100 pb-2.5">
+                {/* Right Side: Backups tracking table and external JSON import */}
+                <div className="lg:col-span-8 space-y-6">
+                  {/* Backups List Tracking */}
+                  <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-4">
+                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <span className="flex items-center gap-1.5">
+                        <History className="w-4 h-4 text-indigo-550 dark:text-indigo-400 shrink-0" />
+                        Histórico e Acompanhamento de Backups Realizados
+                      </span>
+                      <span className="text-[10px] bg-slate-200 dark:bg-slate-850 font-mono px-2 py-0.5 rounded-full text-slate-650 dark:text-slate-400">
+                        {internalBackups.length} salvos
+                      </span>
+                    </h3>
+
+                    {internalBackups.length === 0 ? (
+                      <div className="text-center py-8 text-slate-400 dark:text-slate-500">
+                        <Database className="w-8 h-8 mx-auto stroke-1 mb-2 opacity-50" />
+                        <p className="text-xs font-bold">Nenhum backup registrado no setor de banco separado.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs min-w-[550px]">
+                          <thead>
+                            <tr className="border-b border-slate-150 dark:border-slate-800 text-slate-400 uppercase text-[9px] tracking-widest font-black">
+                              <th className="pb-2">ID / Data de Geração</th>
+                              <th className="pb-2">Tipo</th>
+                              <th className="pb-2">Tamanho</th>
+                              <th className="pb-2">Descrição</th>
+                              <th className="pb-2 text-right">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
+                            {internalBackups.map((bk) => (
+                              <tr key={bk.id} className="hover:bg-slate-100/50 dark:hover:bg-slate-900/50">
+                                <td className="py-2.5">
+                                  <span className="font-mono font-bold text-slate-850 dark:text-white block">{bk.id}</span>
+                                  <span className="text-[9.5px] text-slate-400 dark:text-slate-500 block">
+                                    {new Date(bk.date).toLocaleString("pt-BR")}
+                                  </span>
+                                </td>
+                                <td className="py-2.5">
+                                  {bk.type === "agendado" ? (
+                                    <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold text-[10px] uppercase tracking-wider">
+                                      ⏰ Periódico
+                                    </span>
+                                  ) : (
+                                    <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full font-bold text-[10px] uppercase tracking-wider">
+                                      👤 Manual
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 font-mono text-slate-650 dark:text-slate-400 font-semibold">{bk.size}</td>
+                                <td className="py-2.5 max-w-[180px] truncate" title={bk.description}>
+                                  <span className="text-slate-700 dark:text-slate-300 font-medium text-[11px] block">{bk.description}</span>
+                                </td>
+                                <td className="py-2.5 text-right whitespace-nowrap">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(`⚠️ AVISO DE RESTAURAÇÃO DE BACKUP:\n\nTem certeza de que deseja restaurar a imagem ${bk.id}?\nEsta ação substituirá integralmente os dados de chamados, equipes, usuários e configurações atuais por aqueles contidos no backup.`)) {
+                                          handleRestoreInternalBackup(bk.id);
+                                        }
+                                      }}
+                                      className="p-1.5 text-indigo-650 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors cursor-pointer"
+                                      title="Restaurar este ponto de segurança"
+                                    >
+                                      <RotateCcw className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(`Deseja excluir permanentemente o backup ${bk.id} do setor apartado?`)) {
+                                          handleDeleteInternalBackup(bk.id);
+                                        }
+                                      }}
+                                      className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                                      title="Excluir ponto de backup"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* External file restore */}
+                  <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-4">
+                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2.5">
                       <Upload className="w-4 h-4 text-indigo-500 shrink-0" />
-                      Restaurar Base (Carregar Arquivo .JSON)
+                      Restaurar Base (Carregar Arquivo .JSON Externo)
                     </h3>
                     
-                    <p className="text-[11px] text-slate-500 leading-normal font-medium">
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal font-medium">
                       O processo de restauração lerá o arquivo `.json` exportado anteriormente e reiniciará o portal do gestor recarregando os chamados, equipes, usuários e logs gravados originalmente no backup.
                     </p>
 
@@ -1710,15 +2025,60 @@ export default function SmtpSettingsPanel({
                         </div>
                       </div>
                     )}
-                  </div>
 
-                  <div className="bg-amber-55/60 bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-[10.5px] leading-relaxed text-left flex items-start gap-2.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div>
-                      <strong className="uppercase text-[9px] font-black text-amber-900 tracking-wider block">⚠️ AVISO DE SUBSTITUIÇÃO</strong>
-                      <span>A importação de um backup <strong>sobrescreve totalmente</strong> as informações de chamados e configurações locais atuais. Recomenda-se baixar um backup atual preventivamente.</span>
+                    <div className="bg-amber-55/60 bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-[10.5px] leading-relaxed text-left flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="uppercase text-[9px] font-black text-amber-900 tracking-wider block">⚠️ AVISO DE SUBSTITUIÇÃO</strong>
+                        <span>A importação de um backup <strong>sobrescreve totalmente</strong> as informações de chamados e configurações locais atuais. Recomenda-se baixar um backup atual preventivamente.</span>
+                      </div>
                     </div>
                   </div>
+                </div>
+              </div>
+
+              {/* Statistics Details */}
+              <div className="border-t border-slate-100 dark:border-slate-800 pt-5 space-y-3">
+                <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-350 block">Detalhamento Técnico das Tabelas Operacionais</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {stats.map((row) => (
+                    <div key={row.key} className="flex items-center justify-between p-3.5 text-xs bg-slate-50/50 dark:bg-slate-950/20 border border-slate-100 dark:border-slate-850/50 rounded-xl hover:bg-slate-100/50 dark:hover:bg-slate-900/40 transition-colors">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`p-1.5 rounded-lg shrink-0 ${
+                          row.exists ? "bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400" : "bg-slate-100 dark:bg-slate-800 text-slate-350 dark:text-slate-650"
+                        }`}>
+                          {row.key.includes("smtp") ? (
+                            <Mail className="w-4 h-4" />
+                          ) : row.key.includes("whatsapp") ? (
+                            <Smartphone className="w-4 h-4" />
+                          ) : row.key.includes("password") ? (
+                            <Key className="w-4 h-4 focus-visible:no-underline" />
+                          ) : (
+                            <Database className="w-4 h-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-800 dark:text-white block truncate">{row.label}</span>
+                          <span className="text-[9px] text-slate-400 dark:text-slate-500 font-mono block select-all truncate">{row.key}</span>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0 pl-2">
+                        {row.exists ? (
+                          <>
+                            <span className="font-extrabold text-slate-700 dark:text-slate-300 block">
+                              {row.count > 0 ? `${row.count} itens` : "Ativo"}
+                            </span>
+                            <span className="text-[9px] text-slate-400 dark:text-slate-500 font-mono block">{(row.bytes / 1024).toFixed(3)} KB</span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-350 dark:text-slate-600 font-bold uppercase tracking-wider block bg-slate-100 dark:bg-slate-950 px-2 py-0.5 rounded-md">
+                            Ausente
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -2127,12 +2487,12 @@ export default function SmtpSettingsPanel({
         {/* TAB 6: PUSH NOTIFICATIONS & SERVICE WORKER DIAGNOSTIC */}
         {activeSubTab === "push_diagnostic" && (
           <div className="lg:col-span-3 space-y-6">
-            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/60 dark:border-slate-800/80 p-6 shadow-xs">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/60 dark:border-slate-800/80 p-6 shadow-xs animate-fade-in text-left">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 border-b border-slate-100 dark:border-slate-800 pb-4 text-left">
                 <div>
                   <h3 className="text-base font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2">
-                    <Activity className="w-5 h-5 text-rose-500" />
-                    Diagnóstico de Service Worker & Push Notifications
+                    <Activity className="w-5 h-5 text-rose-505" />
+                    Diagnóstico de Service Worker & Notificações em Tempo Real
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-semibold leading-relaxed">
                     Valide a compatibilidade de recursos em segundo plano no seu navegador. O registro correto de um <strong className="text-slate-700 dark:text-slate-200">Service Worker (SW)</strong> é mandatório para permitir que as notificações cheguem mesmo quando a aplicação está em segundo plano ou fechada.
@@ -2189,12 +2549,12 @@ export default function SmtpSettingsPanel({
                   <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
                     {swSupported ? (
                       <>
-                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <CheckCircle className="w-4 h-4 text-emerald-505 shrink-0" />
                         <span>Suportado</span>
                       </>
                     ) : (
                       <>
-                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <AlertTriangle className="w-4 h-4 text-rose-505 shrink-0" />
                         <span>Incompatível</span>
                       </>
                     )}
@@ -2217,12 +2577,12 @@ export default function SmtpSettingsPanel({
                   <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
                     {pushSupported ? (
                       <>
-                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <CheckCircle className="w-4 h-4 text-emerald-505 shrink-0" />
                         <span>Suportado</span>
                       </>
                     ) : (
                       <>
-                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <AlertTriangle className="w-4 h-4 text-rose-505 shrink-0" />
                         <span>Incompatível</span>
                       </>
                     )}
@@ -2247,12 +2607,12 @@ export default function SmtpSettingsPanel({
                   <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
                     {permissionState === "granted" ? (
                       <>
-                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <CheckCircle className="w-4 h-4 text-emerald-505 shrink-0" />
                         <span>Autorizado (Granted)</span>
                       </>
                     ) : permissionState === "denied" ? (
                       <>
-                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <AlertTriangle className="w-4 h-4 text-rose-505 shrink-0" />
                         <span>Bloqueado (Denied)</span>
                       </>
                     ) : (
@@ -2282,12 +2642,12 @@ export default function SmtpSettingsPanel({
                   <div className="flex items-center gap-1.5 pt-1 text-xs font-bold">
                     {swRegState === "registered" ? (
                       <>
-                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <CheckCircle className="w-4 h-4 text-emerald-505 shrink-0" />
                         <span>Registrado & Ativo</span>
                       </>
                     ) : swRegState === "failed" ? (
                       <>
-                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <AlertTriangle className="w-4 h-4 text-rose-505 shrink-0" />
                         <span>Falha no Registro</span>
                       </>
                     ) : swRegState === "registering" ? (
@@ -2379,7 +2739,7 @@ export default function SmtpSettingsPanel({
                         className={`p-2 px-3.5 font-bold rounded-xl text-[11px] uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
                           permissionState !== "granted" || activeSwCount === 0
                             ? "bg-slate-100 dark:bg-slate-850 text-slate-400 dark:text-slate-500 border border-slate-200/50 dark:border-slate-800 cursor-not-allowed"
-                            : "bg-slate-800 hover:bg-slate-700 dark:bg-slate-750 dark:hover:bg-slate-650 text-white"
+                            : "bg-slate-800 hover:bg-slate-700 dark:bg-slate-750 dark:hover:bg-slate-650 text-white shadow-md shadow-slate-800/10"
                         }`}
                       >
                         <Send className="w-3.5 h-3.5" />

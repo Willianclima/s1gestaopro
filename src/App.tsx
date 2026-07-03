@@ -12,7 +12,6 @@ import Professionals from "./components/Professionals";
 import AiAssistant from "./components/AiAssistant";
 import ReportsAndLogs from "./components/ReportsAndLogs";
 import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
-import NotificationDiagnosticModal from "./components/NotificationDiagnosticModal";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
@@ -203,7 +202,7 @@ export default function App() {
       return ["gestor", "gestor_servicos", "profissional"].includes(userRole);
     }
     if (tab === "settings") {
-      return ["gestor", "gestor_servicos"].includes(userRole);
+      return ["gestor", "gestor_servicos", "profissional", "requisitante"].includes(userRole);
     }
     const allowed = permissions[tab] || [];
     return allowed.includes(userRole);
@@ -2778,7 +2777,7 @@ export default function App() {
                 }`}
               >
                 <Settings className="w-4 h-4" />
-                Configurações & Almoxarifados
+                Configurações
               </button>
             )}
 
@@ -2867,7 +2866,10 @@ export default function App() {
 
             {/* Browser Notifications Indicator */}
             <button
-              onClick={() => setIsNotificationDiagOpen(true)}
+              onClick={() => {
+                setSettingsSubTab("push_diagnostic");
+                setActiveTab("settings");
+              }}
               className={`hidden md:flex items-center gap-1.5 p-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer ${
                 isInIframe
                   ? "bg-amber-50/20 hover:bg-amber-50/40 border-amber-200/50 text-amber-700 dark:bg-amber-950/10 dark:border-amber-900/20 dark:text-amber-400"
@@ -3600,14 +3602,6 @@ export default function App() {
               </div>
             )}
 
-            {isNotificationDiagOpen && (
-              <NotificationDiagnosticModal
-                isOpen={isNotificationDiagOpen}
-                onClose={() => setIsNotificationDiagOpen(false)}
-                onRequestPermission={requestNotificationPermission}
-                currentPermission={notificationPermission}
-              />
-            )}
           </div>
         </main>
       </div>

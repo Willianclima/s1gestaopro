@@ -112,7 +112,7 @@
 .dark .bg-slate-50,
 .dark .bg-gray-50,
 .dark .bg-slate-50\/30 {
-  background-color: #0b0f19 !important;
+  background-color: #0a0e17 !important; /* Deep, prestigious municipal slate navy */
   color: #f1f5f9 !important;
 }
 
@@ -121,7 +121,7 @@
 .dark .bg-slate-50\/50,
 .dark .bg-slate-100\/40,
 .dark .hover\:bg-slate-50:hover {
-  background-color: #161e2e !important;
+  background-color: #111a2e !important; /* Enhanced darker slate card color */
   color: #f1f5f9 !important;
 }
 
@@ -135,20 +135,20 @@
 .dark .border-gray-100,
 .dark .border-gray-200,
 .dark .divide-slate-100 > * {
-  border-color: #212c40 !important;
-  divide-color: #212c40 !important;
+  border-color: #27354f !important; /* Crisper, higher-contrast borders for accessibility */
+  divide-color: #27354f !important;
 }
 
 /* Lighter grey sections */
 .dark .bg-slate-100,
 .dark .bg-gray-100,
 .dark .bg-slate-50 {
-  background-color: #1f2a3f !important;
+  background-color: #1a253d !important;
 }
 
 /* Heavy dark areas (like some headers or tables) */
 .dark .bg-slate-900 {
-  background-color: #0d131f !important;
+  background-color: #0b111e !important;
 }
 
 /* Strong typography - slate-800, slate-900, slate-850 to white/light slate */
@@ -159,7 +159,7 @@
 .dark .text-slate-950,
 .dark .text-neutral-900,
 .dark .text-zinc-900 {
-  color: #f8fafc !important;
+  color: #ffffff !important; /* True high-contrast white */
 }
 
 /* Medium emphasis typography - slate-600, slate-700 to medium slate */
@@ -168,7 +168,7 @@
 .dark .text-slate-600,
 .dark .text-gray-700,
 .dark .text-zinc-700 {
-  color: #cbd5e1 !important;
+  color: #e2e8f0 !important; /* Brighter slate for better reading contrast */
 }
 
 /* Low emphasis / metadata typography - slate-500, text-slate-400 */
@@ -176,7 +176,7 @@
 .dark .text-slate-400,
 .dark .text-gray-500,
 .dark .text-gray-400 {
-  color: #94a3b8 !important;
+  color: #cbd5e1 !important; /* Shifted up from 94a3b8 to cbd5e1 to meet WCAG AA contrast on dark background */
 }
 
 /* Text selections, input forms, and interactive fields */
@@ -187,20 +187,29 @@
 .dark input[type="tel"],
 .dark select,
 .dark textarea {
-  background-color: #1f2a3f !important;
-  color: #f8fafc !important;
-  border-color: #2e3e59 !important;
+  background-color: #162238 !important; /* Higher contrast background */
+  color: #ffffff !important;
+  border-color: #314466 !important;
 }
 
 .dark input[type="text"]::placeholder,
 .dark input[type="password"]::placeholder,
 .dark textarea::placeholder {
-  color: #64748b !important;
+  color: #94a3b8 !important; /* Increased contrast for placeholder */
 }
 
 .dark select option {
-  background-color: #161e2e !important;
-  color: #f8fafc !important;
+  background-color: #111a2e !important;
+  color: #ffffff !important;
+}
+
+/* Focus and active states with the official municipal blue */
+.dark input:focus,
+.dark select:focus,
+.dark textarea:focus {
+  border-color: #2d749a !important;
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(45, 116, 154, 0.45) !important;
 }
 
 /* Hover highlights on tables, selectors, and dropdowns */
@@ -210,19 +219,19 @@
 .dark .hover\:bg-slate-100:hover,
 .dark .hover\:bg-slate-50:hover,
 .dark .bg-slate-50\/80 {
-  background-color: #1f2a3f !important;
+  background-color: #1e2c47 !important;
 }
 
 /* Blue/Teal/Indigo secondary soft states (e.g., active elements) */
 .dark .bg-indigo-50,
 .dark .bg-blue-50 {
-  background-color: #0c2340 !important;
-  color: #5bb3e5 !important;
+  background-color: #0e274c !important;
+  color: #7dd3fc !important;
 }
 
 .dark .border-indigo-100,
 .dark .border-blue-100 {
-  border-color: #143566 !important;
+  border-color: #1e40af !important;
 }
 
 .dark .text-indigo-500,
@@ -235,17 +244,110 @@
 
 /* Toast backgrounds & specific dynamic states */
 .dark .bg-slate-800\/95 {
-  background-color: #161e2e !important;
+  background-color: #111a2e !important;
 }
 
 /* Form sections and modal overlays */
 .dark .bg-slate-900\/40 {
-  background-color: rgba(3, 7, 18, 0.6) !important;
+  background-color: rgba(3, 7, 18, 0.75) !important; /* Darker backdrop to make modals pop */
 }
 
 /* Ensure scheduler time cell divisions are visible in dark theme */
 .dark .border-slate-100 {
-  border-color: #212c40 !important;
+  border-color: #27354f !important;
+}
+
+/* ==========================================
+   HIGH ACCESSIBILITY MOUNTED STYLES (TABLES & MODALS)
+   ========================================== */
+
+/* 1. Precise Table Enhancements in Dark Mode */
+.dark table {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  background-color: #111a2e !important;
+  border: 1px solid #27354f !important;
+  border-radius: 1rem !important;
+  overflow: hidden !important;
+}
+
+.dark table th,
+.dark th {
+  background-color: #0d1627 !important; /* Deepest blue/black for table headers */
+  color: #ffffff !important;
+  border-bottom: 2px solid #2d749a !important; /* Municipality Signature Accent line */
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  font-size: 0.7rem !important;
+  padding: 1rem 1.25rem !important;
+}
+
+.dark table td,
+.dark td {
+  color: #f1f5f9 !important;
+  border-bottom: 1px solid #1e2a44 !important;
+  padding: 0.875rem 1.25rem !important;
+  font-size: 0.8rem !important;
+}
+
+/* Zebra striping for ultra legibility in long tables */
+.dark tr:nth-child(even) {
+  background-color: #152037 !important; /* Slightly lighter shade of dark slate */
+}
+
+.dark tr:nth-child(odd) {
+  background-color: #0e1626 !important;
+}
+
+/* Bright hover feedback with left highlight bar on row hover */
+.dark tr:hover td {
+  background-color: #1e2c4a !important;
+  color: #ffffff !important;
+}
+
+/* 2. Premium Modal Enhancements in Dark Mode */
+.dark .fixed.inset-0 .bg-white,
+.dark .fixed.inset-0 .bg-slate-900,
+.dark [role="dialog"],
+.dark [role="dialog"] .bg-white,
+.dark [role="dialog"] .bg-slate-900,
+.dark .modal-container {
+  background-color: #0a0f1d !important; /* Solid high-contrast deep municipal backdrop */
+  color: #ffffff !important;
+  border: 2px solid #2d749a !important; /* Solid, thick frame in municipality's official brand blue */
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85), 
+              0 0 40px rgba(45, 116, 154, 0.3) !important; /* High contrast drop-shadow glow */
+  border-radius: 1.5rem !important;
+}
+
+/* Modal Headers */
+.dark [role="dialog"] h2,
+.dark [role="dialog"] h3,
+.dark .fixed.inset-0 h2,
+.dark .fixed.inset-0 h3 {
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  border-bottom: 1px solid #27354f !important;
+  padding-bottom: 1rem !important;
+  letter-spacing: -0.02em !important;
+}
+
+/* Modal Footers */
+.dark .fixed.inset-0 .flex.justify-end,
+.dark [role="dialog"] .flex.justify-end {
+  border-top: 1px solid #27354f !important;
+  padding-top: 1rem !important;
+  margin-top: 1.5rem !important;
+}
+
+/* Scrollbar styling in dark mode */
+.dark ::-webkit-scrollbar-thumb {
+  background: #314466 !important;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #2d749a !important;
 }
 
 
