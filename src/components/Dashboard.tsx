@@ -6,6 +6,7 @@ import {
   Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
   TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check, Calendar, Bell, BellOff
 } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from "recharts";
 
 interface DashboardProps {
   orders: ServiceOrder[];
@@ -175,6 +176,37 @@ export default function Dashboard({
   // Today's Date representation matching the mock environment: June 15, 2026
   const todayStr = "2026-06-15";
   const todaySchedule = orders.filter(os => os.startDate === todayStr || os.endDate === todayStr);
+
+  // Volume de ordens de serviço por categoria para o gráfico
+  const categoryData = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    orders.forEach(o => {
+      const cat = o.category || "Outros";
+      counts[cat] = (counts[cat] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, value]) => ({
+      name,
+      value
+    }));
+  }, [orders]);
+
+  // Volume de ordens de serviço por categoria agrupados por prioridade para o gráfico
+  const priorityCategoryData = React.useMemo(() => {
+    const counts: Record<string, { name: string; low: number; medium: number; high: number; urgent: number; total: number }> = {};
+    orders.forEach(o => {
+      const cat = o.category || "Outros";
+      if (!counts[cat]) {
+        counts[cat] = { name: cat, low: 0, medium: 0, high: 0, urgent: 0, total: 0 };
+      }
+      const prio = o.priority || "medium";
+      if (prio === "low") counts[cat].low++;
+      else if (prio === "medium") counts[cat].medium++;
+      else if (prio === "high") counts[cat].high++;
+      else if (prio === "urgent") counts[cat].urgent++;
+      counts[cat].total++;
+    });
+    return Object.values(counts);
+  }, [orders]);
 
   return (
     <div className="space-y-8">
@@ -347,12 +379,18 @@ export default function Dashboard({
               {todaySchedule.length > 0 ? (
                 todaySchedule.map(os => {
                   const delayed = isDelayedOpen(os);
+                  const prio = os.priority || 'medium';
+                  const priorityStripeColor = 
+                    prio === 'low' ? 'border-l-emerald-500' :
+                    prio === 'high' ? 'border-l-amber-500' :
+                    prio === 'urgent' ? 'border-l-red-500' :
+                    'border-l-blue-500'; // medium
                   return (
                     <div 
                       key={os.id} 
-                      className={`p-4 rounded-2xl border duration-150 text-xs transition-all flex flex-col justify-between h-44 cursor-pointer hover:shadow-xs ${
+                      className={`p-4 pl-3 rounded-2xl border border-l-4 ${priorityStripeColor} duration-150 text-xs transition-all flex flex-col justify-between h-44 cursor-pointer hover:shadow-xs ${
                         delayed 
-                          ? "bg-red-50/40 border-red-200/50 hover:border-red-300" 
+                          ? "bg-red-50/40 border-red-250 hover:border-red-300" 
                           : "bg-slate-50/50 border-slate-200/40 hover:border-indigo-200"
                       }`}
                       onClick={() => onSelectOrder(os)}
@@ -418,153 +456,68 @@ export default function Dashboard({
             </div>
           </div>
 
-          {/* DIAGNOSTIC AND TRACE PANEL */}
-          <div className="bg-slate-900 text-slate-100 rounded-3xl border border-slate-950/20 shadow-xl overflow-hidden text-left transition-all">
-            <button
-              onClick={() => setDiagnosticOpen(!diagnosticOpen)}
-              className="w-full p-6 flex items-center justify-between hover:bg-slate-800/50 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <ShieldCheck className="w-6 h-6 text-emerald-400" />
-                <div>
-                  <h3 className="font-extrabold text-sm uppercase tracking-wider text-white">
-                    Painel de Diagnóstico & Rastreamento de Notificações
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Verifique em tempo real o status de sincronização, caches de leitura e dispare testes.
-                  </p>
-                </div>
+          {/* SEÇÃO: GRÁFICO DE ORDENS DE SERVIÇO POR CATEGORIA */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-4 text-left">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-4">
+              <TrendingUp className="w-5 h-5 text-indigo-650" />
+              <h3 className="font-extrabold text-sm uppercase tracking-wider text-slate-800">
+                Volume de Ordens de Serviço por Categoria
+              </h3>
+            </div>
+
+            {priorityCategoryData.length > 0 ? (
+              <div className="h-96 w-full pt-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={priorityCategoryData}
+                    margin={{ top: 20, right: 30, left: 0, bottom: 20 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis 
+                      dataKey="name" 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
+                    />
+                    <YAxis 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
+                      allowDecimals={false}
+                    />
+                    <Tooltip 
+                      cursor={{ fill: '#f8fafc' }}
+                      contentStyle={{ 
+                        backgroundColor: '#0f172a', 
+                        border: 'none', 
+                        borderRadius: '12px',
+                        color: '#fff',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        padding: '8px 12px',
+                        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                      }}
+                      itemStyle={{ fontSize: '11px' }}
+                      labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
+                    />
+                    <Legend 
+                      verticalAlign="top" 
+                      height={40}
+                      iconType="circle"
+                      iconSize={8}
+                      wrapperStyle={{ fontSize: '11.5px', fontWeight: 'bold' }}
+                    />
+                    <Bar dataKey="low" name="Prioridade Baixa" stackId="a" fill="#10b981" />
+                    <Bar dataKey="medium" name="Prioridade Média" stackId="a" fill="#3b82f6" />
+                    <Bar dataKey="high" name="Prioridade Alta" stackId="a" fill="#f59e0b" />
+                    <Bar dataKey="urgent" name="Prioridade Urgente" stackId="a" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-              <div className="flex items-center gap-2">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${diagnosticOpen ? "bg-emerald-500/25 text-emerald-300" : "bg-slate-700 text-slate-400"}`}>
-                  {diagnosticOpen ? "Ativo / Aberto" : "Clique para Expandir"}
-                </span>
-                {diagnosticOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-              </div>
-            </button>
-
-            {diagnosticOpen && (
-              <div className="p-6 border-t border-slate-800 space-y-6 bg-slate-950/45 text-xs text-slate-300">
-                {/* 3-Column Diagnostic Summary Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Dados da Sessão Atual</span>
-                    <p className="text-white font-extrabold">Nome: {currentUser?.name || "Sem usuário"}</p>
-                    <p>Tipo: <span className="font-mono bg-slate-800 text-indigo-300 px-1.5 py-0.5 rounded text-[10.5px] font-semibold">{currentUser?.userType || "Sem tipo"}</span></p>
-                    <p>ID do Perfil: <span className="font-mono text-slate-400">{currentUser?.id || "N/A"}</span></p>
-                  </div>
-
-                  <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Estado de Ordens</span>
-                    <p className="text-white font-extrabold">Visíveis neste Painel: {orders?.length || 0}</p>
-                    <p>Total do Sistema (Raw): {rawOrders?.length || 0}</p>
-                    <p className="text-slate-400 text-[10.5px]">
-                      {orders?.length !== rawOrders?.length 
-                        ? "⚠️ Isolamento de Perfil Ativo (Filtragem de Visibilidade LGPD)" 
-                        : "✓ Visibilidade Plena (Perfil Administrativo/Gestor)"}
-                    </p>
-                  </div>
-
-                  <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Cache do Motor</span>
-                    <p className="text-white font-mono break-all text-[11px] font-bold font-semibold">Chave: {cacheKey || "N/A"}</p>
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => {
-                          if (cacheKey) {
-                            localStorage.removeItem(cacheKey);
-                            loadCaches();
-                            toastSuccess("Cache de notificações limpo! Próxima atualização disparará novos alertas.", "Sucesso");
-                          }
-                        }}
-                        className="p-1.5 px-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg transition-colors cursor-pointer text-[10.5px] uppercase"
-                        disabled={!cacheKey}
-                      >
-                        Limpar Cache
-                      </button>
-                      <button
-                        onClick={loadCaches}
-                        className="p-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg transition-colors cursor-pointer text-[10.5px] uppercase"
-                      >
-                        Recarregar
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Tracking Log JSON Visualizer */}
-                <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Histórico de Itens / Status já Notificados (Visto)</span>
-                    <span className="text-[10px] text-slate-500 font-mono">localStorage JSON</span>
-                  </div>
-                  <pre className="p-3 bg-slate-950 rounded-xl font-mono text-[10.5px] text-emerald-400 overflow-x-auto max-h-36">
-                    {cacheValue ? JSON.stringify(cacheValue, null, 2) : "Nenhum cache registrado ou cache vazio. (Nenhum alerta enviado ainda)"}
-                  </pre>
-                </div>
-
-                {/* Direct Manual Actions & Simulators */}
-                <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Simuladores Rápidos</span>
-                  <div className="flex flex-wrap gap-2.5">
-                    <button
-                      onClick={() => {
-                        toastSystem("Mensagem de teste do sistema de notificação via toastContext.", "Teste Sistema (Toast)");
-                        console.log("[DiagnosticPanel] Dispatched manual System Toast Notification.");
-                      }}
-                      className="p-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all cursor-pointer text-[11px] uppercase tracking-wider"
-                    >
-                      Disparar Toast de Teste
-                    </button>
-                    
-                    <button
-                      onClick={() => {
-                        if (typeof window !== "undefined" && "Notification" in window) {
-                          if (Notification.permission === "granted") {
-                            new Notification("Notificação de Teste do Navegador", {
-                              body: "Isso confirma que notificações nativas funcionam!",
-                              icon: "/favicon.ico"
-                            });
-                          } else if (Notification.permission !== "denied") {
-                            Notification.requestPermission().then(permission => {
-                              if (permission === "granted") {
-                                new Notification("Notificação de Teste do Navegador", {
-                                  body: "Isso confirma que notificações nativas funcionam!",
-                                  icon: "/favicon.ico"
-                                });
-                              }
-                            });
-                          } else {
-                            toastInfo("Permissão de notificação nativa negada no navegador. Habilite na barra de endereço.", "Permissão Negada");
-                          }
-                        } else {
-                          toastInfo("Seu navegador não suporta notificações nativas de desktop.", "Não Suportado");
-                        }
-                      }}
-                      className="p-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all cursor-pointer text-[11px] uppercase tracking-wider"
-                    >
-                      Solicitar e Testar Notificação Nativa
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        console.log("[DiagnosticPanel] Printing state diagnostics to console...");
-                        console.log("Current Logged In User:", currentUser);
-                        console.log("Filtered Orders (ordersProp):", orders);
-                        console.log("Global Orders (rawOrdersProp):", rawOrders);
-                        console.log("Professionals List:", professionals);
-                        console.log("Clients List:", clients);
-                        toastSuccess("Todos os estados do sistema foram impressos no console do DevTools!", "Diagnóstico do Console");
-                      }}
-                      className="p-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl transition-all cursor-pointer text-[11px] uppercase tracking-wider"
-                    >
-                      Imprimir Diagnóstico no Console
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-slate-500 italic mt-1">
-                    Nota: O motor real de segundo plano (Background Notification Engine) avalia automaticamente novas OS a cada mutação de dados e mudança de login. Use as ferramentas de simulação acima para auditar a fidedignidade do canal de entrega de áudio-toast e notificações nativas.
-                  </p>
-                </div>
+            ) : (
+              <div className="py-12 border border-dashed border-slate-200 rounded-3xl text-center text-slate-400 bg-slate-50/20">
+                <ClipboardList className="w-8 h-8 text-slate-350 mx-auto mb-2" />
+                <p className="font-bold text-xs text-slate-600">Nenhum dado de categoria disponível</p>
               </div>
             )}
           </div>

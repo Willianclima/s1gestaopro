@@ -687,22 +687,30 @@ export default function BiMetrics({
 
                           <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
                             {cellOrdersList.length > 0 ? (
-                              cellOrdersList.map(os => (
-                                <div
-                                  key={os.id}
-                                  onClick={() => onSelectOrder(os)}
-                                  className="p-2.5 bg-white border border-slate-200 hover:border-indigo-400 rounded-xl transition duration-150 cursor-pointer text-[11px]"
-                                >
-                                  <div className="flex justify-between items-center gap-1 mb-1">
-                                    <span className="font-mono text-[9px] font-bold text-indigo-500 bg-indigo-50 border px-1 rounded">
-                                      #{os.id}
-                                    </span>
-                                    {getPriorityBadge(os.priority)}
+                              cellOrdersList.map(os => {
+                                const prio = os.priority || 'medium';
+                                const priorityStripeColor = 
+                                  prio === 'low' ? 'border-l-emerald-500' :
+                                  prio === 'high' ? 'border-l-amber-500' :
+                                  prio === 'urgent' ? 'border-l-red-500' :
+                                  'border-l-blue-500'; // medium
+                                return (
+                                  <div
+                                    key={os.id}
+                                    onClick={() => onSelectOrder(os)}
+                                    className={`p-2.5 pl-2 bg-white border border-l-4 ${priorityStripeColor} border-slate-200 hover:border-indigo-400 rounded-xl transition duration-150 cursor-pointer text-[11px]`}
+                                  >
+                                    <div className="flex justify-between items-center gap-1 mb-1">
+                                      <span className="font-mono text-[9px] font-bold text-indigo-500 bg-indigo-50 border px-1 rounded">
+                                        #{os.id}
+                                      </span>
+                                      {getPriorityBadge(os.priority)}
+                                    </div>
+                                    <h5 className="font-extrabold text-slate-800 truncate">{os.title}</h5>
+                                    <p className="text-[9.5px] text-slate-500 truncate">Técnico: {os.assignedTo || "Triação Pendente"}</p>
                                   </div>
-                                  <h5 className="font-extrabold text-slate-800 truncate">{os.title}</h5>
-                                  <p className="text-[9.5px] text-slate-500 truncate">Técnico: {os.assignedTo || "Triação Pendente"}</p>
-                                </div>
-                              ))
+                                );
+                              })
                             ) : (
                               <div className="py-6 text-center text-slate-400 bg-white border border-dashed rounded-xl text-[10px]">
                                 Nenhum chamado correspondente.

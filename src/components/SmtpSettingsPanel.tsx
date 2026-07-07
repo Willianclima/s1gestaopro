@@ -295,6 +295,7 @@ export default function SmtpSettingsPanel({
   const [pass, setPass] = useState(settings.pass || "************");
   const [senderAddress, setSenderAddress] = useState(settings.senderAddress || "Araçatuba Serviços <suporte@aracatubaservicos.com.br>");
   const [secure, setSecure] = useState(settings.secure !== undefined ? settings.secure : true);
+  const [smtpEnabled, setSmtpEnabled] = useState(settings.enabled !== undefined ? settings.enabled : false);
   
   // SMTP Local States
   const [showPassword, setShowPassword] = useState(false);
@@ -427,7 +428,8 @@ export default function SmtpSettingsPanel({
       user,
       pass,
       senderAddress,
-      secure
+      secure,
+      enabled: smtpEnabled
     });
     onNotifyTest("E-mail Salvo", "Parâmetros do servidor SMTP salvos com sucesso no sistema.", "success");
   };
@@ -1216,6 +1218,26 @@ export default function SmtpSettingsPanel({
                     />
                   </div>
                   <span className="text-[10px] text-slate-400 block font-medium">Determina o nome amigável e o email exibido no cabeçalho.</span>
+                </div>
+
+                {/* SMTP Enable/Disable Automatic sending Toggle */}
+                <div className="flex items-start gap-3 bg-indigo-50/40 p-4 border border-indigo-100 rounded-xl">
+                  <input 
+                    id="smtp-enabled-option"
+                    type="checkbox" 
+                    checked={smtpEnabled}
+                    onChange={(e) => {
+                      setSmtpEnabled(e.target.checked);
+                    }}
+                    className="w-4.5 h-4.5 rounded border-indigo-300 bg-white text-indigo-600 mt-0.5 focus:ring-0 cursor-pointer"
+                  />
+                  <div className="text-left font-sans text-xs">
+                    <label htmlFor="smtp-enabled-option" className="font-extrabold text-indigo-950 cursor-pointer flex items-center gap-1.5 select-none">
+                      <Mail className="w-4 h-4 text-indigo-600" />
+                      Habilitar Envio Automático de Ordens de Serviço por E-mail
+                    </label>
+                    <p className="text-slate-500 text-[10px] mt-1">Quando ativado, os requisitantes e profissionais receberão notificações automáticas por e-mail na abertura e nas mudanças de status das ordens de serviço.</p>
+                  </div>
                 </div>
 
                 {/* SSL Checkbox toggle with details */}

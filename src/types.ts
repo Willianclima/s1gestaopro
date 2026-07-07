@@ -113,6 +113,7 @@ export interface SmtpSettings {
   pass: string;
   senderAddress: string;
   secure: boolean;
+  enabled?: boolean;
 }
 
 export interface WhatsappSettings {

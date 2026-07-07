@@ -4,8 +4,9 @@ import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
-  Filter
+  Filter, QrCode
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
 import { useToast } from "./ToastContext";
 import { motion } from "motion/react";
@@ -23,6 +24,8 @@ interface ServiceOrdersProps {
   onOpenAiAssistantWithOS?: (os: ServiceOrder) => void;
   currentUser?: CurrentUser;
   blockedDates?: BlockedDate[];
+  initialSelectedOrderId?: string | null;
+  onClearInitialSelectedOrderId?: () => void;
 }
 
 export function getPriorityBadge(priority?: 'low' | 'medium' | 'high' | 'urgent') {
@@ -46,6 +49,9 @@ const OrdersSkeleton = () => (
   <>
     {[1, 2, 3, 4, 5].map((n) => (
       <tr key={n} className="animate-pulse">
+        <td className="px-6 py-4 w-12 text-center">
+          <div className="h-4 bg-slate-200 rounded w-4 mx-auto" />
+        </td>
         <td className="px-6 py-4">
           <div className="h-3.5 bg-slate-200 rounded w-10" />
         </td>
@@ -91,7 +97,8 @@ const PRESET_COMPLETED_IMAGES = [
 ];
 
 export default function ServiceOrders({ 
-  orders, globalOrders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = []
+  orders, globalOrders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = [],
+  initialSelectedOrderId, onClearInitialSelectedOrderId
 }: ServiceOrdersProps) {
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
@@ -102,6 +109,22 @@ export default function ServiceOrders({
   const [technicianFilter, setTechnicianFilter] = useState<string>("todos");
   const [priorityFilter, setPriorityFilter] = useState<string>("todos");
   const [isLoading, setIsLoading] = useState(true);
+
+  // Auto-select order if initialSelectedOrderId is passed (from QR code scan / URL deep link)
+  useEffect(() => {
+    if (initialSelectedOrderId) {
+      // Look in both current filtered orders and global/all orders
+      const targetOrder = orders.find(o => o.id === initialSelectedOrderId) || 
+                          globalOrders?.find(o => o.id === initialSelectedOrderId);
+      if (targetOrder) {
+        setSelectedOrder(targetOrder);
+        toastInfo(`OS #${initialSelectedOrderId} carregada diretamente pelo link do QR Code.`, "Acesso Direto por QR Code");
+        if (onClearInitialSelectedOrderId) {
+          onClearInitialSelectedOrderId();
+        }
+      }
+    }
+  }, [initialSelectedOrderId, orders, globalOrders, onClearInitialSelectedOrderId]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -132,6 +155,55 @@ export default function ServiceOrders({
   const [isAnalyzingOS, setIsAnalyzingOS] = useState(false);
   const [osAnalysisResult, setOsAnalysisResult] = useState<string | null>(null);
   const [osAnalysisError, setOsAnalysisError] = useState<string | null>(null);
+
+  // States for bulk selection and batch updates
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+
+  const handleBatchStatusUpdate = (newStatus: 'aberto' | 'em_progresso' | 'aguardando' | 'concluido' | 'cancelado') => {
+    if (selectedOrderIds.length === 0) return;
+
+    let successCount = 0;
+    selectedOrderIds.forEach(id => {
+      const os = orders.find(o => o.id === id);
+      if (os) {
+        const updatedOrder: ServiceOrder = {
+          ...os,
+          status: newStatus,
+          endDate: newStatus === "concluido" ? new Date().toISOString().split("T")[0] : os.endDate,
+          history: [
+            ...os.history,
+            {
+              id: "h-" + Math.random().toString(36).substr(2, 9),
+              status: newStatus,
+              comment: `ATUALIZAÇÃO EM LOTE (BATCH): Status alterado em lote para "${
+                newStatus === "concluido" ? "Concluído" :
+                newStatus === "em_progresso" ? "Em Execução" :
+                newStatus === "aguardando" ? "Aguardando Material" :
+                newStatus === "aberto" ? "Aberto / Pendente" : "Cancelado"
+              }" por um Gestor.`,
+              date: new Date().toISOString(),
+              author: "atendente"
+            }
+          ]
+        };
+        onUpdateOrder(updatedOrder);
+        successCount++;
+      }
+    });
+
+    toastSuccess(`${successCount} ordens de serviço foram atualizadas para "${
+      newStatus === "concluido" ? "Concluído" :
+      newStatus === "em_progresso" ? "Em Execução" :
+      newStatus === "aguardando" ? "Aguardando Material" :
+      newStatus === "aberto" ? "Aberto / Pendente" : "Cancelado"
+    }" com sucesso!`, "Atualização em Lote");
+    setSelectedOrderIds([]);
+  };
+
+  // Clear selection if any filter changes
+  useEffect(() => {
+    setSelectedOrderIds([]);
+  }, [searchTerm, statusFilter, dateFilterType, startDateFilter, endDateFilter, technicianFilter, priorityFilter]);
 
   useEffect(() => {
     setOsAnalysisResult(null);
@@ -1457,10 +1529,82 @@ export default function ServiceOrders({
 
       {/* Grid List */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        {/* Bulk Action Panel */}
+        {selectedOrderIds.length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-indigo-50/70 border-b border-indigo-100 p-4 px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-semibold"
+          >
+            <div className="flex items-center gap-2 text-indigo-900">
+              <span className="bg-indigo-600 text-white font-extrabold px-2.5 py-1 rounded-full text-[10px]">
+                {selectedOrderIds.length}
+              </span>
+              <span>{selectedOrderIds.length === 1 ? "Ordem de Serviço selecionada" : "Ordens de Serviço selecionadas"}</span>
+              <button 
+                onClick={() => setSelectedOrderIds([])}
+                className="text-indigo-600 hover:text-indigo-800 underline ml-2 cursor-pointer font-bold"
+              >
+                Limpar Seleção
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+              <span className="text-slate-600 font-bold whitespace-nowrap">Alterar status em lote para:</span>
+              <div className="flex gap-1.5 flex-wrap">
+                <button
+                  onClick={() => handleBatchStatusUpdate("aberto")}
+                  className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold cursor-pointer hover:border-slate-350 duration-150 shadow-xs"
+                >
+                  🟡 Aberto
+                </button>
+                <button
+                  onClick={() => handleBatchStatusUpdate("em_progresso")}
+                  className="bg-white hover:bg-blue-50 border border-slate-200 text-blue-700 px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold cursor-pointer hover:border-blue-300 duration-150 shadow-xs"
+                >
+                  🔵 Em Execução
+                </button>
+                <button
+                  onClick={() => handleBatchStatusUpdate("aguardando")}
+                  className="bg-white hover:bg-amber-50 border border-slate-200 text-amber-700 px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold cursor-pointer hover:border-amber-300 duration-150 shadow-xs"
+                >
+                  🟠 Aguardando Material
+                </button>
+                <button
+                  onClick={() => handleBatchStatusUpdate("concluido")}
+                  className="bg-white hover:bg-green-50 border border-slate-200 text-green-700 px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold cursor-pointer hover:border-green-300 duration-150 shadow-xs"
+                >
+                  🟢 Concluído
+                </button>
+                <button
+                  onClick={() => handleBatchStatusUpdate("cancelado")}
+                  className="bg-white hover:bg-red-50 border border-slate-200 text-red-700 px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold cursor-pointer hover:border-red-300 duration-150 shadow-xs"
+                >
+                  🔴 Cancelado
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-bold text-[11px] uppercase tracking-wider">
+                <th className="px-6 py-4 w-12 text-center">
+                  <input 
+                    type="checkbox" 
+                    checked={filteredOrders.length > 0 && selectedOrderIds.length === filteredOrders.length}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedOrderIds(filteredOrders.map(o => o.id));
+                      } else {
+                        setSelectedOrderIds([]);
+                      }
+                    }}
+                    className="rounded border-slate-350 text-indigo-650 focus:ring-indigo-500 cursor-pointer h-4 w-4"
+                  />
+                </th>
                 <th className="px-6 py-4">ID Requisição</th>
                 <th className="px-6 py-4">Serviço Solicitado / Requisitante</th>
                 <th className="px-6 py-4">Categoria Técnica</th>
@@ -1475,6 +1619,12 @@ export default function ServiceOrders({
               ) : filteredOrders.length > 0 ? (
                 filteredOrders.map((os, index) => {
                   const client = clients.find(cl => cl.id === os.clientId);
+                  const prio = os.priority || 'medium';
+                  const priorityStripeColor = 
+                    prio === 'low' ? 'border-l-emerald-500' :
+                    prio === 'high' ? 'border-l-amber-500' :
+                    prio === 'urgent' ? 'border-l-red-500' :
+                    'border-l-blue-500'; // medium
                   return (
                     <motion.tr 
                       key={os.id} 
@@ -1483,7 +1633,21 @@ export default function ServiceOrders({
                       transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.25) }}
                       className="hover:bg-slate-50/50 transition-colors"
                     >
-                      <td className="px-6 py-4 font-mono text-slate-400 font-bold">
+                      <td className="px-6 py-4 w-12 text-center" onClick={(e) => e.stopPropagation()}>
+                        <input 
+                          type="checkbox" 
+                          checked={selectedOrderIds.includes(os.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedOrderIds(prev => [...prev, os.id]);
+                            } else {
+                              setSelectedOrderIds(prev => prev.filter(id => id !== os.id));
+                            }
+                          }}
+                          className="rounded border-slate-350 text-indigo-650 focus:ring-indigo-500 cursor-pointer h-4 w-4"
+                        />
+                      </td>
+                      <td className={`px-6 py-4 font-mono text-slate-400 font-bold border-l-4 ${priorityStripeColor}`}>
                         {os.id}
                       </td>
                       <td className="px-6 py-4">
@@ -1555,6 +1719,14 @@ export default function ServiceOrders({
                           >
                             <Eye className="w-3.5 h-3.5" />
                             <span>Interagir</span>
+                          </button>
+
+                          <button
+                            onClick={() => setSelectedOrder(os)}
+                            className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition-colors flex items-center justify-center"
+                            title="Visualizar QR Code de Acesso"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
                           </button>
 
                           {(currentUser?.userType === "gestor" || currentUser?.userType === "admin" || currentUser?.userType === "gestor_servicos") && (
@@ -2113,6 +2285,85 @@ export default function ServiceOrders({
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* QR Code de Acesso Rápido */}
+              <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-4">
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-xs shrink-0 flex items-center justify-center">
+                  <QRCodeSVG 
+                    id="qr-svg-id"
+                    value={`${window.location.origin}${window.location.pathname}?os=${selectedOrder.id}`}
+                    size={110}
+                    level="H"
+                    includeMargin={false}
+                  />
+                </div>
+                <div className="text-left space-y-1.5 flex-1">
+                  <span className="text-[10px] bg-indigo-100 text-indigo-800 font-extrabold px-2 py-0.5 rounded-full font-mono uppercase tracking-wider">
+                    QR Code do Chamado
+                  </span>
+                  <h4 className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5">
+                    <QrCode className="w-4 h-4 text-indigo-600 animate-pulse" />
+                    Acesso Técnico de Campo
+                  </h4>
+                  <p className="text-slate-500 text-xs leading-normal">
+                    Técnicos em trânsito ou no local podem escanear este QR code para abrir os detalhes operacionais desta ordem de serviço diretamente em seus dispositivos.
+                  </p>
+                  <div className="pt-1 flex gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?os=${selectedOrder.id}`);
+                        toastSuccess("Link de acesso direto copiado para a área de transferência!", "Sucesso");
+                      }}
+                      className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-[10px] py-1.5 px-3 rounded-lg transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
+                    >
+                      Copiar Link Direto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const printWindow = window.open("", "_blank");
+                        if (printWindow) {
+                          printWindow.document.write(`
+                            <html>
+                              <head>
+                                <title>QR Code - OS #${selectedOrder.id}</title>
+                                <style>
+                                  body { font-family: system-ui, sans-serif; display: flex; flex-direction: column; items-center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a; text-align: center; }
+                                  .card { background: white; padding: 32px; border-radius: 24px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 350px; }
+                                  h2 { margin-top: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.025em; }
+                                  p { font-size: 13px; color: #64748b; margin: 8px 0 24px; }
+                                  .qr-placeholder { display: inline-block; padding: 16px; background: white; border: 1px solid #e2e8f0; border-radius: 16px; }
+                                  .footer { margin-top: 24px; font-size: 10px; color: #94a3b8; font-family: monospace; }
+                                </style>
+                              </head>
+                              <body>
+                                <div class="card">
+                                  <h2>Ordem de Serviço #${selectedOrder.id}</h2>
+                                  <p>${selectedOrder.title}</p>
+                                  <div class="qr-placeholder" id="qr-container"></div>
+                                  <div class="footer">Araçatuba Serviços de Manutenção</div>
+                                </div>
+                                <script>
+                                  // Fallback to generating image
+                                  document.getElementById("qr-container").innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent("${window.location.origin}${window.location.pathname}?os=${selectedOrder.id}") + '" width="180" height="180" />';
+                                  window.onload = function() {
+                                    window.print();
+                                  };
+                                </script>
+                              </body>
+                            </html>
+                          `);
+                          printWindow.document.close();
+                        }
+                      }}
+                      className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] py-1.5 px-3 rounded-lg transition-colors flex items-center gap-1 shadow-sm cursor-pointer"
+                    >
+                      Imprimir QR Code
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Attached Photos */}

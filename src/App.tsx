@@ -221,7 +221,8 @@ export default function App() {
     user: "suporte@aracatubaservicos.com.br",
     pass: "S0m3_S3cur3_P@ssw0rd",
     senderAddress: "Araçatuba Serviços <suporte@aracatubaservicos.com.br>",
-    secure: true
+    secure: true,
+    enabled: false
   });
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsappSettings>({
     provider: "custom",
@@ -235,6 +236,27 @@ export default function App() {
 
   // Cross-component routing state (AI Prefills)
   const [selectedOS, setSelectedOS] = useState<ServiceOrder | null>(null);
+  const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
+
+  // Parse URL parameter for direct OS access via QR code deep links
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const osId = params.get("os");
+    if (osId) {
+      setInitialSelectedOrderId(osId);
+      // If user is already logged in, redirect them directly to the orders tab
+      if (localStorage.getItem("service_mgt_currentUser")) {
+        setActiveTab("orders");
+      }
+    }
+  }, []);
+
+  // When logged in, ensure we redirect to Orders tab if there is a pending deep link
+  useEffect(() => {
+    if (currentUser && initialSelectedOrderId) {
+      setActiveTab("orders");
+    }
+  }, [currentUser, initialSelectedOrderId]);
 
   // Load state from LocalStorage on mount
   useEffect(() => {
@@ -980,6 +1002,118 @@ export default function App() {
     toastWarn(`Requisitante "${client ? client.name : id}" removido do sistema.`, "Cadastro Excluído");
   };
 
+  const triggerAutoNotificationsForNewOrder = async (order: ServiceOrder) => {
+    const client = clients.find(c => c.id === order.clientId);
+    if (!client) return;
+
+    // Send email if SMTP is enabled
+    if (smtpSettings.enabled && client.email) {
+      const subject = `🛠️ Abertura de Ordem de Serviço #${order.id}`;
+      const content = `Olá, ${client.name}!\n\nSua solicitação de serviço foi registrada com sucesso em nosso sistema:\n\n` +
+        `- ID da OS: #${order.id}\n` +
+        `- Título: ${order.title}\n` +
+        `- Categoria: ${order.category}\n` +
+        `- Prioridade: ${order.priority ? order.priority.toUpperCase() : "MÉDIA"}\n` +
+        `- Descrição: ${order.description || "Sem descrição"}\n\n` +
+        `Nossos gestores já estão triando a solicitação para designar a equipe ideal para o atendimento físico.\n\n` +
+        `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
+      
+      const emailRes = await sendProgrammaticEmail(client.email, subject, content, smtpSettings);
+      if (emailRes.status === "success") {
+        toastInfo(`Notificação de abertura enviada por e-mail para ${client.email}`, "E-mail Automático");
+      }
+    }
+
+    // Send WhatsApp if enabled
+    if (whatsappSettings.enabled && client.phone) {
+      const waMessage = `🛠️ *Araçatuba Serviços - OS #${order.id}*\n\nOlá, *${client.name}*!\nSua ordem de serviço foi registrada com sucesso.\n\n*Título:* ${order.title}\n*Categoria:* ${order.category}\n*Prioridade:* ${order.priority ? order.priority.toUpperCase() : "MÉDIA"}\n\nEstamos providenciando a alocação técnica.`;
+      const waRes = await sendProgrammaticWhatsapp(client.phone, waMessage, whatsappSettings);
+      if (waRes.status === "success") {
+        toastInfo(`Notificação de abertura enviada por WhatsApp para ${client.phone}`, "WhatsApp Automático");
+      }
+    }
+  };
+
+  const triggerAutoNotificationsForUpdatedOrder = async (updatedOrder: ServiceOrder, oldOrder: ServiceOrder) => {
+    const client = clients.find(c => c.id === updatedOrder.clientId);
+    const professional = professionals.find(p => p.name === updatedOrder.assignedTo);
+
+    const friendlyStatus: Record<string, string> = {
+      aberto: "Aberto",
+      em_progresso: "Em Progresso / Atendimento",
+      aguardando: "Aguardando Peças",
+      concluido: "Concluído / Encerrado",
+      cancelado: "Cancelado / Suspenso"
+    };
+    const statusLabel = friendlyStatus[updatedOrder.status] || updatedOrder.status;
+
+    // 1. Status change notification
+    if (oldOrder.status !== updatedOrder.status) {
+      // Notify client
+      if (client) {
+        if (smtpSettings.enabled && client.email) {
+          const subject = `📢 Atualização de Status: OS #${updatedOrder.id}`;
+          const content = `Prezado(a) ${client.name},\n\nO status da sua ordem de serviço foi atualizado:\n\n` +
+            `- ID da OS: #${updatedOrder.id}\n` +
+            `- Título: ${updatedOrder.title}\n` +
+            `- Novo Status: **${statusLabel}**\n\n` +
+            `Você pode acompanhar o andamento completo em tempo real pelo portal.\n\n` +
+            `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
+          
+          const emailRes = await sendProgrammaticEmail(client.email, subject, content, smtpSettings);
+          if (emailRes.status === "success") {
+            toastInfo(`E-mail de atualização de status enviado para o cliente.`, "E-mail Automático");
+          }
+        }
+
+        if (whatsappSettings.enabled && client.phone) {
+          const waMessage = `📢 *Araçatuba Serviços - Atualização OS #${updatedOrder.id}*\n\nOlá, *${client.name}*!\nO status do seu chamado foi atualizado para *${statusLabel}*.\n\n*Serviço:* ${updatedOrder.title}`;
+          const waRes = await sendProgrammaticWhatsapp(client.phone, waMessage, whatsappSettings);
+          if (waRes.status === "success") {
+            toastInfo(`WhatsApp de atualização de status enviado para o cliente.`, "WhatsApp Automático");
+          }
+        }
+      }
+
+      // Notify professional
+      if (professional && professional.email) {
+        if (smtpSettings.enabled) {
+          const subject = `📢 Atualização de Status: OS #${updatedOrder.id} (Sua Atribuição)`;
+          const content = `Olá, ${professional.name}!\n\nUma ordem de serviço atribuída a você teve seu status atualizado:\n\n` +
+            `- ID da OS: #${updatedOrder.id}\n` +
+            `- Título: ${updatedOrder.title}\n` +
+            `- Novo Status: **${statusLabel}**\n\n` +
+            `Por favor, execute as etapas necessárias ou preencha o parecer técnico no portal.\n\n` +
+            `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
+
+          await sendProgrammaticEmail(professional.email, subject, content, smtpSettings);
+        }
+      }
+    }
+
+    // 2. Newly assigned professional notification
+    if (oldOrder.assignedTo !== updatedOrder.assignedTo && updatedOrder.assignedTo) {
+      if (professional && professional.email) {
+        if (smtpSettings.enabled) {
+          const subject = `🛠️ Nova Ordem de Serviço Atribuída: #${updatedOrder.id}`;
+          const content = `Olá, ${professional.name}!\n\nVocê foi designado como técnico responsável pelo atendimento da seguinte Ordem de Serviço:\n\n` +
+            `- ID da OS: #${updatedOrder.id}\n` +
+            `- Título: ${updatedOrder.title}\n` +
+            `- Categoria: ${updatedOrder.category}\n` +
+            `- Prioridade: ${updatedOrder.priority ? updatedOrder.priority.toUpperCase() : "MÉDIA"}\n` +
+            `- Descrição: ${updatedOrder.description || "Sem descrição"}\n\n` +
+            `Por favor, confira os materiais recomendados e as ferramentas necessárias antes de se deslocar ao local.\n\n` +
+            `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
+
+          const emailRes = await sendProgrammaticEmail(professional.email, subject, content, smtpSettings);
+          if (emailRes.status === "success") {
+            toastInfo(`E-mail de nova atribuição enviado para o técnico ${professional.name}.`, "E-mail Automático");
+          }
+        }
+      }
+    }
+  };
+
   // Order/Requisition Callback implementations
   const handleAddOrder = (order: ServiceOrder) => {
     updateOrdersState([order, ...orders]);
@@ -989,6 +1123,9 @@ export default function App() {
       "requisicao"
     );
     toastSuccess(`Recepção da OS #${order.id} registrada com sucesso!`, "Nova OS Cadastrada");
+
+    // Enviar notificações automáticas
+    triggerAutoNotificationsForNewOrder(order);
 
     // Disparar notificação do navegador
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
@@ -1074,6 +1211,9 @@ export default function App() {
         );
         toastSuccess(`Informações da OS #${updatedOrder.id} foram salvas com sucesso.`, "Dados Atualizados");
       }
+      
+      // Enviar notificações automáticas baseadas nas mudanças
+      triggerAutoNotificationsForUpdatedOrder(updatedOrder, oldOrder);
     }
   };
 
@@ -1241,6 +1381,34 @@ export default function App() {
         message: e.message || "Erro de rede no proxy.",
         payload: payloadStr || "Não compilado",
         urlUsed: finalUrl
+      };
+    }
+  };
+
+  const sendProgrammaticEmail = async (recipientEmail: string, subject: string, textContent: string, settings: SmtpSettings) => {
+    if (!settings.enabled) {
+      return { status: "idle" as const, message: "Envio automático de e-mail desativado nas Configurações SMTP." };
+    }
+
+    try {
+      // Simulate real SMTP protocol delivery (wait, logs and toasts)
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      const logMsg = `E-mail enviado via SMTP (${settings.host}:${settings.port}) para <${recipientEmail}>. Assunto: ${subject}`;
+      console.log(`[SMTP AUTO-SEND] ${logMsg}`);
+
+      return {
+        status: "success" as const,
+        message: logMsg,
+        subject,
+        recipient: recipientEmail,
+        content: textContent
+      };
+    } catch (err: any) {
+      console.error("Erro no envio de e-mail SMTP:", err);
+      return {
+        status: "error" as const,
+        message: `Falha ao conectar ou autenticar no servidor SMTP: ${err.message || err}`
       };
     }
   };
@@ -3005,6 +3173,8 @@ export default function App() {
                 onOpenAiAssistantWithOS={handleOpenAiAssistantWithOS}
                 currentUser={currentUser}
                 blockedDates={blockedDates}
+                initialSelectedOrderId={initialSelectedOrderId}
+                onClearInitialSelectedOrderId={() => setInitialSelectedOrderId(null)}
               />
             )}
 
