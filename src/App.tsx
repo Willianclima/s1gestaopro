@@ -12,6 +12,7 @@ import Professionals from "./components/Professionals";
 import AiAssistant from "./components/AiAssistant";
 import ReportsAndLogs from "./components/ReportsAndLogs";
 import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
+import AddressValidationWidget from "./components/AddressValidationWidget";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
@@ -105,6 +106,9 @@ export default function App() {
   });
   const [typedDoc, setTypedDoc] = useState("");
   const [consentCheck, setConsentCheck] = useState(false);
+  const [regTrialRequested, setRegTrialRequested] = useState(true);
+  const [regBiddingConsent, setRegBiddingConsent] = useState(false);
+  const [complianceModalOpen, setComplianceModalOpen] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [lgpdModalOpen, setLgpdModalOpen] = useState(false);
 
@@ -118,6 +122,10 @@ export default function App() {
   const [regPhone, setRegPhone] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regAddress, setRegAddress] = useState("");
+  const [regLat, setRegLat] = useState<number | undefined>(undefined);
+  const [regLng, setRegLng] = useState<number | undefined>(undefined);
+  const [regFormattedAddress, setRegFormattedAddress] = useState<string>("");
+  const [regIsAddressValidated, setRegIsAddressValidated] = useState<boolean>(false);
   const [regWorkLocation, setRegWorkLocation] = useState("");
   const [regPassword, setRegPassword] = useState("");
 
@@ -1771,11 +1779,22 @@ export default function App() {
       phone: regPhone,
       email: regEmail,
       address: regAddress,
+      lat: regLat,
+      lng: regLng,
+      formattedAddress: regFormattedAddress,
+      isAddressValidated: regIsAddressValidated,
       workLocation: regWorkLocation || undefined,
-      notes: "Usuário registrado por Auto-Cadastro. Aguardando autorização operacional.",
+      notes: regTrialRequested 
+        ? "Usuário registrado com solicitação de Teste de 15 Dias (Degustação Técnica sem Ônus). Aguardando concessão de permissão pelo Administrador."
+        : "Usuário registrado por Auto-Cadastro. Aguardando autorização operacional.",
       createdAt: new Date().toISOString(),
       password: regPassword || "123",
-      status: "pendente_autorizacao"
+      status: "pendente_autorizacao",
+      isTrialRequested: regTrialRequested,
+      trialDays: regTrialRequested ? 15 : undefined,
+      trialRequestedAt: regTrialRequested ? new Date().toISOString() : undefined,
+      lgpdAccepted: consentCheck,
+      biddingTermsAccepted: regBiddingConsent
     };
 
     const updated = [...allClients, newClient];
@@ -1785,7 +1804,7 @@ export default function App() {
     // System log
     addSystemLog(
       "Auto-Cadastro Efetuado",
-      `Novo usuário "${regName}" efetuou auto-cadastro sob o CPF ${regCPF} (Pendente de aprovação pelo Administrador).`,
+      `Novo usuário "${regName}" efetuou auto-cadastro sob o CPF ${regCPF} com solicitação de Teste por 15 Dias (${regTrialRequested ? 'Ativada' : 'Não Solicitada'}). Pendente de autorização do Administrador.`,
       "requisitante"
     );
 
@@ -1798,9 +1817,13 @@ export default function App() {
     setRegWorkLocation("");
     setRegPassword("");
     setLoginError("");
-    setRegSuccessMessage(`Seu cadastro para "${regName}" foi enviado com sucesso! Encontra-se pendente de aprovação pelo Gestor Administrador. Você receberá a permissão de Gestor ou Requisitante.`);
+    setRegSuccessMessage(
+      regTrialRequested 
+        ? `Seu auto-cadastro e solicitação de TESTE POR 15 DIAS para "${regName}" foram registrados! O acesso permanece pendente até a revisão e liberação de permissões pelo Administrador.`
+        : `Seu cadastro para "${regName}" foi enviado com sucesso! Encontra-se pendente de aprovação e concessão de permissão pelo Gestor Administrador.`
+    );
     setIsRegistering(false);
-    toastInfo("Auto-cadastro sob análise do Gestor Administrador.", "Cadastro Enviado");
+    toastInfo("Cadastro e solicitação de teste sob análise do Administrador.", "Aguardando Autorização");
   };
 
   // self-change password handler
@@ -2252,17 +2275,6 @@ export default function App() {
                   <ShieldCheck className="w-4.5 h-4.5 text-indigo-200" />
                   Entrar
                 </button>
-
-                {/* Logo Assessor Público */}
-                <div className="flex flex-col items-center justify-center pt-3 select-none">
-                  <div className="flex items-center gap-1 font-sans text-lg tracking-tight bg-white py-2 px-6 rounded-full shadow-md border border-slate-200">
-                    <span className="text-[#004d8c] font-black">assessor</span>
-                    <span className="text-[#6c94c4] font-semibold relative">
-                      público
-                      <span className="absolute -top-1 -right-2.5 text-[7px] font-bold text-[#6c94c4]">®</span>
-                    </span>
-                  </div>
-                </div>
               </form>
 
               <div className="flex flex-col sm:flex-row justify-between items-center border-t border-slate-800 pt-4 gap-3 text-xs font-semibold">
@@ -2300,7 +2312,7 @@ export default function App() {
             <div className="space-y-6 text-left">
               <div className="space-y-1">
                 <h2 className="text-xl font-extrabold tracking-tight text-white">Auto-Cadastro do Sistema</h2>
-                <p className="text-xs text-slate-400 font-medium font-semibold">Preencha seus dados de requisitante para solicitar permissão operacional ao gestor administrador.</p>
+                <p className="text-xs text-slate-400 font-medium font-semibold">Preencha seus dados para solicitar perfil e permissão operacional ao administrador do sistema.</p>
               </div>
 
               <form onSubmit={handleSelfRegister} className="space-y-4">
@@ -2382,9 +2394,35 @@ export default function App() {
                     type="text"
                     required
                     value={regAddress}
-                    onChange={(e) => setRegAddress(e.target.value)}
+                    onChange={(e) => {
+                      setRegAddress(e.target.value);
+                      setRegIsAddressValidated(false);
+                    }}
                     className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
                     placeholder="Rua, Número, Bairro, Cidade - SP"
+                  />
+
+                  <AddressValidationWidget
+                    address={regAddress}
+                    onAddressValidated={(res) => {
+                      setRegIsAddressValidated(res.isPrecise);
+                      if (res.lat && res.lng) {
+                        setRegLat(res.lat);
+                        setRegLng(res.lng);
+                      }
+                      if (res.formattedAddress) {
+                        setRegFormattedAddress(res.formattedAddress);
+                      }
+                    }}
+                    onApplyFormattedAddress={(formatted, resLat, resLng) => {
+                      setRegAddress(formatted);
+                      setRegFormattedAddress(formatted);
+                      if (resLat && resLng) {
+                        setRegLat(resLat);
+                        setRegLng(resLng);
+                      }
+                      setRegIsAddressValidated(true);
+                    }}
                   />
                 </div>
 
@@ -2417,19 +2455,82 @@ export default function App() {
                   />
                 </div>
 
-                {/* LGPD Consent */}
-                <div className="flex items-start gap-3 bg-slate-950/40 p-4 rounded-xl border border-slate-800 text-left">
-                  <input
-                    id="reg-consent-check"
-                    type="checkbox"
-                    required
-                    checked={consentCheck}
-                    onChange={(e) => setConsentCheck(e.target.checked)}
-                    className="w-4.5 h-4.5 rounded border-slate-700 bg-slate-950 text-indigo-600 mt-0.5 cursor-pointer animate-none"
-                  />
-                  <label htmlFor="reg-consent-check" className="text-[11px] text-slate-400 leading-relaxed font-semibold cursor-pointer">
-                    Declaro ciência e consinto com a coleta, uso e tratamento dos meus dados pessoais fornecidos acima para efeitos estritos de triagem e registro sob a Lei nº 13.709/2018 (LGPD).
-                  </label>
+                {/* Modalidade de Acesso / Solicitação de Teste por 15 Dias */}
+                <div className="bg-indigo-950/40 border border-indigo-500/30 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] font-mono uppercase font-black text-indigo-400 tracking-wider bg-indigo-900/60 px-2 py-0.5 rounded-full">
+                        Período Experimental
+                      </span>
+                      <h4 className="text-sm font-extrabold text-white flex items-center gap-1.5 pt-1">
+                        <Sparkles className="w-4 h-4 text-amber-400" />
+                        Solicitar Teste de 15 Dias (Degustação Técnica)
+                      </h4>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={regTrialRequested}
+                        onChange={(e) => setRegTrialRequested(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed font-medium">
+                    Habilita a solicitação de acesso experimental pelo prazo de 15 (quinze) dias para avaliação funcional da plataforma.
+                  </p>
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-amber-500/30 text-[11px] text-amber-300 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Aprovação Obrigatória:</strong> Mesmo optando pelo teste de 15 dias, seu acesso permanecerá pendente e <strong>exige aprovação prévia do Administrador</strong> do sistema para conceder a permissão de entrada.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Termos de Uso, LGPD & Licitações */}
+                <div className="space-y-3 pt-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Conformidade Legal & LGPD</span>
+                    <button
+                      type="button"
+                      onClick={() => setComplianceModalOpen(true)}
+                      className="text-indigo-400 hover:text-indigo-300 text-xs font-extrabold underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      Visualizar Termo Completo
+                    </button>
+                  </div>
+
+                  {/* LGPD Checkbox */}
+                  <div className="flex items-start gap-3 bg-slate-950/40 p-3.5 rounded-xl border border-slate-800 text-left">
+                    <input
+                      id="reg-consent-check"
+                      type="checkbox"
+                      required
+                      checked={consentCheck}
+                      onChange={(e) => setConsentCheck(e.target.checked)}
+                      className="w-4.5 h-4.5 rounded border-slate-700 bg-slate-950 text-indigo-600 mt-0.5 cursor-pointer"
+                    />
+                    <label htmlFor="reg-consent-check" className="text-[11px] text-slate-300 leading-relaxed font-semibold cursor-pointer">
+                      Declaro ciência e consinto com a coleta e tratamento dos meus dados cadastrais sob a <strong>Lei nº 13.709/2018 (LGPD)</strong> para fins exclusivos de triagem e controle de acesso.
+                    </label>
+                  </div>
+
+                  {/* Bidding Law Checkbox */}
+                  <div className="flex items-start gap-3 bg-slate-950/40 p-3.5 rounded-xl border border-slate-800 text-left">
+                    <input
+                      id="reg-bidding-check"
+                      type="checkbox"
+                      required
+                      checked={regBiddingConsent}
+                      onChange={(e) => setRegBiddingConsent(e.target.checked)}
+                      className="w-4.5 h-4.5 rounded border-slate-700 bg-slate-950 text-indigo-600 mt-0.5 cursor-pointer"
+                    />
+                    <label htmlFor="reg-bidding-check" className="text-[11px] text-slate-300 leading-relaxed font-semibold cursor-pointer">
+                      Declaro ciência de que a demonstração de 15 dias tem caráter de <strong>Degustação Técnica Sem Ônus</strong> sob a <strong>Lei de Licitações (Lei nº 14.133/2021)</strong>, sem vínculo nem encargo para a Administração, e condicionado à autorização do Administrador.
+                    </label>
+                  </div>
                 </div>
 
                 {loginError && (
@@ -2526,6 +2627,96 @@ export default function App() {
                   className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2.5 px-5 rounded-xl uppercase tracking-wider cursor-pointer"
                 >
                   Entendi e Dou Consentimento
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Termo Oficial de Conformidade Legal, LGPD e Leis de Licitação (Degustação 15 Dias) */}
+        {complianceModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl shadow-2xl p-6 sm:p-8 space-y-6 text-slate-300 relative text-left">
+              <div className="flex justify-between items-start border-b border-slate-800 pb-4">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider text-white flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-indigo-400" />
+                    Termo de Conformidade LGPD & Leis de Licitação
+                  </h3>
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase">Lei nº 13.709/2018 (LGPD) & Lei nº 14.133/2021 (Licitações)</span>
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => setComplianceModalOpen(false)}
+                  className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs leading-relaxed overflow-y-auto max-h-[60vh] pr-2 font-sans">
+                {/* Cabeçalho do Documento */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-indigo-500/30 text-indigo-300 font-mono text-[11px] space-y-1">
+                  <p className="font-bold text-white">DOCUMENTO DE ADEQUAÇÃO TÉCNICO-LEGAL E DEGUSTAÇÃO DE SISTEMA</p>
+                  <p>Finalidade: Demonstração e Avaliação Experimental pelo Prazo de 15 Dias</p>
+                </div>
+
+                {/* Seção 1 - LGPD */}
+                <div>
+                  <h4 className="font-extrabold text-white uppercase text-[11px] tracking-wider mb-1 flex items-center gap-1.5">
+                    <span className="bg-indigo-600 text-white px-1.5 py-0.5 rounded text-[9px]">1</span>
+                    TRATAMENTO DE DADOS PESSOAIS (LEI Nº 13.709/2018 - LGPD)
+                  </h4>
+                  <p className="text-slate-400 text-xs leading-relaxed">
+                    A coleta do CPF, Nome, Telefone, E-mail e Endereço tem como base legal o cumprimento de obrigação regulatória e o legítimo interesse para identificação unívoca de usuários, despacho de ordens de serviço e auditoria de registros. Os dados serão mantidos em ambiente seguro com criptografia e não serão comercializados nem compartilhados com terceiros não autorizados.
+                  </p>
+                </div>
+
+                {/* Seção 2 - Licitações */}
+                <div>
+                  <h4 className="font-extrabold text-white uppercase text-[11px] tracking-wider mb-1 flex items-center gap-1.5">
+                    <span className="bg-indigo-600 text-white px-1.5 py-0.5 rounded text-[9px]">2</span>
+                    REGRAS DE LICITAÇÃO E CONTRATAÇÕES PÚBLICAS (LEI Nº 14.133/2021)
+                  </h4>
+                  <div className="space-y-2 text-slate-400 text-xs">
+                    <p>
+                      <strong>I. Caráter de Degustação Técnica Sem Ônus:</strong> A solicitação de acesso pelo prazo de 15 (quinze) dias constitui procedimento de prova de conceito e avaliação funcional prévia ("Degustação Técnica"), fornecida de forma inteiramente gratuita.
+                    </p>
+                    <p>
+                      <strong>II. Inexistência de Vínculo Contratual ou Financeiro:</strong> A disponibilização e utilização do ambiente de teste não implicam qualquer custo, tarifa, encargo orçamentário, obrigação de contratação futura ou favorecimento licitatório para a Administração Pública ou entidade solicitante.
+                    </p>
+                    <p>
+                      <strong>III. Isonomia e Moralidade Administrativa:</strong> O acesso demonstrativo preserva integralmente os princípios da impessoalidade, moralidade, eficiência e ampla competitividade estipulados no Art. 5º da Lei nº 14.133/2021.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Seção 3 - Condição de Liberação */}
+                <div>
+                  <h4 className="font-extrabold text-white uppercase text-[11px] tracking-wider mb-1 flex items-center gap-1.5">
+                    <span className="bg-indigo-600 text-white px-1.5 py-0.5 rounded text-[9px]">3</span>
+                    AUTORIZAÇÃO E PERMISSÃO DO ADMINISTRADOR
+                  </h4>
+                  <p className="text-slate-400 text-xs leading-relaxed">
+                    O simples envio do formulário de auto-cadastro com solicitação de teste por 15 dias <strong>não ativa o acesso imediatamente</strong>. A conta criada permanece em status pendente e necessita obrigatoriamente de análise e aprovação formal por parte do Administrador do sistema, que detém a prerrogativa de conceder, restringir ou revogar as permissões operacionais.
+                  </p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800 pt-4 flex flex-col sm:flex-row justify-between items-center gap-3 font-sans">
+                <span className="text-[11px] text-slate-400">
+                  Ao clicar abaixo, você confirma a leitura e aceite integral dos termos.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConsentCheck(true);
+                    setRegBiddingConsent(true);
+                    setComplianceModalOpen(false);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2.5 px-5 rounded-xl uppercase tracking-wider cursor-pointer w-full sm:w-auto"
+                >
+                  Aceito os Termos (LGPD & Licitações)
                 </button>
               </div>
             </div>
@@ -3115,6 +3306,7 @@ export default function App() {
                 logs={logs}
                 onNavigate={setActiveTab}
                 onSelectOrder={(os) => {
+                  setInitialSelectedOrderId(os.id);
                   setSelectedOS(os);
                   setActiveTab("orders");
                 }}
@@ -3137,6 +3329,7 @@ export default function App() {
                 logs={logs}
                 onNavigate={setActiveTab}
                 onSelectOrder={(os) => {
+                  setInitialSelectedOrderId(os.id);
                   setSelectedOS(os);
                   setActiveTab("orders");
                 }}

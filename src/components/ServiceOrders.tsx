@@ -108,6 +108,7 @@ export default function ServiceOrders({
   const [endDateFilter, setEndDateFilter] = useState<string>("");
   const [technicianFilter, setTechnicianFilter] = useState<string>("todos");
   const [priorityFilter, setPriorityFilter] = useState<string>("todos");
+  const [categoryFilter, setCategoryFilter] = useState<string>("todos");
   const [isLoading, setIsLoading] = useState(true);
 
   // Auto-select order if initialSelectedOrderId is passed (from QR code scan / URL deep link)
@@ -203,7 +204,7 @@ export default function ServiceOrders({
   // Clear selection if any filter changes
   useEffect(() => {
     setSelectedOrderIds([]);
-  }, [searchTerm, statusFilter, dateFilterType, startDateFilter, endDateFilter, technicianFilter, priorityFilter]);
+  }, [searchTerm, statusFilter, dateFilterType, startDateFilter, endDateFilter, technicianFilter, priorityFilter, categoryFilter]);
 
   useEffect(() => {
     setOsAnalysisResult(null);
@@ -637,7 +638,10 @@ export default function ServiceOrders({
     // Priority filtering
     const matchesPriority = priorityFilter === "todos" || (os.priority || "medium") === priorityFilter;
 
-    return matchesSearch && matchesStatus && matchesDate && matchesTechnician && matchesPriority;
+    // Category filtering
+    const matchesCategory = categoryFilter === "todos" || os.category === categoryFilter;
+
+    return matchesSearch && matchesStatus && matchesDate && matchesTechnician && matchesPriority && matchesCategory;
   });
 
   const handleLocationSearch = async (query: string) => {
@@ -1506,9 +1510,35 @@ export default function ServiceOrders({
               <option value="low">🟢 Baixas</option>
             </select>
           </div>
+
+          {/* Categoria Filter */}
+          <div className="flex items-center gap-2 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0">
+            <Tag className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-slate-500 text-xs font-bold whitespace-nowrap">Categoria:</span>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white text-slate-700 cursor-pointer min-w-[150px] max-w-full"
+            >
+              <option value="todos">Todas as Categorias</option>
+              {categories && categories.length > 0 ? (
+                categories.map(cat => (
+                  <option key={cat.id} value={cat.name}>
+                    {cat.name}
+                  </option>
+                ))
+              ) : (
+                Array.from(new Set(orders.map(o => o.category || "Geral"))).map(catName => (
+                  <option key={catName} value={catName}>
+                    {catName}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
           
           {/* Active filter summary indicators */}
-          {(searchTerm || statusFilter !== "todos" || dateFilterType !== "todos" || technicianFilter !== "todos" || priorityFilter !== "todos") && (
+          {(searchTerm || statusFilter !== "todos" || dateFilterType !== "todos" || technicianFilter !== "todos" || priorityFilter !== "todos" || categoryFilter !== "todos") && (
             <button
               onClick={() => {
                 setSearchTerm("");
@@ -1518,8 +1548,9 @@ export default function ServiceOrders({
                 setEndDateFilter("");
                 setTechnicianFilter("todos");
                 setPriorityFilter("todos");
+                setCategoryFilter("todos");
               }}
-              className="text-xs font-extrabold text-slate-500 hover:text-slate-800 px-3 py-1.5 rounded-lg border border-slate-250 bg-slate-50 hover:bg-slate-100 shrink-0 transition-all md:ml-auto"
+              className="text-xs font-extrabold text-slate-500 hover:text-slate-800 px-3 py-1.5 rounded-lg border border-slate-250 bg-slate-50 hover:bg-slate-100 shrink-0 transition-all md:ml-auto cursor-pointer"
             >
               Resetar Filtros
             </button>

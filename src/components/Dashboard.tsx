@@ -7,6 +7,7 @@ import {
   TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check, Calendar, Bell, BellOff
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from "recharts";
+import ServiceOrdersMap from "./ServiceOrdersMap";
 
 interface DashboardProps {
   orders: ServiceOrder[];
@@ -172,6 +173,7 @@ export default function Dashboard({
   const cancelledOrders = orders.filter(o => o.status === "cancelado");
   const countPending = orders.filter(o => o.status === "aberto").length;
   const countRunning = orders.filter(o => o.status === "em_progresso").length;
+  const pendingClients = clients.filter(c => c.status === "pendente_autorizacao");
 
   // Today's Date representation matching the mock environment: June 15, 2026
   const todayStr = "2026-06-15";
@@ -240,6 +242,46 @@ export default function Dashboard({
             {/* Backdrop visual gradient effect */}
             <div className="absolute top-0 right-0 w-80 h-80 bg-radial-gradient from-teal-500/10 to-transparent rounded-full pointer-events-none transform translate-x-20 -translate-y-20" />
           </div>
+
+          {/* Notificação de Cadastros Pendentes de Aprovação */}
+          {pendingClients.length > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-amber-600/10 border-2 border-amber-500/40 rounded-3xl p-5 sm:p-6 text-slate-900 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-5 text-left"
+            >
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-amber-500 text-white rounded-2xl shrink-0 shadow-md animate-pulse">
+                  <UserCheck className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-amber-200 text-amber-900 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
+                      Notificação do Administrador
+                    </span>
+                    <span className="text-xs font-black text-amber-900 font-mono bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-300/50">
+                      {pendingClients.length} {pendingClients.length === 1 ? 'usuário aguardando autorização' : 'usuários aguardando autorização'}
+                    </span>
+                  </div>
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    Existem novos cadastros de requisitantes e solicitações de teste de 15 dias pendentes de aprovação.
+                  </h3>
+                  <p className="text-slate-700 text-xs leading-relaxed max-w-3xl font-medium">
+                    Os usuários cadastrados por auto-serviço estão organizados na aba de <strong>Usuários</strong>. O Administrador do sistema deve analisar e conceder formalmente a permissão de acesso para que o login seja liberado.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onNavigate("clients")}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg hover:shadow-xl active:translate-y-[1px] transition-all shrink-0 flex items-center gap-2 cursor-pointer w-full md:w-auto justify-center"
+              >
+                Analisar e Aprovar Usuários
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </motion.div>
+          )}
 
           {/* SECTION: QUICK OPERATIONAL RESUME */}
           <div className="space-y-4">
@@ -360,6 +402,14 @@ export default function Dashboard({
               </motion.div>
             </div>
           </div>
+
+          {/* SECTION: MAPA GEOGRÁFICO DAS ORDENS DE SERVIÇO */}
+          <ServiceOrdersMap
+            orders={orders}
+            clients={clients}
+            onSelectOrder={onSelectOrder}
+            onNavigate={onNavigate}
+          />
 
           {/* SECTION: ATENDIMENTOS HOJE */}
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-6 text-left">

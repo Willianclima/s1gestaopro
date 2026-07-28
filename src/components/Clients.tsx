@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Client, ServiceOrder, Almoxarifado, ServiceCategory } from "../types";
 import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database } from "lucide-react";
 import { motion } from "motion/react";
+import AddressValidationWidget from "./AddressValidationWidget";
 
 interface ClientsProps {
   clients: Client[];
@@ -74,6 +75,7 @@ export default function Clients({
   categories = []
 }: ClientsProps) {
   const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("todos");
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -84,13 +86,19 @@ export default function Clients({
     }, 800);
     return () => clearTimeout(timer);
   }, []);
-  
+
+  const pendingCount = clients.filter(c => c.status === "pendente_autorizacao").length;
+
   // Form fields
   const [name, setName] = useState("");
   const [document, setDocument] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
+  const [lat, setLat] = useState<number | undefined>(undefined);
+  const [lng, setLng] = useState<number | undefined>(undefined);
+  const [formattedAddress, setFormattedAddress] = useState<string>("");
+  const [isAddressValidated, setIsAddressValidated] = useState<boolean>(false);
   const [notes, setNotes] = useState("");
   const [userType, setUserType] = useState<"requisitante" | "gestor" | "gestor_servicos" | "admin">("requisitante");
   const [password, setPassword] = useState("");
@@ -107,11 +115,20 @@ export default function Clients({
 
   const filteredClients = clients.filter(c => {
     const ut = c.userType || "requisitante";
-    return c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       c.document.includes(searchTerm) ||
       c.phone.includes(searchTerm) ||
       c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       ut.toLowerCase().includes(searchTerm.toLowerCase());
+
+    let matchesStatus = true;
+    if (statusFilter === "ativos") {
+      matchesStatus = c.status !== "pendente_autorizacao";
+    } else if (statusFilter === "pendentes") {
+      matchesStatus = c.status === "pendente_autorizacao";
+    }
+
+    return matchesSearch && matchesStatus;
   });
 
   const openForm = (client?: Client) => {
@@ -122,6 +139,10 @@ export default function Clients({
       setPhone(client.phone);
       setEmail(client.email);
       setAddress(client.address);
+      setLat(client.lat);
+      setLng(client.lng);
+      setFormattedAddress(client.formattedAddress || client.address || "");
+      setIsAddressValidated(client.isAddressValidated || false);
       setNotes(client.notes);
       setUserType(client.userType || "requisitante");
       setPassword(client.password || "123");
@@ -137,6 +158,10 @@ export default function Clients({
       setPhone("");
       setEmail("");
       setAddress("");
+      setLat(undefined);
+      setLng(undefined);
+      setFormattedAddress("");
+      setIsAddressValidated(false);
       setNotes("");
       setUserType("requisitante");
       setPassword("123");
@@ -161,6 +186,10 @@ export default function Clients({
         phone,
         email,
         address,
+        lat,
+        lng,
+        formattedAddress,
+        isAddressValidated,
         notes,
         userType,
         password: password || "123",
@@ -178,6 +207,10 @@ export default function Clients({
         phone,
         email,
         address,
+        lat,
+        lng,
+        formattedAddress,
+        isAddressValidated,
         notes,
         createdAt: new Date().toISOString(),
         userType,
@@ -218,16 +251,93 @@ export default function Clients({
         </button>
       </div>
 
-      {/* Search Input */}
-      <div className="relative">
-        <Search className="absolute left-4 top-3.5 w-4 h-4 text-slate-400" />
-        <input
-          type="text"
-          className="w-full text-sm border border-slate-200/80 rounded-xl pl-11 pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700 shadow-sm"
-          placeholder="Buscar por nome, perfil (requisitante, gestor), e-mail ou documento..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
+      {/* Banner de Usuários Pendentes de Autorização */}
+      {pendingCount > 0 && (
+        <div className="bg-amber-500/10 border-2 border-amber-400/60 rounded-2xl p-4 sm:p-5 text-amber-950 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-left">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 bg-amber-500 text-white rounded-xl shrink-0 font-bold shadow-sm animate-pulse">
+              ⏳
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-200 text-amber-900 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full">
+                  Aprovação Pendente
+                </span>
+                <span className="text-xs font-bold text-amber-900">
+                  {pendingCount} {pendingCount === 1 ? 'cadastro de usuário aguardando autorização' : 'cadastros de usuários aguardando autorização'}
+                </span>
+              </div>
+              <h3 className="font-extrabold text-slate-900 text-sm mt-1">
+                Existem novos usuários e requisições de teste de 15 dias aguardando concessão de perfil pelo Administrador.
+              </h3>
+              <p className="text-slate-700 text-xs mt-0.5 font-medium">
+                Verifique as declarações de conformidade (LGPD & Licitações) e aprove o acesso diretamente nos cartões de usuário abaixo.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter("pendentes")}
+            className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-2.5 px-4 rounded-xl shadow-md transition-all shrink-0 flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
+          >
+            Exibir Apenas Pendentes ({pendingCount})
+          </button>
+        </div>
+      )}
+
+      {/* Search and Status Filter Row */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-4 top-3.5 w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            className="w-full text-sm border border-slate-200/80 rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700 shadow-sm"
+            placeholder="Buscar por nome, perfil (requisitante, gestor), e-mail ou documento..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        {/* Status Filter Pills */}
+        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 shrink-0 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setStatusFilter("todos")}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              statusFilter === "todos"
+                ? "bg-white text-slate-800 shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Todos os Usuários ({clients.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter("ativos")}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              statusFilter === "ativos"
+                ? "bg-white text-slate-800 shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Ativos ({clients.length - pendingCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter("pendentes")}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+              statusFilter === "pendentes"
+                ? "bg-amber-500 text-white shadow-xs"
+                : pendingCount > 0 
+                  ? "bg-amber-100 text-amber-900 hover:bg-amber-200" 
+                  : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Pendentes ({pendingCount})
+            {pendingCount > 0 && <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />}
+          </button>
+        </div>
       </div>
 
       {/* Clients Grid */}
@@ -257,7 +367,7 @@ export default function Clients({
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-bold text-slate-800 text-base group-hover:text-slate-900 leading-tight">{client.name}</h3>
                             {ut === "admin" ? (
-                              <span className="inline-flex items-center bg-red-105 bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wide">
+                              <span className="inline-flex items-center bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wide">
                                 ⚙️ Administrador
                               </span>
                             ) : ut === "gestor" ? (
@@ -271,6 +381,12 @@ export default function Clients({
                             ) : (
                               <span className="inline-flex items-center bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wide">
                                 👤 Requisitante
+                              </span>
+                            )}
+
+                            {client.status === "pendente_autorizacao" && (
+                              <span className="inline-flex items-center bg-amber-50 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wide animate-pulse">
+                                ⏳ Pendente Autorização
                               </span>
                             )}
                           </div>
@@ -300,6 +416,48 @@ export default function Clients({
                         </button>
                       </div>
                     </div>
+
+                    {/* Alerta de Período Experimental / Teste de 15 Dias */}
+                    {client.status === "pendente_autorizacao" && (
+                      <div className="mb-3 p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2 text-left">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded-full">
+                            {client.isTrialRequested ? "Solicitação de Teste (15 Dias)" : "Novo Auto-Cadastro"}
+                          </span>
+                          <span className="text-[9px] text-amber-700 font-semibold">Exige Aprovação do Gestor</span>
+                        </div>
+                        <p className="text-[11px] text-slate-700 leading-snug font-medium">
+                          {client.isTrialRequested
+                            ? "Usuário solicitou degustação técnica por 15 dias. Aguardando concessão de permissão de acesso pelo Administrador."
+                            : "Aguardando homologação e liberação de acesso pelo Administrador."}
+                        </p>
+                        
+                        {/* Indicadores de Conformidade */}
+                        <div className="flex items-center gap-2 pt-1 text-[10px] font-semibold text-slate-600 flex-wrap">
+                          <span className={`px-2 py-0.5 rounded border ${client.lgpdAccepted !== false ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                            ✓ LGPD Aceito
+                          </span>
+                          <span className={`px-2 py-0.5 rounded border ${client.biddingTermsAccepted !== false ? "bg-indigo-50 text-indigo-700 border-indigo-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                            ✓ Lei Licitações Aceito
+                          </span>
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            const updated: Client = {
+                              ...client,
+                              status: "ativo",
+                              notes: (client.notes || "") + ` | Permissão concedida pelo Administrador em ${new Date().toLocaleDateString('pt-BR')}.`
+                            };
+                            onUpdateClient(updated);
+                          }}
+                          className="w-full mt-2 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] uppercase tracking-wider py-2 px-3 rounded-lg shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          Aprovar & Conceder Permissão
+                        </button>
+                      </div>
+                    )}
 
                     {/* Informações Rápidas */}
                     <div className="space-y-2.5 text-xs font-semibold text-slate-600 border-t border-slate-50 pt-3">
@@ -613,9 +771,35 @@ export default function Clients({
                   <input
                     type="text"
                     className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-medium text-slate-700"
-                    placeholder="Ex: Av. Paulista, 1000 - Bela Vista - SP"
+                    placeholder="Ex: Rua Marcílio Dias, 1500 - Bairro Bandeirantes, Araçatuba - SP"
                     value={address}
-                    onChange={(e) => setAddress(e.target.value)}
+                    onChange={(e) => {
+                      setAddress(e.target.value);
+                      setIsAddressValidated(false);
+                    }}
+                  />
+
+                  <AddressValidationWidget
+                    address={address}
+                    onAddressValidated={(res) => {
+                      setIsAddressValidated(res.isPrecise);
+                      if (res.lat && res.lng) {
+                        setLat(res.lat);
+                        setLng(res.lng);
+                      }
+                      if (res.formattedAddress) {
+                        setFormattedAddress(res.formattedAddress);
+                      }
+                    }}
+                    onApplyFormattedAddress={(formatted, resLat, resLng) => {
+                      setAddress(formatted);
+                      setFormattedAddress(formatted);
+                      if (resLat && resLng) {
+                        setLat(resLat);
+                        setLng(resLng);
+                      }
+                      setIsAddressValidated(true);
+                    }}
                   />
                 </div>
 

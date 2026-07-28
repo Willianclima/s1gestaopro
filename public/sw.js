@@ -1,10 +1,11 @@
-// Service Worker de Produção - Araçatuba Serviços de Manutenção e Assistência
+// Service Worker de Produção - Gestão de Serviços & Manutenção
 // Arquivo: public/sw.js
 
-const CACHE_NAME = 'aracatuba-servicos-sw-v1';
+const CACHE_NAME = 'gestao-servicos-sw-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
+  '/manifest.json',
   '/favicon.ico'
 ];
 
@@ -13,7 +14,7 @@ self.addEventListener('install', (event) => {
   console.log('[Service Worker] Instalando...');
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log('[Service Worker] Pré-cacheando arquivos básicos...');
+      console.log('[Service Worker] Pré-cacheando recursos essenciais...');
       return cache.addAll(ASSETS_TO_CACHE);
     }).then(() => self.skipWaiting())
   );
@@ -27,7 +28,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         cacheNames.map((cache) => {
           if (cache !== CACHE_NAME) {
-            console.log('[Service Worker] Limpando cache antigo:', cache);
+            console.log('[Service Worker] Removendo cache antigo:', cache);
             return caches.delete(cache);
           }
         })
@@ -36,7 +37,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Interceptação de Requisições de Rede
+// Interceptação de Requisições de Rede (Cache-First para estáticos, Network-First para navegação com fallback)
 self.addEventListener('fetch', (event) => {
   if (
     event.request.method !== 'GET' || 
@@ -46,11 +47,34 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Para navegação HTML (document), tenta a rede e faz fallback para o cache
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match('/index.html') || caches.match('/');
+        })
+    );
+    return;
+  }
+
+  // Para outros ativos estáticos (JS, CSS, imagens, fontes): Cache First com revalidação em segundo plano
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
+        fetch(event.request).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
+          }
+        }).catch(() => {/* Offline - mantém versão cacheada */});
         return cachedResponse;
       }
+
       return fetch(event.request).then((networkResponse) => {
         if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
           return networkResponse;
@@ -61,7 +85,7 @@ self.addEventListener('fetch', (event) => {
         });
         return networkResponse;
       }).catch(() => {
-        return caches.match('/');
+        return caches.match('/index.html');
       });
     })
   );
@@ -69,14 +93,12 @@ self.addEventListener('fetch', (event) => {
 
 // Tratamento de Eventos Push de Notificações em Tempo Real
 self.addEventListener('push', (event) => {
-  console.log('[Service Worker] Evento de Push recebido!');
-  
   let notificationData = {
-    title: 'Araçatuba Serviços - Nova Atualização',
-    body: 'Uma nova atualização ou ordem de serviço foi registrada no sistema.',
+    title: 'Gestão de Serviços - Atualização',
+    body: 'Uma nova ordem de serviço ou atualização foi registrada.',
     icon: '/favicon.ico',
     badge: '/favicon.ico',
-    tag: 'default-push-tag'
+    tag: 'os-update'
   };
 
   if (event.data) {
@@ -105,9 +127,7 @@ self.addEventListener('push', (event) => {
 
 // Clique na notificação
 self.addEventListener('notificationclick', (event) => {
-  console.log('[Service Worker] Notificação clicada!');
   event.notification.close();
-
   const targetUrl = (event.notification.data && event.notification.data.url) || self.location.origin;
 
   event.waitUntil(

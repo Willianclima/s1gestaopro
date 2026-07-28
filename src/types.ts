@@ -5,6 +5,10 @@ export interface Client {
   phone: string;
   email: string;
   address: string;
+  lat?: number;
+  lng?: number;
+  formattedAddress?: string;
+  isAddressValidated?: boolean;
   notes: string;
   createdAt: string;
   userType?: "requisitante" | "gestor" | "gestor_servicos" | "admin";
@@ -18,6 +22,11 @@ export interface Client {
   specialty?: string;
   specialties?: string[];
   technicalRole?: string;
+  isTrialRequested?: boolean;
+  trialDays?: number;
+  trialRequestedAt?: string;
+  lgpdAccepted?: boolean;
+  biddingTermsAccepted?: boolean;
 }
 
 export interface Almoxarifado {
