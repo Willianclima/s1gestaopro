@@ -98,6 +98,17 @@ export interface SystemLog {
   category: "requisicao" | "requisitante" | "tecnico" | "sistema";
 }
 
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  type: 'os_created' | 'os_status' | 'os_assigned' | 'system_alert' | 'info';
+  read: boolean;
+  serviceOrderId?: string;
+  targetUserType?: string;
+}
+
 export interface CurrentUser {
   id: string;
   name: string;
@@ -105,6 +116,10 @@ export interface CurrentUser {
   userType: "admin" | "gestor" | "gestor_servicos" | "requisitante" | "profissional";
   warehouseId?: string;
   workLocation?: string;
+  email?: string;
+  photoURL?: string;
+  googleUid?: string;
+  isGoogleWorkspace?: boolean;
 }
 
 export interface Toast {

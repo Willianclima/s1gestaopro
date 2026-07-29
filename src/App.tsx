@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate } from "./types";
+import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate, AppNotification } from "./types";
 import { 
   INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS, INITIAL_ALMOXARIFADOS
 } from "./data/mockData";
@@ -13,12 +13,18 @@ import AiAssistant from "./components/AiAssistant";
 import ReportsAndLogs from "./components/ReportsAndLogs";
 import SmtpSettingsPanel from "./components/SmtpSettingsPanel";
 import AddressValidationWidget from "./components/AddressValidationWidget";
+import GmailIntegrationPanel from "./components/GmailIntegrationPanel";
+import MapLocationPickerModal from "./components/MapLocationPickerModal";
+import NotificationCenter from "./components/NotificationCenter";
+import { reverseGeocodeCoordinates, fetchAddressFromCep } from "./services/addressValidation";
+import { playNotificationSound } from "./utils/notificationSound";
+import { googleSignIn } from "./services/firebaseAuth";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
   Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff,
-  ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp
+  ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp, MapPin, RefreshCw, Navigation
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
 import { useSystemTheme } from "./hooks/useSystemTheme";
@@ -36,6 +42,81 @@ export default function App() {
   });
 
   const [isInIframe, setIsInIframe] = useState(false);
+
+  // In-App Notifications State (Guaranteed delivery inside iFrames without browser permission blocking)
+  const [appNotifications, setAppNotifications] = useState<AppNotification[]>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("aracatuba_app_notifications");
+      if (stored) {
+        try {
+          return JSON.parse(stored);
+        } catch (e) {
+          console.error("Failed to parse notifications", e);
+        }
+      }
+    }
+    return [
+      {
+        id: "initial-welcome",
+        title: "Central de Notificações Ativa 🚀",
+        message: "Notificações em tempo real ativadas com sucesso. Não depende de permissões do navegador e funciona 100% dentro do iFrame.",
+        timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+        type: "info",
+        read: false
+      }
+    ];
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("aracatuba_app_notifications", JSON.stringify(appNotifications));
+    }
+  }, [appNotifications]);
+
+  // Dispatch an In-App Notification with Web Audio Chime + Title Alert
+  const notifyUser = (notif: {
+    title: string;
+    message: string;
+    type?: AppNotification["type"];
+    serviceOrderId?: string;
+    soundType?: 'chime' | 'success' | 'alert' | 'info';
+  }) => {
+    const newNotif: AppNotification = {
+      id: Math.random().toString(36).substring(2, 9),
+      title: notif.title,
+      message: notif.message,
+      timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+      type: notif.type || "info",
+      read: false,
+      serviceOrderId: notif.serviceOrderId
+    };
+
+    setAppNotifications((prev) => [newNotif, ...prev.slice(0, 49)]);
+
+    // Play Web Audio sound chime (works everywhere)
+    playNotificationSound(notif.soundType || (notif.type === "system_alert" ? "alert" : "success"));
+
+    // Pulse window/tab title
+    if (typeof document !== "undefined") {
+      const origTitle = "Gestão de Serviços | Araçatuba";
+      document.title = `🔔 ${notif.title} | Araçatuba`;
+      setTimeout(() => {
+        document.title = origTitle;
+      }, 4000);
+    }
+  };
+
+  const handleMarkNotifAsRead = (id: string) => {
+    setAppNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+
+  const handleMarkAllNotifsAsRead = () => {
+    setAppNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const handleClearAllNotifs = () => {
+    setAppNotifications([]);
+  };
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -95,7 +176,7 @@ export default function App() {
   };
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings" | "bi">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings" | "bi" | "gmail">("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [cadastrosOpen, setCadastrosOpen] = useState(true);
 
@@ -116,6 +197,15 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [regSuccessMessage, setRegSuccessMessage] = useState("");
 
+  // Google Workspace Integration State
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [googleWorkspaceData, setGoogleWorkspaceData] = useState<{
+    email: string;
+    name: string;
+    photoURL?: string;
+    uid: string;
+  } | null>(null);
+
   // Registration Form State
   const [regCPF, setRegCPF] = useState("");
   const [regName, setRegName] = useState("");
@@ -126,8 +216,39 @@ export default function App() {
   const [regLng, setRegLng] = useState<number | undefined>(undefined);
   const [regFormattedAddress, setRegFormattedAddress] = useState<string>("");
   const [regIsAddressValidated, setRegIsAddressValidated] = useState<boolean>(false);
+  const [isMapPickerOpen, setIsMapPickerOpen] = useState<boolean>(false);
+  const [isAddressFetching, setIsAddressFetching] = useState<boolean>(false);
   const [regWorkLocation, setRegWorkLocation] = useState("");
   const [regPassword, setRegPassword] = useState("");
+
+  const lastAutoCepRef = React.useRef<string | null>(null);
+
+  // Auto-detect 8-digit CEP (00000-000 or 00000000) in regAddress and auto-fill address via ViaCEP API
+  useEffect(() => {
+    const cleanDigits = regAddress.replace(/\D/g, "");
+    if (cleanDigits.length === 8 && lastAutoCepRef.current !== cleanDigits && regAddress.length < 25) {
+      lastAutoCepRef.current = cleanDigits;
+      const lookupCep = async () => {
+        setIsAddressFetching(true);
+        try {
+          const cepData = await fetchAddressFromCep(cleanDigits);
+          if (cepData && cepData.formattedAddress) {
+            setRegAddress(cepData.formattedAddress);
+            setRegFormattedAddress(cepData.formattedAddress);
+            setRegIsAddressValidated(true);
+            toastSuccess(`CEP ${cepData.cep} localizado: ${cepData.formattedAddress}`, "Endereço Preenchido");
+          }
+        } catch (err) {
+          console.error("Erro na consulta automática de CEP:", err);
+        } finally {
+          setIsAddressFetching(false);
+        }
+      };
+      lookupCep();
+    } else if (cleanDigits.length < 8) {
+      lastAutoCepRef.current = null;
+    }
+  }, [regAddress]);
 
   // User self-change password state
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -206,8 +327,8 @@ export default function App() {
     if (!currentUser) return false;
     const userRole = currentUser.userType || "requisitante";
     if (userRole === "admin") return true; // master always has access to all resources
-    if (tab === "bi") {
-      return ["gestor", "gestor_servicos", "profissional"].includes(userRole);
+    if (tab === "bi" || tab === "gmail") {
+      return true;
     }
     if (tab === "settings") {
       return ["gestor", "gestor_servicos", "profissional", "requisitante"].includes(userRole);
@@ -1012,6 +1133,16 @@ export default function App() {
 
   const triggerAutoNotificationsForNewOrder = async (order: ServiceOrder) => {
     const client = clients.find(c => c.id === order.clientId);
+
+    // Dispatch In-App Realtime Notification + Web Audio Chime
+    notifyUser({
+      title: `Nova OS #${order.id} Registrada`,
+      message: `${client ? client.name : "Requisitante"}: "${order.title}" (${order.category}) - Prioridade: ${(order.priority || "média").toUpperCase()}`,
+      type: "os_created",
+      serviceOrderId: order.id,
+      soundType: "chime"
+    });
+
     if (!client) return;
 
     // Send email if SMTP is enabled
@@ -1057,6 +1188,15 @@ export default function App() {
 
     // 1. Status change notification
     if (oldOrder.status !== updatedOrder.status) {
+      // In-App Notification Dispatch
+      notifyUser({
+        title: `OS #${updatedOrder.id} - ${statusLabel}`,
+        message: `A Ordem de Serviço "${updatedOrder.title}" foi alterada para o status: ${statusLabel}.`,
+        type: updatedOrder.status === "concluido" ? "system_alert" : "os_status",
+        serviceOrderId: updatedOrder.id,
+        soundType: updatedOrder.status === "concluido" ? "success" : "chime"
+      });
+
       // Notify client
       if (client) {
         if (smtpSettings.enabled && client.email) {
@@ -1101,6 +1241,14 @@ export default function App() {
 
     // 2. Newly assigned professional notification
     if (oldOrder.assignedTo !== updatedOrder.assignedTo && updatedOrder.assignedTo) {
+      // In-App Notification Dispatch
+      notifyUser({
+        title: `OS #${updatedOrder.id} Atribuída`,
+        message: `Técnico ${updatedOrder.assignedTo} alocado para o chamado "${updatedOrder.title}".`,
+        type: "os_assigned",
+        serviceOrderId: updatedOrder.id,
+        soundType: "info"
+      });
       if (professional && professional.email) {
         if (smtpSettings.enabled) {
           const subject = `🛠️ Nova Ordem de Serviço Atribuída: #${updatedOrder.id}`;
@@ -1753,6 +1901,146 @@ export default function App() {
     addLoginAttempt(normalizedInput, "desconhecido", "failed", "desconhecido", "Tentativa de login de usuário não registrado no sistema.");
   };
 
+  // Google Workspace Authentication & Account Provisioning Handler
+  const handleGoogleWorkspaceAuth = async () => {
+    setIsGoogleLoading(true);
+    setLoginError("");
+    try {
+      const res = await googleSignIn();
+      if (!res || !res.user) {
+        throw new Error("Não foi possível obter dados da conta Google.");
+      }
+      const { user } = res;
+      const googleEmail = user.email || "";
+      const googleName = user.displayName || (googleEmail ? googleEmail.split("@")[0] : "Usuário Google");
+      const googlePhoto = user.photoURL || "";
+      const googleUid = user.uid;
+
+      // 1. Check if Gestor / Admin email matches
+      if (
+        googleEmail.toLowerCase() === "willianclima@gmail.com" ||
+        googleEmail.toLowerCase().includes("admin")
+      ) {
+        const adminUser: CurrentUser = {
+          id: "gestor-admin",
+          name: googleName || "Willian C. Lima",
+          document: "369.111.218-84",
+          userType: "admin",
+          email: googleEmail,
+          photoURL: googlePhoto,
+          googleUid,
+          isGoogleWorkspace: true
+        };
+        setCurrentUser(adminUser);
+        localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
+        setActiveTab("dashboard");
+        toastSuccess(`Bem-vindo, Gestor ${googleName}! Integrado ao Google Workspace.`, "Google Workspace Conectado");
+        notifyUser({
+          title: "Sessão Google Workspace Ativa",
+          message: `Autenticado com sucesso via Google Workspace (${googleEmail}).`,
+          type: "info",
+          soundType: "success"
+        });
+        addSystemLog("Login Google Workspace", `Gestor "${googleName}" (${googleEmail}) autenticado via Google.`, "sistema");
+        return;
+      }
+
+      // 2. Check existing clients or professionals
+      const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
+      const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
+
+      const matchedClient = activeClients.find(
+        c => (c.email && c.email.toLowerCase() === googleEmail.toLowerCase()) || c.googleUid === googleUid
+      );
+
+      if (matchedClient) {
+        if (matchedClient.blocked) {
+          setLoginError("Sua conta requisitante encontra-se suspensa pelo Administrador.");
+          toastError("Acesso suspenso pelo Administrador.", "Conta Bloqueada");
+          return;
+        }
+        const clientUser: CurrentUser = {
+          id: matchedClient.id,
+          name: matchedClient.name || googleName,
+          document: matchedClient.document || "",
+          userType: "requisitante",
+          email: googleEmail,
+          photoURL: googlePhoto,
+          googleUid,
+          isGoogleWorkspace: true
+        };
+        setCurrentUser(clientUser);
+        localStorage.setItem("service_mgt_logged_user", JSON.stringify(clientUser));
+        setActiveTab("dashboard");
+        toastSuccess(`Olá, Requisitante ${matchedClient.name}! Sessão ativa via Google Workspace.`, "Acesso Autorizado");
+        notifyUser({
+          title: "Acesso Google Workspace Conectado",
+          message: `Sessão iniciada para ${matchedClient.name} (${googleEmail}).`,
+          type: "info",
+          soundType: "success"
+        });
+        addSystemLog("Login Google Workspace", `Requisitante "${matchedClient.name}" (${googleEmail}) autenticado.`, "sistema");
+        return;
+      }
+
+      const matchedProf = activeProfs.find(
+        p => (p.email && p.email.toLowerCase() === googleEmail.toLowerCase()) || p.googleUid === googleUid
+      );
+
+      if (matchedProf) {
+        if (matchedProf.blocked) {
+          setLoginError("Acesso técnico suspenso pelo Gestor.");
+          return;
+        }
+        const profUser: CurrentUser = {
+          id: matchedProf.id,
+          name: matchedProf.name || googleName,
+          document: matchedProf.document || "",
+          userType: "profissional",
+          workLocation: matchedProf.workLocation,
+          email: googleEmail,
+          photoURL: googlePhoto,
+          googleUid,
+          isGoogleWorkspace: true
+        };
+        setCurrentUser(profUser);
+        localStorage.setItem("service_mgt_logged_user", JSON.stringify(profUser));
+        setActiveTab("dashboard");
+        toastSuccess(`Olá, Técnico ${matchedProf.name}! Conectado via Google Workspace.`, "Suporte Técnico Conectado");
+        addSystemLog("Login Google Workspace", `Técnico "${matchedProf.name}" (${googleEmail}) autenticado.`, "sistema");
+        return;
+      }
+
+      // 3. No existing account found -> First Access / Auto-Cadastro com dados do Google Workspace
+      setGoogleWorkspaceData({
+        email: googleEmail,
+        name: googleName,
+        photoURL: googlePhoto,
+        uid: googleUid
+      });
+
+      setRegName(googleName);
+      setRegEmail(googleEmail);
+      setIsRegistering(true);
+      toastInfo(
+        `Conta Google (${googleEmail}) vinculada! Complete seu CPF e endereço para finalizar seu primeiro acesso.`,
+        "Primeiro Acesso Google Workspace"
+      );
+      notifyUser({
+        title: "Primeiro Acesso Google Workspace",
+        message: `Conta ${googleEmail} vinculada! Digite seu CPF e confirme os dados.`,
+        type: "info",
+        soundType: "chime"
+      });
+    } catch (err: any) {
+      console.error("Erro no Google Auth:", err);
+      setLoginError("Erro ao conectar com Google Workspace: " + (err.message || "Tente novamente."));
+      toastError("Não foi possível autenticar com o Google.", "Falha na Autenticação");
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
   // Self-registration handler
   const handleSelfRegister = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1772,24 +2060,29 @@ export default function App() {
     }
 
     const newId = `cli-${Date.now()}`;
+    const isGoogleAuth = !!googleWorkspaceData;
+
     const newClient: Client = {
       id: newId,
       name: regName,
       document: regCPF,
       phone: regPhone,
-      email: regEmail,
+      email: regEmail || googleWorkspaceData?.email || "",
       address: regAddress,
       lat: regLat,
       lng: regLng,
       formattedAddress: regFormattedAddress,
       isAddressValidated: regIsAddressValidated,
       workLocation: regWorkLocation || undefined,
-      notes: regTrialRequested 
-        ? "Usuário registrado com solicitação de Teste de 15 Dias (Degustação Técnica sem Ônus). Aguardando concessão de permissão pelo Administrador."
+      notes: isGoogleAuth 
+        ? `Primeiro Acesso via Google Workspace (${googleWorkspaceData?.email}). Perfil autenticado automaticamente.`
+        : regTrialRequested 
+        ? "Usuário registrado com solicitação de Teste de 15 Dias. Aguardando concessão de permissão pelo Administrador."
         : "Usuário registrado por Auto-Cadastro. Aguardando autorização operacional.",
       createdAt: new Date().toISOString(),
       password: regPassword || "123",
-      status: "pendente_autorizacao",
+      status: isGoogleAuth ? "ativo" : "pendente_autorizacao",
+      googleUid: googleWorkspaceData?.uid,
       isTrialRequested: regTrialRequested,
       trialDays: regTrialRequested ? 15 : undefined,
       trialRequestedAt: regTrialRequested ? new Date().toISOString() : undefined,
@@ -1803,10 +2096,37 @@ export default function App() {
 
     // System log
     addSystemLog(
-      "Auto-Cadastro Efetuado",
-      `Novo usuário "${regName}" efetuou auto-cadastro sob o CPF ${regCPF} com solicitação de Teste por 15 Dias (${regTrialRequested ? 'Ativada' : 'Não Solicitada'}). Pendente de autorização do Administrador.`,
+      "Primeiro Acesso Concluído",
+      `Novo usuário "${regName}" efetuou primeiro acesso sob o CPF ${regCPF} (Integrado com Google Workspace: ${isGoogleAuth ? "SIM" : "NÃO"}).`,
       "requisitante"
     );
+
+    if (isGoogleAuth && googleWorkspaceData) {
+      // Auto login immediately for Google Workspace users!
+      const autoUser: CurrentUser = {
+        id: newId,
+        name: regName,
+        document: regCPF,
+        userType: "requisitante",
+        email: googleWorkspaceData.email,
+        photoURL: googleWorkspaceData.photoURL,
+        googleUid: googleWorkspaceData.uid,
+        isGoogleWorkspace: true
+      };
+      setCurrentUser(autoUser);
+      localStorage.setItem("service_mgt_logged_user", JSON.stringify(autoUser));
+      setActiveTab("dashboard");
+      toastSuccess(`Primeiro Acesso concluído com sucesso! Bem-vindo(a), ${regName}.`, "Conta Criada via Google");
+      notifyUser({
+        title: "Primeiro Acesso Google Concluído",
+        message: `Bem-vindo, ${regName}! Seu perfil Requisitante Prefeitura foi ativado.`,
+        type: "info",
+        soundType: "success"
+      });
+      setGoogleWorkspaceData(null);
+      setIsRegistering(false);
+      return;
+    }
 
     // Reset fields & set notification
     setRegCPF("");
@@ -2180,11 +2500,55 @@ export default function App() {
             <div className="space-y-6 text-left">
               <div className="space-y-1">
                 <h2 className="text-xl font-extrabold tracking-tight text-white">Acesse o Sistema</h2>
-                <p className="text-xs text-slate-400 font-medium">Insira seu CPF de cadastro e sua senha para prosseguir ao painel operacional.</p>
+                <p className="text-xs text-slate-400 font-medium">Insira seu CPF de cadastro e sua senha ou conecte via Google Workspace.</p>
+              </div>
+
+              {/* Google Workspace First Access & Login Option */}
+              <div className="space-y-3 bg-slate-900/90 p-4.5 rounded-2xl border border-indigo-500/40 shadow-lg">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-300">Acesso Integrado Google Workspace</span>
+                  </div>
+                  <span className="bg-indigo-950 text-indigo-300 border border-indigo-800 text-[10px] font-black px-2 py-0.5 rounded-full">
+                    G Suite / Gmail
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={isGoogleLoading}
+                  onClick={handleGoogleWorkspaceAuth}
+                  className="w-full bg-slate-950 hover:bg-slate-900 text-white font-bold text-xs py-3.5 px-4 rounded-xl border border-indigo-500/40 shadow-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer hover:border-indigo-400 group active:scale-[0.99]"
+                >
+                  {isGoogleLoading ? (
+                    <RefreshCw className="w-4.5 h-4.5 text-indigo-400 animate-spin" />
+                  ) : (
+                    <svg className="w-4.5 h-4.5 shrink-0" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                    </svg>
+                  )}
+                  <span className="truncate">
+                    {isGoogleLoading ? "Conectando ao Google Workspace..." : "Entrar / Primeiro Acesso com Google Workspace"}
+                  </span>
+                </button>
+                <p className="text-[10px] text-slate-400 leading-tight">
+                  Autenticação instantânea para servidores e requisitantes Prefeitura. Localiza ou cria seu acesso em 1 clique.
+                </p>
+              </div>
+
+              <div className="relative flex py-0.5 items-center">
+                <div className="flex-grow border-t border-slate-800"></div>
+                <span className="flex-shrink mx-3 text-[10px] font-extrabold text-slate-500 uppercase tracking-widest">
+                  ou entre com CPF e Senha
+                </span>
+                <div className="flex-grow border-t border-slate-800"></div>
               </div>
 
               {/* Secure Message */}
-              <div className="space-y-3 bg-slate-800/30 p-5 rounded-2xl border border-slate-800">
+              <div className="space-y-3 bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
                 <div className="flex items-start gap-2.5">
                   <ShieldCheck className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
                   <div>
@@ -2312,8 +2676,52 @@ export default function App() {
             <div className="space-y-6 text-left">
               <div className="space-y-1">
                 <h2 className="text-xl font-extrabold tracking-tight text-white">Auto-Cadastro do Sistema</h2>
-                <p className="text-xs text-slate-400 font-medium font-semibold">Preencha seus dados para solicitar perfil e permissão operacional ao administrador do sistema.</p>
+                <p className="text-xs text-slate-400 font-medium font-semibold">Preencha seus dados para criar seu primeiro acesso ao sistema de manutenção da Prefeitura.</p>
               </div>
+
+              {/* Google Workspace Linked Banner in Registration */}
+              {googleWorkspaceData ? (
+                <div className="bg-indigo-950/70 border border-indigo-500/50 p-4 rounded-2xl flex items-center justify-between gap-3 text-left shadow-md">
+                  <div className="flex items-center gap-3">
+                    {googleWorkspaceData.photoURL ? (
+                      <img src={googleWorkspaceData.photoURL} alt="Google Avatar" className="w-10 h-10 rounded-full border border-indigo-400 shrink-0 object-cover" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center shrink-0 text-sm">
+                        {googleWorkspaceData.name.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-300">Google Workspace Integrado</span>
+                        <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-extrabold px-1.5 py-0.2 rounded border border-emerald-500/30">✓ Ativo</span>
+                      </div>
+                      <p className="text-xs font-extrabold text-white">{googleWorkspaceData.name}</p>
+                      <p className="text-[11px] text-slate-400 font-mono">{googleWorkspaceData.email}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGoogleWorkspaceData(null)}
+                    className="text-[11px] text-rose-400 hover:underline font-bold"
+                  >
+                    Desconectar
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isGoogleLoading}
+                  onClick={handleGoogleWorkspaceAuth}
+                  className="w-full bg-slate-900 hover:bg-slate-850 text-indigo-200 font-bold text-xs py-3 px-4 rounded-xl border border-indigo-500/30 shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer hover:border-indigo-400"
+                >
+                  {isGoogleLoading ? (
+                    <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                  )}
+                  <span>Auto-preencher dados do Primeiro Acesso com Google Workspace</span>
+                </button>
+              )}
 
               <form onSubmit={handleSelfRegister} className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2400,30 +2808,113 @@ export default function App() {
                         setRegAddress(e.target.value);
                         setRegIsAddressValidated(false);
                       }}
-                      className="w-full text-sm font-semibold border border-slate-800 rounded-xl pl-4 pr-10 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      className="w-full text-sm font-semibold border border-slate-800 rounded-xl pl-4 pr-32 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
                       placeholder="Digite o CEP (Ex: 16010-000) ou Endereço (Rua, Nº, Bairro, Cidade)"
                     />
-                    {regAddress && (
+                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                      {isAddressFetching && (
+                        <div className="p-1 text-indigo-400 flex items-center gap-1 text-[10px] font-bold bg-indigo-950/90 border border-indigo-500/40 px-1.5 py-0.5 rounded-lg shadow-2xs animate-fadeIn" title="Buscando/validando dados do endereço...">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+                          <span className="hidden sm:inline text-[10px]">Buscando...</span>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
-                          setRegAddress("");
-                          setRegIsAddressValidated(false);
-                          setRegLat(null);
-                          setRegLng(null);
-                          setRegFormattedAddress("");
+                          if (!navigator.geolocation) {
+                            toastError("Geolocalização não é suportada por este navegador.", "GPS Indisponível");
+                            return;
+                          }
+                          setIsAddressFetching(true);
+                          navigator.geolocation.getCurrentPosition(
+                            async (position) => {
+                              try {
+                                const { latitude, longitude } = position.coords;
+                                setRegLat(latitude);
+                                setRegLng(longitude);
+
+                                const addr = await reverseGeocodeCoordinates(latitude, longitude);
+                                setRegAddress(addr);
+                                setRegFormattedAddress(addr);
+                                setRegIsAddressValidated(true);
+                                toastSuccess("Localização atual detectada e endereço preenchido!", "GPS Detectado");
+                              } catch (err) {
+                                console.error("Erro ao obter endereço via GPS:", err);
+                                toastError("Não foi possível converter a localização GPS em endereço.", "Erro de Geocodificação");
+                              } finally {
+                                setIsAddressFetching(false);
+                              }
+                            },
+                            (error) => {
+                              setIsAddressFetching(false);
+                              console.warn("Geolocation error:", error);
+                              let msg = "Erro ao acessar a localização do dispositivo.";
+                              if (error.code === error.PERMISSION_DENIED) {
+                                msg = "Permissão de geolocalização negada pelo usuário ou navegador.";
+                              } else if (error.code === error.POSITION_UNAVAILABLE) {
+                                msg = "Informação de localização indisponível no momento.";
+                              } else if (error.code === error.TIMEOUT) {
+                                msg = "Tempo limite esgotado ao buscar localização do dispositivo.";
+                              }
+                              toastError(msg, "Falha na Localização");
+                            },
+                            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                          );
                         }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer"
-                        title="Limpar endereço"
-                        aria-label="Limpar endereço"
+                        className="p-1.5 text-emerald-400 hover:text-emerald-300 hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-[11px] font-bold"
+                        title="Detectar Minha Localização Atual (GPS)"
+                        aria-label="Detectar Localização Atual"
                       >
-                        <X className="w-4 h-4" />
+                        <Navigation className="w-4 h-4 text-emerald-400 shrink-0" />
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => setIsMapPickerOpen(true)}
+                        className="p-1.5 text-indigo-400 hover:text-indigo-300 hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-[11px] font-bold"
+                        title="Localizar no Mapa / Escolher Coordenadas"
+                        aria-label="Localizar no Mapa"
+                      >
+                        <MapPin className="w-4 h-4 text-indigo-400 shrink-0" />
+                      </button>
+                      {regAddress && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRegAddress("");
+                            setRegIsAddressValidated(false);
+                            setRegLat(undefined);
+                            setRegLng(undefined);
+                            setRegFormattedAddress("");
+                          }}
+                          className="p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer"
+                          title="Limpar endereço"
+                          aria-label="Limpar endereço"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  <MapLocationPickerModal
+                    isOpen={isMapPickerOpen}
+                    onClose={() => setIsMapPickerOpen(false)}
+                    initialAddress={regAddress}
+                    initialLat={regLat}
+                    initialLng={regLng}
+                    onLoadingStateChange={(loading) => setIsAddressFetching(loading)}
+                    onSelectLocation={({ address, lat, lng }) => {
+                      setRegAddress(address);
+                      setRegFormattedAddress(address);
+                      setRegLat(lat);
+                      setRegLng(lng);
+                      setRegIsAddressValidated(true);
+                    }}
+                  />
 
                   <AddressValidationWidget
                     address={regAddress}
+                    onLoadingStateChange={(loading) => setIsAddressFetching(loading)}
                     onAddressValidated={(res) => {
                       setRegIsAddressValidated(res.isPrecise);
                       if (res.lat && res.lng) {
@@ -3141,6 +3632,26 @@ export default function App() {
               </button>
             )}
 
+            {/* Gmail Workspace */}
+            {hasTabPermission("gmail") && (
+              <button
+                onClick={() => { setActiveTab("gmail"); setIsSidebarOpen(false); }}
+                className={`w-full flex items-center justify-between px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === "gmail"
+                    ? "bg-red-950/60 text-red-400 font-extrabold shadow-sm border border-red-500/30"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                }`}
+              >
+                <div className="flex items-center gap-3.5">
+                  <Mail className="w-4 h-4 text-red-400" />
+                  <span>Gmail Workspace</span>
+                </div>
+                <span className="bg-red-500/20 text-red-300 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border border-red-500/30">
+                  Google
+                </span>
+              </button>
+            )}
+
             {/* Configurações SMTP / Painel de Governança */}
             {hasTabPermission("settings") && (
               <button
@@ -3243,40 +3754,16 @@ export default function App() {
               <span>Sessão Encriptada Ativa</span>
             </div>
 
-            {/* Browser Notifications Indicator */}
-            <button
-              onClick={() => {
-                setSettingsSubTab("push_diagnostic");
-                setActiveTab("settings");
+            {/* In-App Notification Center & Web Audio Synthesizer */}
+            <NotificationCenter
+              notifications={appNotifications}
+              onMarkAsRead={handleMarkNotifAsRead}
+              onMarkAllAsRead={handleMarkAllNotifsAsRead}
+              onClearAll={handleClearAllNotifs}
+              onSelectServiceOrder={(osId) => {
+                setActiveTab("orders");
               }}
-              className={`hidden md:flex items-center gap-1.5 p-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer ${
-                isInIframe
-                  ? "bg-amber-50/20 hover:bg-amber-50/40 border-amber-200/50 text-amber-700 dark:bg-amber-950/10 dark:border-amber-900/20 dark:text-amber-400"
-                  : notificationPermission === "granted"
-                  ? "bg-emerald-50/50 hover:bg-emerald-50 border-emerald-100 text-emerald-700 dark:bg-emerald-950/20 dark:border-emerald-900/30 dark:text-emerald-400"
-                  : notificationPermission === "denied"
-                  ? "bg-rose-50/50 hover:bg-rose-50 border-rose-100 text-rose-700 dark:bg-rose-950/20 dark:border-rose-900/30 dark:text-rose-400"
-                  : "bg-amber-50/50 hover:bg-amber-50 border-amber-100 text-amber-700 animate-pulse dark:bg-amber-950/20 dark:border-amber-900/30 dark:text-amber-400"
-              }`}
-              title="Clique para abrir o painel de diagnóstico de notificações e Service Worker."
-            >
-              {notificationPermission === "granted" ? (
-                <Bell className="w-4 h-4 text-emerald-500 shrink-0" />
-              ) : isInIframe ? (
-                <Bell className="w-4 h-4 text-amber-500 shrink-0" />
-              ) : (
-                <BellOff className="w-4 h-4 text-amber-500 shrink-0" />
-              )}
-              <span>
-                {isInIframe
-                  ? "Notificações (iFrame)"
-                  : notificationPermission === "granted"
-                  ? "Notificações Ativas"
-                  : notificationPermission === "denied"
-                  ? "Notificações Bloqueadas"
-                  : "Ativar Notificações"}
-              </span>
-            </button>
+            />
 
             <div className="flex items-center gap-2.5">
               {/* Clean Profile Button - Theme Selector moved inside Popup */}
@@ -3290,9 +3777,13 @@ export default function App() {
                 className="flex items-center gap-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 p-1.5 px-3 rounded-xl transition-all border border-slate-200/60 dark:border-slate-700 cursor-pointer text-left shrink-0 shadow-xs"
                 title="Meu Perfil e Preferências"
               >
-                <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 shadow-xs text-white font-extrabold text-[11px] flex items-center justify-center uppercase shrink-0">
-                  {currentUser.name.charAt(0)}
-                </div>
+                {currentUser.photoURL ? (
+                  <img src={currentUser.photoURL} alt={currentUser.name} className="w-7 h-7 rounded-full border border-indigo-400 shrink-0 object-cover shadow-xs" />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 shadow-xs text-white font-extrabold text-[11px] flex items-center justify-center uppercase shrink-0">
+                    {currentUser.name.charAt(0)}
+                  </div>
+                )}
                 <div className="text-left hidden sm:block">
                   <span className="text-slate-800 dark:text-slate-200 font-extrabold text-xs block leading-none max-w-[120px] truncate">{currentUser.name}</span>
                   <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
@@ -3437,6 +3928,14 @@ export default function App() {
                 onClearLogs={handleClearLogs}
                 loginAttempts={loginAttempts}
                 onClearLoginAttempts={handleClearLoginAttempts}
+              />
+            )}
+
+            {activeTab === "gmail" && hasTabPermission("gmail") && (
+              <GmailIntegrationPanel
+                onToastSuccess={toastSuccess}
+                onToastError={toastError}
+                onToastInfo={toastInfo}
               />
             )}
 

@@ -223,3 +223,46 @@ export async function validateAddressWithGoogleMaps(
     provider: 'Validador de Precisão GPS'
   };
 }
+
+/**
+ * Reverse geocodes coordinates (lat, lng) to get a human-readable formatted address.
+ */
+export async function reverseGeocodeCoordinates(lat: number, lng: number): Promise<string> {
+  try {
+    const osmUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`;
+    const res = await fetch(osmUrl, {
+      headers: { 'User-Agent': 'AracatubaServicosManager/1.0' }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.address) {
+        const addr = data.address;
+        const street = addr.road || addr.pedestrian || addr.street || '';
+        const number = addr.house_number || '';
+        const neighborhood = addr.suburb || addr.neighbourhood || addr.residential || '';
+        const city = addr.city || addr.town || addr.municipality || 'Araçatuba';
+        const state = addr.state || 'SP';
+
+        const parts: string[] = [];
+        if (street) {
+          parts.push(number ? `${street}, ${number}` : street);
+        }
+        if (neighborhood) parts.push(neighborhood);
+        if (city) parts.push(state ? `${city} - ${state}` : city);
+
+        if (parts.length > 0) {
+          return parts.join(' - ');
+        }
+        if (data.display_name) {
+          return data.display_name;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Reverse geocode failed:", e);
+  }
+
+  return `Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}`;
+}
+

@@ -7,12 +7,14 @@ interface AddressValidationWidgetProps {
   address: string;
   onAddressValidated?: (result: AddressValidationResult) => void;
   onApplyFormattedAddress?: (formattedAddress: string, lat?: number, lng?: number) => void;
+  onLoadingStateChange?: (isLoading: boolean) => void;
 }
 
 export default function AddressValidationWidget({
   address,
   onAddressValidated,
-  onApplyFormattedAddress
+  onApplyFormattedAddress,
+  onLoadingStateChange
 }: AddressValidationWidgetProps) {
   const [isValidating, setIsValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<AddressValidationResult | null>(null);
@@ -20,6 +22,12 @@ export default function AddressValidationWidget({
   const lastProcessedCepRef = useRef<string | null>(null);
   const miniMapContainerRef = useRef<HTMLDivElement>(null);
   const miniMapInstanceRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (onLoadingStateChange) {
+      onLoadingStateChange(isValidating);
+    }
+  }, [isValidating, onLoadingStateChange]);
 
   // Auto-detect 8-digit CEP in input
   useEffect(() => {
