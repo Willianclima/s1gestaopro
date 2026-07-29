@@ -17,6 +17,63 @@ export interface AddressValidationResult {
   suggestions?: string[];
 }
 
+export interface CepResult {
+  cep: string;
+  street: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+  formattedAddress: string;
+}
+
+/**
+ * Fetches logradouro, bairro, localidade and UF automatically when an 8-digit CEP is provided.
+ */
+export async function fetchAddressFromCep(cepInput: string): Promise<CepResult | null> {
+  const cleanCep = cepInput.replace(/\D/g, "");
+  if (cleanCep.length !== 8) return null;
+
+  try {
+    // 1. Try ViaCEP
+    const viaCepRes = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+    if (viaCepRes.ok) {
+      const data = await viaCepRes.json();
+      if (!data.erro) {
+        const street = data.logradouro || "";
+        const neighborhood = data.bairro || "";
+        const city = data.localidade || "";
+        const state = data.uf || "";
+        const parts = [street, neighborhood, city, state].filter(Boolean);
+        const formattedAddress = parts.join(", ");
+        return { cep: cleanCep, street, neighborhood, city, state, formattedAddress };
+      }
+    }
+  } catch (e) {
+    console.warn("ViaCEP lookup failed, trying BrasilAPI:", e);
+  }
+
+  try {
+    // 2. Fallback to BrasilAPI
+    const brasilRes = await fetch(`https://brasilapi.com.br/api/cep/v1/${cleanCep}`);
+    if (brasilRes.ok) {
+      const data = await brasilRes.json();
+      if (data.cep) {
+        const street = data.street || "";
+        const neighborhood = data.neighborhood || "";
+        const city = data.city || "";
+        const state = data.state || "";
+        const parts = [street, neighborhood, city, state].filter(Boolean);
+        const formattedAddress = parts.join(", ");
+        return { cep: cleanCep, street, neighborhood, city, state, formattedAddress };
+      }
+    }
+  } catch (e) {
+    console.warn("BrasilAPI CEP lookup failed:", e);
+  }
+
+  return null;
+}
+
 /**
  * Validates an address using Google Maps Geocoding API (with fallback to OpenStreetMap Nominatim & Local Parser)
  */
@@ -44,7 +101,7 @@ export async function validateAddressWithGoogleMaps(
   }
 
   // Check if Google Maps API Key is available
-  const googleApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || (typeof process !== 'undefined' && process.env ? process.env.VITE_GOOGLE_MAPS_API_KEY : '');
+  const googleApiKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || (typeof process !== 'undefined' && process.env ? process.env.VITE_GOOGLE_MAPS_API_KEY : '');
 
   if (googleApiKey) {
     try {

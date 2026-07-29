@@ -4,7 +4,7 @@ import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
-  Filter, QrCode
+  Filter, QrCode, Tag
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
@@ -15,7 +15,7 @@ interface ServiceOrdersProps {
   orders: ServiceOrder[];
   globalOrders?: ServiceOrder[];
   clients: Client[];
-  categories: string[];
+  categories: any[];
   professionalsList: Professional[]; // Full list of professionals with specialties
   teams?: Team[];
   onAddOrder: (order: ServiceOrder) => void;
@@ -1522,11 +1522,15 @@ export default function ServiceOrders({
             >
               <option value="todos">Todas as Categorias</option>
               {categories && categories.length > 0 ? (
-                categories.map(cat => (
-                  <option key={cat.id} value={cat.name}>
-                    {cat.name}
-                  </option>
-                ))
+                categories.map((cat: any) => {
+                  const catName = typeof cat === 'string' ? cat : (cat.name || String(cat));
+                  const catKey = typeof cat === 'string' ? cat : (cat.id || cat.name || String(cat));
+                  return (
+                    <option key={catKey} value={catName}>
+                      {catName}
+                    </option>
+                  );
+                })
               ) : (
                 Array.from(new Set(orders.map(o => o.category || "Geral"))).map(catName => (
                   <option key={catName} value={catName}>

@@ -2390,17 +2390,37 @@ export default function App() {
                   <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
                     Endereço de Atendimento <span className="text-indigo-400">*</span>
                   </label>
-                  <input
-                    type="text"
-                    required
-                    value={regAddress}
-                    onChange={(e) => {
-                      setRegAddress(e.target.value);
-                      setRegIsAddressValidated(false);
-                    }}
-                    className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
-                    placeholder="Rua, Número, Bairro, Cidade - SP"
-                  />
+                  <div className="relative w-full">
+                    <input
+                      id="regAddress"
+                      type="text"
+                      required
+                      value={regAddress}
+                      onChange={(e) => {
+                        setRegAddress(e.target.value);
+                        setRegIsAddressValidated(false);
+                      }}
+                      className="w-full text-sm font-semibold border border-slate-800 rounded-xl pl-4 pr-10 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      placeholder="Digite o CEP (Ex: 16010-000) ou Endereço (Rua, Nº, Bairro, Cidade)"
+                    />
+                    {regAddress && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRegAddress("");
+                          setRegIsAddressValidated(false);
+                          setRegLat(null);
+                          setRegLng(null);
+                          setRegFormattedAddress("");
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer"
+                        title="Limpar endereço"
+                        aria-label="Limpar endereço"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
 
                   <AddressValidationWidget
                     address={regAddress}

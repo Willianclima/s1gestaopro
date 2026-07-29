@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
-import { validateAddressWithGoogleMaps, AddressValidationResult } from '../services/addressValidation';
-import { MapPin, CheckCircle2, AlertTriangle, XCircle, Search, Sparkles, Navigation, Globe, ExternalLink } from 'lucide-react';
+import { validateAddressWithGoogleMaps, AddressValidationResult, fetchAddressFromCep } from '../services/addressValidation';
+import { MapPin, CheckCircle2, AlertTriangle, XCircle, Search, Sparkles, Navigation, Globe, ExternalLink, Zap } from 'lucide-react';
 
 interface AddressValidationWidgetProps {
   address: string;
@@ -16,14 +16,69 @@ export default function AddressValidationWidget({
 }: AddressValidationWidgetProps) {
   const [isValidating, setIsValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<AddressValidationResult | null>(null);
+  const [cepNotice, setCepNotice] = useState<string | null>(null);
+  const lastProcessedCepRef = useRef<string | null>(null);
   const miniMapContainerRef = useRef<HTMLDivElement>(null);
   const miniMapInstanceRef = useRef<L.Map | null>(null);
+
+  // Auto-detect 8-digit CEP in input
+  useEffect(() => {
+    const cleanDigits = address.replace(/\D/g, "");
+    
+    // Check if there is an 8-digit CEP sequence
+    if (cleanDigits.length === 8 && lastProcessedCepRef.current !== cleanDigits) {
+      lastProcessedCepRef.current = cleanDigits;
+      handleCepAutoFill(cleanDigits);
+    } else if (cleanDigits.length !== 8 && lastProcessedCepRef.current) {
+      if (cleanDigits.length < 8) {
+        lastProcessedCepRef.current = null;
+        setCepNotice(null);
+      }
+    }
+  }, [address]);
+
+  const handleCepAutoFill = async (cepDigits: string) => {
+    setIsValidating(true);
+    setCepNotice(`🔍 CEP ${cepDigits.slice(0,5)}-${cepDigits.slice(5)} detectado! Buscando endereço e coordenadas GPS...`);
+
+    try {
+      const cepResult = await fetchAddressFromCep(cepDigits);
+      if (cepResult && cepResult.formattedAddress) {
+        setCepNotice(`✨ CEP ${cepResult.cep} localizado: ${cepResult.formattedAddress}`);
+        
+        // Geocode the retrieved address
+        const geocodeRes = await validateAddressWithGoogleMaps(cepResult.formattedAddress);
+        setValidationResult(geocodeRes);
+        
+        if (onApplyFormattedAddress) {
+          onApplyFormattedAddress(cepResult.formattedAddress, geocodeRes.lat, geocodeRes.lng);
+        }
+        if (onAddressValidated) {
+          onAddressValidated(geocodeRes);
+        }
+      } else {
+        setCepNotice(`⚠️ CEP ${cepDigits} não localizado no banco de dados postal.`);
+      }
+    } catch (e) {
+      console.error("Error fetching address by CEP:", e);
+      setCepNotice("⚠️ Erro ao consultar CEP.");
+    } finally {
+      setIsValidating(false);
+    }
+  };
 
   const handleValidate = async () => {
     if (!address.trim()) return;
     setIsValidating(true);
 
     try {
+      // Check if user input is purely a CEP
+      const cleanDigits = address.replace(/\D/g, "");
+      if (cleanDigits.length === 8 && !/[a-zA-Z]/.test(address)) {
+        await handleCepAutoFill(cleanDigits);
+        return;
+      }
+
       const result = await validateAddressWithGoogleMaps(address);
       setValidationResult(result);
       if (onAddressValidated) {
@@ -117,6 +172,13 @@ export default function AddressValidationWidget({
 
   return (
     <div className="mt-2 space-y-2 text-left">
+      {cepNotice && (
+        <div className="bg-indigo-900/90 text-indigo-100 border border-indigo-700/60 p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-xs animate-fadeIn">
+          <Zap className="w-4 h-4 text-amber-300 shrink-0 animate-bounce" />
+          <span>{cepNotice}</span>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <button
           type="button"
