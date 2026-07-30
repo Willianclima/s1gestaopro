@@ -400,14 +400,16 @@ export default function GmailIntegrationPanel({
                   </div>
 
                   {/* Body Content */}
-                  <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl max-h-[380px] overflow-y-auto">
+                  <div className="bg-slate-950 border border-slate-800 p-2 rounded-xl max-h-[380px] overflow-hidden">
                     {selectedMessage.bodyHtml ? (
-                      <div 
-                        className="text-xs text-slate-200 leading-relaxed space-y-2 prose prose-invert max-w-none"
-                        dangerouslySetInnerHTML={{ __html: selectedMessage.bodyHtml }}
+                      <iframe
+                        srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{color:#e2e8f0;background:#020617;font-family:sans-serif;font-size:13px;line-height:1.5;margin:8px;}a{color:#818cf8;}</style></head><body>${selectedMessage.bodyHtml}</body></html>`}
+                        title="Email Body"
+                        sandbox=""
+                        className="w-full h-[320px] border-0 rounded-lg bg-slate-950"
                       />
                     ) : (
-                      <pre className="text-xs text-slate-200 font-sans whitespace-pre-wrap leading-relaxed">
+                      <pre className="p-2 text-xs text-slate-200 font-sans whitespace-pre-wrap leading-relaxed max-h-[350px] overflow-y-auto">
                         {selectedMessage.bodyText || selectedMessage.snippet}
                       </pre>
                     )}

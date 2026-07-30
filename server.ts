@@ -120,8 +120,7 @@ async function generateContentWithRetry(ai: any, model: string, contents: string
         errorMsg.includes("429") || 
         errorMsg.includes("ResourceExhausted") ||
         errorMsg.includes("Overloaded") ||
-        errorMsg.includes("rate limit") ||
-        attempt < maxAttempts;
+        errorMsg.includes("rate limit");
       
       if (!isRetryable || attempt >= maxAttempts) {
         throw error;

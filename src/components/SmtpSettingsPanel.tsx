@@ -6,7 +6,8 @@ import {
   Bell, BellOff, Info, Lock, ExternalLink, Activity, ShieldAlert, Settings,
   Calendar, Clock, Trash2, History, RotateCcw, Play
 } from "lucide-react";
-import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser, Client } from "../types";
+import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser, Client, ServiceOrder, AppNotification } from "../types";
+import MaterialAlertDiagnostic from "./MaterialAlertDiagnostic";
 
 interface SmtpSettingsPanelProps {
   settings: SmtpSettings;
@@ -19,8 +20,17 @@ interface SmtpSettingsPanelProps {
   almoxarifados?: Almoxarifado[];
   onSaveAlmoxarifados?: (newAlms: Almoxarifado[]) => void;
   currentUser?: CurrentUser | null;
-  initialSubTab?: "smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic";
+  initialSubTab?: "smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic" | "material_diagnostic";
   clients?: Client[];
+  orders?: ServiceOrder[];
+  addSystemLog?: (action: string, details: string, category: "requisicao" | "requisitante" | "tecnico" | "sistema") => void;
+  notifyUser?: (notif: {
+    title: string;
+    message: string;
+    type?: AppNotification["type"];
+    serviceOrderId?: string;
+    soundType?: "chime" | "success" | "alert" | "info";
+  }) => void;
 }
 
 export default function SmtpSettingsPanel({ 
@@ -35,11 +45,14 @@ export default function SmtpSettingsPanel({
   onSaveAlmoxarifados,
   currentUser,
   initialSubTab,
-  clients = []
+  clients = [],
+  orders = [],
+  addSystemLog = () => {},
+  notifyUser = () => {}
 }: SmtpSettingsPanelProps) {
   
   // Tab control
-  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic">(
+  const [activeSubTab, setActiveSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic" | "material_diagnostic">(
     initialSubTab || (currentUser?.userType === "admin" ? "smtp" : "almoxarifados")
   );
 
@@ -1065,6 +1078,18 @@ export default function SmtpSettingsPanel({
         >
           <Bell className="w-4 h-4 text-rose-505" />
           Notificações em Tempo Real
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("material_diagnostic")}
+          className={`px-5 py-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+            activeSubTab === "material_diagnostic"
+              ? "border-amber-500 text-amber-600 dark:text-amber-400 font-black"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-500 animate-pulse" />
+          Diagnóstico Alerta Material (Requisitante + Gestor)
         </button>
       </div>
 
@@ -2827,6 +2852,23 @@ export default function SmtpSettingsPanel({
               </div>
 
             </div>
+          </div>
+        )}
+
+        {/* TAB 7: MATERIAL SHORTAGE SIMULTANEOUS ALERT DIAGNOSTIC */}
+        {activeSubTab === "material_diagnostic" && (
+          <div className="lg:col-span-3 space-y-6">
+            <MaterialAlertDiagnostic
+              orders={orders}
+              clients={clients}
+              currentUser={currentUser}
+              smtpSettings={settings}
+              whatsappSettings={whatsappSettings}
+              addSystemLog={addSystemLog}
+              notifyUser={notifyUser}
+              onToastSuccess={(msg, title) => onNotifyTest(title || "Sucesso", msg, "success")}
+              onToastInfo={(msg, title) => onNotifyTest(title || "Informação", msg, "info")}
+            />
           </div>
         )}
 

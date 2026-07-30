@@ -1268,6 +1268,76 @@ export default function App() {
         }
       }
     }
+
+    // 3. Material Shortage / Unavailability Notifications (Gestor & Requisitante)
+    if (!oldOrder.hasMissingMaterial && updatedOrder.hasMissingMaterial) {
+      const matDesc = updatedOrder.missingMaterialDescription || "Materiais / insumos pendentes";
+
+      // Dispatch In-App Notification (Real-time alert for Gestor and Requisitante)
+      notifyUser({
+        title: `⚠️ Falta de Material: OS #${updatedOrder.id}`,
+        message: `Chamado "${updatedOrder.title}" suspenso por falta de insumo: "${matDesc}". Requisitante e Almoxarifado notificados.`,
+        type: "system_alert",
+        serviceOrderId: updatedOrder.id,
+        soundType: "chime"
+      });
+
+      // Notify Requisitante (Client) via Email
+      if (client && smtpSettings.enabled && client.email) {
+        const subject = `⚠️ Notificação de Material Pendente: OS #${updatedOrder.id}`;
+        const content = `Prezado(a) ${client.name},\n\n` +
+          `Informamos que a execução técnica da sua Ordem de Serviço #${updatedOrder.id} ("${updatedOrder.title}") foi paralisada temporariamente por falta de material/insumo no local ou estoque:\n\n` +
+          `📦 **Material Requerido:** ${matDesc}\n\n` +
+          `Nossa equipe de gestão e almoxarifado já foi alertada para providenciar a reposição ou alinhar a disponibilização do item. Acompanhe o andamento em tempo real pelo portal.\n\n` +
+          `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
+        
+        await sendProgrammaticEmail(client.email, subject, content, smtpSettings);
+      }
+
+      // Notify Requisitante (Client) via WhatsApp
+      if (client && whatsappSettings.enabled && client.phone) {
+        const waMessage = `⚠️ *Araçatuba Serviços - Falta de Material (OS #${updatedOrder.id})*\n\n` +
+          `Olá, *${client.name}*!\n\n` +
+          `Sua ordem de serviço *${updatedOrder.title}* aguarda a seguinte peça/material:\n` +
+          `📦 *Insumo:* ${matDesc}\n\n` +
+          `Nossos gestores e equipe de suprimentos foram notificados para agilizar o atendimento.`;
+        await sendProgrammaticWhatsapp(client.phone, waMessage, whatsappSettings);
+      }
+
+      // Notify Gestor / Admin via Email
+      if (smtpSettings.enabled) {
+        const gestorEmail = "willianclima@gmail.com";
+        const subject = `🚨 ALERTA GESTÃO: Falta de Material na OS #${updatedOrder.id}`;
+        const content = `Atenção Gestor,\n\n` +
+          `A Ordem de Serviço #${updatedOrder.id} ("${updatedOrder.title}") foi sinalizada com PARALISAÇÃO POR FALTA DE MATERIAL.\n\n` +
+          `- **Requisitante:** ${client ? client.name : "Não especificado"}\n` +
+          `- **Técnico Responsável:** ${updatedOrder.assignedTo || "Técnico de Campo"}\n` +
+          `- **Material Requerido:** ${matDesc}\n\n` +
+          `Acesse o painel de ordens de serviço ou almoxarifado para autorizar a compra ou transferência de estoque.\n\n` +
+          `Sistema de Gestão de Serviços`;
+
+        await sendProgrammaticEmail(gestorEmail, subject, content, smtpSettings);
+      }
+    } else if (oldOrder.hasMissingMaterial && !updatedOrder.hasMissingMaterial) {
+      // Material Supplied Notification
+      notifyUser({
+        title: `✅ Material Disponibilizado: OS #${updatedOrder.id}`,
+        message: `Os materiais para o chamado "${updatedOrder.title}" foram fornecidos com sucesso. Atendimento técnico retomado.`,
+        type: "os_status",
+        serviceOrderId: updatedOrder.id,
+        soundType: "success"
+      });
+
+      if (client && smtpSettings.enabled && client.email) {
+        const subject = `✅ Insumo Providenciado: OS #${updatedOrder.id}`;
+        const content = `Prezado(a) ${client.name},\n\n` +
+          `Os materiais pendentes para a sua Ordem de Serviço #${updatedOrder.id} ("${updatedOrder.title}") foram entregues com sucesso.\n\n` +
+          `A equipe técnica retomou o atendimento operacional.\n\n` +
+          `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
+
+        await sendProgrammaticEmail(client.email, subject, content, smtpSettings);
+      }
+    }
   };
 
   // Order/Requisition Callback implementations
@@ -1916,11 +1986,9 @@ export default function App() {
       const googlePhoto = user.photoURL || "";
       const googleUid = user.uid;
 
-      // 1. Check if Gestor / Admin email matches
-      if (
-        googleEmail.toLowerCase() === "willianclima@gmail.com" ||
-        googleEmail.toLowerCase().includes("admin")
-      ) {
+      // 1. Check if Gestor / Admin email matches explicit administrator accounts
+      const ADMIN_EMAILS = ["willianclima@gmail.com"];
+      if (ADMIN_EMAILS.includes(googleEmail.toLowerCase())) {
         const adminUser: CurrentUser = {
           id: "gestor-admin",
           name: googleName || "Willian C. Lima",
@@ -3952,6 +4020,9 @@ export default function App() {
                 currentUser={currentUser}
                 initialSubTab={settingsSubTab}
                 clients={clients}
+                orders={orders}
+                addSystemLog={addSystemLog}
+                notifyUser={notifyUser}
                 onNotifyTest={(title, msg, type) => {
                   if (type === "success") toastSuccess(msg, title);
                   else if (type === "error") toastError(msg, title);

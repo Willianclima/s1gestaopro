@@ -27,6 +27,7 @@ export interface Client {
   trialRequestedAt?: string;
   lgpdAccepted?: boolean;
   biddingTermsAccepted?: boolean;
+  googleUid?: string;
 }
 
 export interface Almoxarifado {
@@ -88,6 +89,7 @@ export interface Professional {
   failedAttempts?: number;
   blocked?: boolean;
   workLocation?: string; // Local de trabalho
+  googleUid?: string;
 }
 
 export interface SystemLog {
