@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdminOrGestor() {
+      return isSignedIn() && (
+        request.auth.token.email == "willianclima@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         (getUserData().userType == "admin" || getUserData().userType == "gestor" || getUserData().userType == "gestor_servicos"))
+      );
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User profiles collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isOwner(userId);
+      allow update: if isOwner(userId) || isAdminOrGestor();
+      allow delete: if isAdminOrGestor();
+    }
+
+    // Clients collection
+    match /clients/{clientId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Service Orders collection
+    match /serviceOrders/{orderId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Connection testing doc
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

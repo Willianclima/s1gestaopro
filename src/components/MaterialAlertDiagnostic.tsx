@@ -4,7 +4,7 @@ import {
   Terminal, RefreshCw, FileText, Sparkles, Check, Info, AlertCircle
 } from "lucide-react";
 import { ServiceOrder, Client, CurrentUser, SmtpSettings, WhatsappSettings, AppNotification } from "../types";
-import { playNotificationSound } from "../utils/notificationSound";
+import { broadcastNotification } from "../utils/broadcastNotification";
 
 interface MaterialAlertDiagnosticProps {
   orders: ServiceOrder[];
@@ -58,126 +58,62 @@ export default function MaterialAlertDiagnostic({
 
   const selectedOrder = orders.find(o => o.id === selectedOrderId) || orders[0];
   const foundClient = clients.find(c => c.id === selectedOrder?.clientId);
-  const orderClient = foundClient || {
+  const orderClient: Client = foundClient || {
     id: selectedOrder?.clientId || "cli-unknown",
     name: "Requisitante da OS",
     email: "requisitante@aracatuba.sp.gov.br",
     phone: "(18) 99881-2200",
     document: "111.222.333-44",
+    address: "Rua Fundadores, 1200 - Araçatuba, SP",
+    notes: "Cliente padrão do sistema",
+    createdAt: new Date().toISOString(),
     status: "ativo"
   };
 
   const gestorName = "Willian C. Lima (Gestor de Serviços)";
   const gestorEmail = "willianclima@gmail.com";
 
-  const handleRunSimultaneousAlert = () => {
+  const handleRunSimultaneousAlert = async () => {
     if (!selectedOrder) {
       onToastInfo("Por favor, selecione uma Ordem de Serviço para executar o teste.", "Selecione uma OS");
       return;
     }
 
     setIsSimulating(true);
-    const logs: string[] = [];
-    const nowStr = new Date().toLocaleTimeString("pt-BR");
 
-    logs.push(`[${nowStr}] 🚀 Iniciando Teste de Diagnóstico de Alerta Simultâneo...`);
-    logs.push(`[${nowStr}] 📋 OS Selecionada: #${selectedOrder.id} - "${selectedOrder.title}"`);
-    logs.push(`[${nowStr}] 👤 Requisitante Destino: ${orderClient.name} (${orderClient.email || "Sem e-mail registrado"})`);
-    logs.push(`[${nowStr}] 🛡️ Gestor Destino: ${gestorName} (${gestorEmail})`);
+    const broadcastRes = await broadcastNotification({
+      order: selectedOrder,
+      client: orderClient,
+      reason: testReason,
+      isDiagnosticTest: true,
+      gestorName,
+      gestorEmail,
+      smtpSettings,
+      whatsappSettings,
+      addSystemLog,
+      notifyUser,
+      onToastSuccess,
+      onToastInfo
+    });
 
-    setTimeout(() => {
-      // Step 1: Play synthesized sound alert
-      let soundPlayed = false;
-      try {
-        playNotificationSound("alert");
-        soundPlayed = true;
-        logs.push(`[${nowStr}] 🔊 Audio Synthesizer: Alerta sonoro 'alert' reproduzido com sucesso via Web Audio API.`);
-      } catch (err) {
-        logs.push(`[${nowStr}] ⚠️ Audio Synthesizer: Falha ao reproduzir áudio (${err}).`);
-      }
+    const result: TestResult = {
+      timestamp: new Date().toLocaleTimeString("pt-BR"),
+      orderId: selectedOrder.id,
+      orderTitle: selectedOrder.title,
+      requisitanteName: orderClient.name,
+      gestorName,
+      logSuccess: broadcastRes.logSuccess,
+      requisitanteNotified: broadcastRes.requisitanteNotified,
+      gestorNotified: broadcastRes.gestorNotified,
+      soundPlayed: broadcastRes.soundPlayed,
+      emailSent: broadcastRes.emailSent,
+      whatsappSent: broadcastRes.whatsappSent,
+      details: broadcastRes.logs
+    };
 
-      // Step 2: Register in System Logs
-      let logSuccess = false;
-      try {
-        const logDetail = `TESTE DIAGNÓSTICO: Disparo simultâneo de alerta de Falta de Material para a OS #${selectedOrder.id} ("${selectedOrder.title}"). Insumo pendente: "${testReason}". Destinatários: Requisitante (${orderClient.name}) e Gestor (${gestorName}).`;
-        addSystemLog("Diagnóstico Alerta Simultâneo", logDetail, "sistema");
-        logSuccess = true;
-        logs.push(`[${nowStr}] 📝 Sistema de Logs: Registro armazenado com sucesso em 'service_mgt_logs2'.`);
-      } catch (err) {
-        logs.push(`[${nowStr}] ❌ Sistema de Logs: Erro ao registrar log (${err}).`);
-      }
-
-      // Step 3: Trigger In-App Notifications (Requisitante + Gestor)
-      let requisitanteNotified = false;
-      let gestorNotified = false;
-      try {
-        // Notification 1 for Requisitante
-        notifyUser({
-          title: `⚠️ [TESTE DIAGNÓSTICO] Falta de Material: OS #${selectedOrder.id}`,
-          message: `Olá ${orderClient.name}, a execução da OS "${selectedOrder.title}" foi suspensa por falta de: "${testReason}".`,
-          type: "system_alert",
-          serviceOrderId: selectedOrder.id,
-          soundType: "chime"
-        });
-        requisitanteNotified = true;
-
-        // Notification 2 for Gestor
-        notifyUser({
-          title: `🚨 [TESTE DIAGNÓSTICO] Alerta de Gestão: OS #${selectedOrder.id}`,
-          message: `Gestor, a OS #${selectedOrder.id} (${orderClient.name}) necessita da aquisição urgente do insumo: "${testReason}".`,
-          type: "system_alert",
-          serviceOrderId: selectedOrder.id,
-          soundType: "alert"
-        });
-        gestorNotified = true;
-
-        logs.push(`[${nowStr}] 🔔 Central de Notificações: In-app Push enfileirado para Requisitante e Gestor.`);
-      } catch (err) {
-        logs.push(`[${nowStr}] ❌ Central de Notificações: Erro ao enviar (${err}).`);
-      }
-
-      // Step 4: Dispatch / Simulate Email & WhatsApp
-      const emailSent = smtpSettings.enabled;
-      const whatsappSent = whatsappSettings.enabled;
-
-      if (emailSent) {
-        logs.push(`[${nowStr}] ✉️ SMTP Server: E-mails de alerta enviados via ${smtpSettings.host || 'servidor SMTP'}.`);
-      } else {
-        logs.push(`[${nowStr}] ℹ️ SMTP Server: Simulação concluída (Servidor SMTP desligado nas configurações).`);
-      }
-
-      if (whatsappSent) {
-        logs.push(`[${nowStr}] 💬 WhatsApp API: Mensagem enviada para ${orderClient.phone || 'telefone do requisitante'}.`);
-      } else {
-        logs.push(`[${nowStr}] ℹ️ WhatsApp API: Simulação concluída (Canal WhatsApp desligado nas configurações).`);
-      }
-
-      logs.push(`[${nowStr}] ✅ DIAGNÓSTICO CONCLUÍDO COM SUCESSO!`);
-
-      const result: TestResult = {
-        timestamp: new Date().toLocaleTimeString("pt-BR"),
-        orderId: selectedOrder.id,
-        orderTitle: selectedOrder.title,
-        requisitanteName: orderClient.name,
-        gestorName,
-        logSuccess,
-        requisitanteNotified,
-        gestorNotified,
-        soundPlayed,
-        emailSent,
-        whatsappSent,
-        details: logs
-      };
-
-      setTestHistory(prev => [result, ...prev]);
-      setDiagnosticLogs(logs);
-      setIsSimulating(false);
-
-      onToastSuccess(
-        `Alerta simultâneo disparado para Requisitante (${orderClient.name}) e Gestor (${gestorName})! Log registrado.`,
-        "Diagnóstico Concluído"
-      );
-    }, 800);
+    setTestHistory(prev => [result, ...prev]);
+    setDiagnosticLogs(broadcastRes.logs);
+    setIsSimulating(false);
   };
 
   return (

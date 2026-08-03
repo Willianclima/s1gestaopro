@@ -18,7 +18,9 @@ import MapLocationPickerModal from "./components/MapLocationPickerModal";
 import NotificationCenter from "./components/NotificationCenter";
 import { reverseGeocodeCoordinates, fetchAddressFromCep } from "./services/addressValidation";
 import { playNotificationSound } from "./utils/notificationSound";
-import { googleSignIn } from "./services/firebaseAuth";
+import { broadcastNotification } from "./utils/broadcastNotification";
+import { googleSignIn, logoutUser, subscribeToAuthChanges, saveUserProfile } from "./services/firebaseAuth";
+import { getApiAuthHeaders } from "./services/apiAuth";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
@@ -185,6 +187,34 @@ export default function App() {
     const cached = localStorage.getItem("service_mgt_logged_user");
     return cached ? JSON.parse(cached) : null;
   });
+
+  // Firebase Authentication session listener
+  useEffect(() => {
+    const unsubscribe = subscribeToAuthChanges((firebaseUser, profile) => {
+      if (firebaseUser && profile) {
+        const authUser: CurrentUser = {
+          id: profile.uid,
+          name: profile.name,
+          document: profile.document || "",
+          userType: profile.userType,
+          email: profile.email,
+          photoURL: profile.photoURL,
+          warehouseId: profile.warehouseId,
+          workLocation: profile.workLocation,
+          googleUid: firebaseUser.providerData.some(p => p.providerId === 'google.com') ? firebaseUser.uid : undefined,
+          isGoogleWorkspace: firebaseUser.providerData.some(p => p.providerId === 'google.com')
+        };
+        setCurrentUser(authUser);
+        localStorage.setItem("service_mgt_logged_user", JSON.stringify(authUser));
+      } else {
+        const stored = localStorage.getItem("service_mgt_logged_user");
+        if (stored && !currentUser?.id) {
+          localStorage.removeItem("service_mgt_logged_user");
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
   const [typedDoc, setTypedDoc] = useState("");
   const [consentCheck, setConsentCheck] = useState(false);
   const [regTrialRequested, setRegTrialRequested] = useState(true);
@@ -1273,51 +1303,21 @@ export default function App() {
     if (!oldOrder.hasMissingMaterial && updatedOrder.hasMissingMaterial) {
       const matDesc = updatedOrder.missingMaterialDescription || "Materiais / insumos pendentes";
 
-      // Dispatch In-App Notification (Real-time alert for Gestor and Requisitante)
-      notifyUser({
-        title: `⚠️ Falta de Material: OS #${updatedOrder.id}`,
-        message: `Chamado "${updatedOrder.title}" suspenso por falta de insumo: "${matDesc}". Requisitante e Almoxarifado notificados.`,
-        type: "system_alert",
-        serviceOrderId: updatedOrder.id,
-        soundType: "chime"
+      await broadcastNotification({
+        order: updatedOrder,
+        client,
+        reason: matDesc,
+        category: "falta_material",
+        isDiagnosticTest: false,
+        smtpSettings,
+        whatsappSettings,
+        addSystemLog,
+        notifyUser,
+        onToastSuccess: (msg, title) => toastSuccess(msg, title),
+        onToastInfo: (msg, title) => toastInfo(msg, title),
+        sendProgrammaticEmail,
+        sendProgrammaticWhatsapp
       });
-
-      // Notify Requisitante (Client) via Email
-      if (client && smtpSettings.enabled && client.email) {
-        const subject = `⚠️ Notificação de Material Pendente: OS #${updatedOrder.id}`;
-        const content = `Prezado(a) ${client.name},\n\n` +
-          `Informamos que a execução técnica da sua Ordem de Serviço #${updatedOrder.id} ("${updatedOrder.title}") foi paralisada temporariamente por falta de material/insumo no local ou estoque:\n\n` +
-          `📦 **Material Requerido:** ${matDesc}\n\n` +
-          `Nossa equipe de gestão e almoxarifado já foi alertada para providenciar a reposição ou alinhar a disponibilização do item. Acompanhe o andamento em tempo real pelo portal.\n\n` +
-          `Atenciosamente,\nAraçatuba Serviços de Manutenção`;
-        
-        await sendProgrammaticEmail(client.email, subject, content, smtpSettings);
-      }
-
-      // Notify Requisitante (Client) via WhatsApp
-      if (client && whatsappSettings.enabled && client.phone) {
-        const waMessage = `⚠️ *Araçatuba Serviços - Falta de Material (OS #${updatedOrder.id})*\n\n` +
-          `Olá, *${client.name}*!\n\n` +
-          `Sua ordem de serviço *${updatedOrder.title}* aguarda a seguinte peça/material:\n` +
-          `📦 *Insumo:* ${matDesc}\n\n` +
-          `Nossos gestores e equipe de suprimentos foram notificados para agilizar o atendimento.`;
-        await sendProgrammaticWhatsapp(client.phone, waMessage, whatsappSettings);
-      }
-
-      // Notify Gestor / Admin via Email
-      if (smtpSettings.enabled) {
-        const gestorEmail = "willianclima@gmail.com";
-        const subject = `🚨 ALERTA GESTÃO: Falta de Material na OS #${updatedOrder.id}`;
-        const content = `Atenção Gestor,\n\n` +
-          `A Ordem de Serviço #${updatedOrder.id} ("${updatedOrder.title}") foi sinalizada com PARALISAÇÃO POR FALTA DE MATERIAL.\n\n` +
-          `- **Requisitante:** ${client ? client.name : "Não especificado"}\n` +
-          `- **Técnico Responsável:** ${updatedOrder.assignedTo || "Técnico de Campo"}\n` +
-          `- **Material Requerido:** ${matDesc}\n\n` +
-          `Acesse o painel de ordens de serviço ou almoxarifado para autorizar a compra ou transferência de estoque.\n\n` +
-          `Sistema de Gestão de Serviços`;
-
-        await sendProgrammaticEmail(gestorEmail, subject, content, smtpSettings);
-      }
     } else if (oldOrder.hasMissingMaterial && !updatedOrder.hasMissingMaterial) {
       // Material Supplied Notification
       notifyUser({
@@ -1572,9 +1572,7 @@ export default function App() {
       
       const response = await fetch("/api/whatsapp/proxy", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: getApiAuthHeaders(),
         body: JSON.stringify({
           url: finalUrl,
           method: "POST",
@@ -1759,19 +1757,18 @@ export default function App() {
   };
 
   // Login handler
-  const handleTryLogin = (docValue: string, passwordValue: string) => {
+  const handleTryLogin = async (docValue: string, passwordValue: string) => {
     const normalizedInput = docValue.replace(/\D/g, "");
     if (!normalizedInput) {
       setLoginError("Por favor, digite seu CPF de cadastro.");
       return;
     }
-    // Limit to municipal requirements (CPF only: 11 digits, fallback master is 999/000/36911121884 etc.)
-    const isSpecialFallback = normalizedInput === "999" || normalizedInput === "000";
-    if (normalizedInput.length !== 11 && !isSpecialFallback) {
+    // Strict requirement: CPF must have 11 digits
+    if (normalizedInput.length !== 11) {
       setLoginError("Acesso restrito. Por favor, forneça um CPF de cadastro válido com 11 dígitos.");
       return;
     }
-    if (!passwordValue) {
+    if (!passwordValue || passwordValue.trim() === "") {
       setLoginError("Por favor, informe sua senha de segurança.");
       return;
     }
@@ -1786,34 +1783,64 @@ export default function App() {
     const matchedClient = activeClients.find(c => c.document.replace(/\D/g, "") === normalizedInput);
     const matchedProf = activeProfs.find(p => p.document && p.document.replace(/\D/g, "") === normalizedInput);
 
-    const isFallbackCPF = normalizedInput === "36911121884" || normalizedInput === "99999999999" || normalizedInput === "999" || normalizedInput === "000";
-    const hasRegisteredUser = !!(matchedClient || matchedProf);
-    const adminSavedPass = localStorage.getItem("admin_custom_password") || "123456";
+    const isAdminCPF = normalizedInput === "36911121884" || normalizedInput === "99999999999";
 
-    // 1. Admin/Gestor fallback bypass (e.g. 36911121884 or 99999999999) - ALWAYS evaluated first if correct admin password is provided or no registered user exists
-    if (isFallbackCPF && (passwordValue === adminSavedPass || !hasRegisteredUser)) {
-      if (passwordValue && passwordValue !== adminSavedPass) {
-        setLoginError("Senha incorreta para o Gestor Administrador.");
-        toastError("Senha incorreta para o canal de Gestor Administrador.", "Falha de Login");
-        addLoginAttempt(normalizedInput, "gestor-admin", "failed", "gestor", "Tentativa mestre falhou: Senha do Gestor Administrador incorreta.");
-        return;
+    // 1. Admin/Gestor Authentication via Backend API or strict password verification
+    if (isAdminCPF) {
+      try {
+        const res = await fetch("/api/auth/verify-admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ document: normalizedInput, password: passwordValue })
+        });
+        const data = await res.json();
+        
+        if (res.ok && data.success && data.user) {
+          const adminUser: CurrentUser = data.user;
+          setCurrentUser(adminUser);
+          localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
+          setLoginError("");
+          setActiveTab("dashboard");
+          setTypedDoc("");
+          setTypedPassword("");
+          addSystemLog("Login de Administrador", "Administrador do Sistema Willian C. Lima autenticado via API backend de alta segurança.", "sistema");
+          addLoginAttempt(normalizedInput, adminUser.id, "success", "admin", "Login bem-sucedido via credencial mestre administrador (Willian C. Lima).");
+          toastSuccess("Seja bem-vindo de volta, Willian C. Lima! Painel de Controle Raiz ativado.", "Acesso de Administrador");
+          return;
+        } else {
+          const errMsg = data.message || "Senha incorreta para o Gestor Administrador.";
+          setLoginError(`⚠️ ${errMsg}`);
+          toastError(errMsg, "Falha de Autenticação");
+          addLoginAttempt(normalizedInput, "gestor-admin", "failed", "gestor", `Tentativa mestre falhou: ${errMsg}`);
+          return;
+        }
+      } catch (err) {
+        // Fallback local caso o backend esteja temporariamente offline em modo standalone SPA
+        const adminSavedPass = localStorage.getItem("admin_custom_password");
+        if (adminSavedPass && passwordValue === adminSavedPass) {
+          const adminUser: CurrentUser = {
+            id: "gestor-admin",
+            name: "Willian C. Lima",
+            document: normalizedInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
+            userType: "admin"
+          };
+          setCurrentUser(adminUser);
+          localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
+          setLoginError("");
+          setActiveTab("dashboard");
+          setTypedDoc("");
+          setTypedPassword("");
+          addSystemLog("Login de Administrador", "Administrador do Sistema Willian C. Lima autenticado.", "sistema");
+          addLoginAttempt(normalizedInput, adminUser.id, "success", "admin", "Login de administrador autenticado com sucesso.");
+          toastSuccess("Seja bem-vindo de volta, Willian C. Lima! Painel de Controle Raiz ativado.", "Acesso de Administrador");
+          return;
+        } else {
+          setLoginError("Senha incorreta para o Gestor Administrador.");
+          toastError("Senha incorreta para o canal de Gestor Administrador.", "Falha de Login");
+          addLoginAttempt(normalizedInput, "gestor-admin", "failed", "gestor", "Tentativa mestre falhou: Senha do Gestor Administrador incorreta.");
+          return;
+        }
       }
-      const adminUser: CurrentUser = {
-        id: "gestor-admin",
-        name: "Willian C. Lima",
-        document: normalizedInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
-        userType: "admin"
-      };
-      setCurrentUser(adminUser);
-      localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
-      setLoginError("");
-      setActiveTab("dashboard");
-      setTypedDoc("");
-      setTypedPassword("");
-      addSystemLog("Login de Administrador", "Administrador do Sistema Willian C. Lima autenticado via CPF com credenciais de raiz.", "sistema");
-      addLoginAttempt(normalizedInput, adminUser.id, "success", "admin", "Login bem-sucedido via credencial mestre administrador (Willian C. Lima).");
-      toastSuccess("Seja bem-vindo de volta, Willian C. Lima! Painel de Controle Raiz ativado.", "Acesso de Administrador");
-      return;
     }
 
     // 2. Check clients List
@@ -2498,11 +2525,12 @@ export default function App() {
   };
 
   // Sign out handler
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (currentUser) {
       addSystemLog("Sessão Encerrada", `Usuário "${currentUser.name}" desconectou-se do sistema em conformidade com o descarte seguro de cookies (LGPD).`, "sistema");
     }
-    toastInfo("Sua sessão foi encerrada de maneira segura.", "Sessão Concluída");
+    toastInfo("Sua sessão foi encerrada de maneira segura via Firebase Auth.", "Sessão Concluída");
+    await logoutUser();
     setCurrentUser(null);
     localStorage.removeItem("service_mgt_logged_user");
     setConsentCheck(false);

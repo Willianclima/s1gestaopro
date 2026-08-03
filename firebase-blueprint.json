@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Perfil de usuário autenticado no sistema via Firebase Auth",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "ID único do Firebase Auth" },
+        "email": { "type": "string", "description": "Endereço de e-mail do usuário" },
+        "name": { "type": "string", "description": "Nome completo do usuário" },
+        "document": { "type": "string", "description": "CPF ou documento de identificação" },
+        "userType": { "type": "string", "enum": ["admin", "gestor", "gestor_servicos", "profissional", "requisitante"] },
+        "warehouseId": { "type": "string", "description": "ID do almoxarifado vinculado" },
+        "workLocation": { "type": "string", "description": "Local de trabalho ou polo de atendimento" },
+        "photoURL": { "type": "string", "description": "URL da foto do perfil" },
+        "createdAt": { "type": "string", "description": "Data de criação da conta" }
+      },
+      "required": ["uid", "email", "name", "userType"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Requisitante ou cliente cadastrado no sistema de OS",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "document": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "userType": { "type": "string" },
+        "status": { "type": "string" },
+        "isTechnician": { "type": "boolean" },
+        "warehouseId": { "type": "string" },
+        "workLocation": { "type": "string" }
+      },
+      "required": ["id", "name", "document"]
+    },
+    "ServiceOrder": {
+      "title": "ServiceOrder",
+      "description": "Ordem de serviço ou requisição de manutenção",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clientId": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string" },
+        "priority": { "type": "string" },
+        "description": { "type": "string" },
+        "startDate": { "type": "string" },
+        "assignedTo": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "category", "status"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Perfis de usuários vinculados às contas do Firebase Authentication"
+    },
+    "clients/{clientId}": {
+      "schema": { "$ref": "#/entities/Client" },
+      "description": "Requisitantes e contatos cadastrados"
+    },
+    "serviceOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/ServiceOrder" },
+      "description": "Ordens de serviço e chamados de manutenção"
+    }
+  }
+}

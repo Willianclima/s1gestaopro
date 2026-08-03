@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { SmtpSettings, WhatsappSettings, Almoxarifado, CurrentUser, Client, ServiceOrder, AppNotification } from "../types";
 import MaterialAlertDiagnostic from "./MaterialAlertDiagnostic";
+import { getApiAuthHeaders } from "../services/apiAuth";
 
 interface SmtpSettingsPanelProps {
   settings: SmtpSettings;
@@ -941,9 +942,7 @@ export default function SmtpSettingsPanel({
     try {
       const response = await fetch("/api/whatsapp/proxy", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: getApiAuthHeaders(),
         body: JSON.stringify({
           url: waApiUrl,
           method: "POST",

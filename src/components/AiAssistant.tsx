@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ServiceOrder, Client } from "../types";
 import { Sparkles, Copy, Check, MessageSquare, Send, FileText, Loader2, ClipboardList } from "lucide-react";
+import { getApiAuthHeaders } from "../services/apiAuth";
 
 interface AiAssistantProps {
   orders: ServiceOrder[];
@@ -89,7 +90,7 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
 
       const response = await fetch("/api/gemini/assist", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getApiAuthHeaders(),
         body: JSON.stringify(body),
       });
 

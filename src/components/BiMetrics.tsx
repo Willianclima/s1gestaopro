@@ -6,6 +6,8 @@ import {
   TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check, Calendar
 } from "lucide-react";
 import { getPriorityBadge } from "./Dashboard";
+import ServiceOrdersTrendChart from "./ServiceOrdersTrendChart";
+import ServiceOrdersStatusDoughnutChart from "./ServiceOrdersStatusDoughnutChart";
 
 interface BiMetricsProps {
   orders: ServiceOrder[];
@@ -405,6 +407,25 @@ export default function BiMetrics({
               </motion.div>
             </div>
           </div>
+
+          {/* 30-Day Trend Line Chart Component */}
+          <ServiceOrdersTrendChart 
+            orders={orders} 
+            clients={clients} 
+            onSelectOrder={onSelectOrder} 
+          />
+
+          {/* Status Breakdown Doughnut Chart Component */}
+          <ServiceOrdersStatusDoughnutChart
+            orders={orders}
+            clients={clients}
+            onSelectOrder={onSelectOrder}
+            onOpenMetricModal={(data) => setMetricModal({
+              title: data.title,
+              description: data.description,
+              ordersList: data.ordersList
+            })}
+          />
 
           {/* Pipeline Status Flow Visualization */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4">

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { motion } from "motion/react";
 import { useToast } from "./ToastContext";
 import { ServiceOrder, Client, CurrentUser, Professional, SystemLog, Almoxarifado } from "../types";
+import { playNotificationSound } from "../utils/notificationSound";
 import { 
   Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
   TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check, Calendar, Bell, BellOff
@@ -85,6 +86,142 @@ function isDelayedOpen(os: ServiceOrder): boolean {
   return businessDays > 5;
 }
 
+// Estrutura e Função de Análise da Média Móvel de 30 Dias e Risco de Backlog / Pico de Manutenção
+export interface BacklogAnalysisResult {
+  hasSpikeOrBacklogAlert: boolean;
+  alertType: 'none' | 'spike' | 'backlog' | 'critical_surge';
+  movingAverageDaily: number;
+  recentDailyAverage7d: number;
+  ordersIn30DaysCount: number;
+  recentOrders7dCount: number;
+  activeBacklogCount: number;
+  urgentHighBacklogCount: number;
+  percentageChange: number;
+  recommendation: string;
+  summaryMessage: string;
+  analyzedAt: string;
+}
+
+/**
+ * Analisa as ordens de serviço dos últimos 30 dias para identificar picos operacionais
+ * ou acúmulo de backlog com base na média móvel diária.
+ */
+export function analyze30DayMovingAverageAndBacklog(ordersList: ServiceOrder[]): BacklogAnalysisResult {
+  if (!ordersList || ordersList.length === 0) {
+    return {
+      hasSpikeOrBacklogAlert: false,
+      alertType: 'none',
+      movingAverageDaily: 0,
+      recentDailyAverage7d: 0,
+      ordersIn30DaysCount: 0,
+      recentOrders7dCount: 0,
+      activeBacklogCount: 0,
+      urgentHighBacklogCount: 0,
+      percentageChange: 0,
+      recommendation: "Nenhuma ordem de serviço cadastrada para análise de volume.",
+      summaryMessage: "Sem dados suficientes de chamados para análise móvel.",
+      analyzedAt: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+    };
+  }
+
+  // Determina a data de referência mais recente entre os chamados ou o momento atual
+  let latestTimestamp = Date.now();
+  const validDates = ordersList
+    .map(o => new Date(o.createdAt || o.startDate).getTime())
+    .filter(t => !isNaN(t));
+
+  if (validDates.length > 0) {
+    latestTimestamp = Math.max(...validDates);
+  }
+
+  const msIn30Days = 30 * 24 * 60 * 60 * 1000;
+  const msIn7Days = 7 * 24 * 60 * 60 * 1000;
+
+  const timestamp30DaysAgo = latestTimestamp - msIn30Days;
+  const timestamp7DaysAgo = latestTimestamp - msIn7Days;
+
+  // Filtragem dos chamados criados nos últimos 30 dias
+  const orders30d = ordersList.filter(o => {
+    const t = new Date(o.createdAt || o.startDate).getTime();
+    return !isNaN(t) && t >= timestamp30DaysAgo;
+  });
+
+  // Filtragem dos chamados criados nos últimos 7 dias
+  const orders7d = ordersList.filter(o => {
+    const t = new Date(o.createdAt || o.startDate).getTime();
+    return !isNaN(t) && t >= timestamp7DaysAgo;
+  });
+
+  // Chamados atualmente no backlog ativo ('aberto', 'em_progresso', 'aguardando')
+  const activeBacklog = ordersList.filter(
+    o => o.status === "aberto" || o.status === "em_progresso" || o.status === "aguardando"
+  );
+
+  const urgentHighBacklog = activeBacklog.filter(
+    o => o.priority === "urgent" || o.priority === "high"
+  );
+
+  const movingAverageDaily = parseFloat((orders30d.length / 30).toFixed(2));
+  const recentDailyAverage7d = parseFloat((orders7d.length / 7).toFixed(2));
+
+  let percentageChange = 0;
+  if (movingAverageDaily > 0) {
+    percentageChange = Math.round(((recentDailyAverage7d - movingAverageDaily) / movingAverageDaily) * 100);
+  } else if (recentDailyAverage7d > 0) {
+    percentageChange = 100;
+  }
+
+  const isSpike = recentDailyAverage7d >= (movingAverageDaily * 1.25) && orders7d.length >= 3;
+  const isBacklogSurge = activeBacklog.length >= Math.max(5, Math.ceil(movingAverageDaily * 7));
+  const isCriticalUrgent = urgentHighBacklog.length >= 3;
+
+  let alertType: 'none' | 'spike' | 'backlog' | 'critical_surge' = 'none';
+  let hasSpikeOrBacklogAlert = false;
+
+  if (isCriticalUrgent || (isSpike && isBacklogSurge)) {
+    alertType = 'critical_surge';
+    hasSpikeOrBacklogAlert = true;
+  } else if (isSpike) {
+    alertType = 'spike';
+    hasSpikeOrBacklogAlert = true;
+  } else if (isBacklogSurge) {
+    alertType = 'backlog';
+    hasSpikeOrBacklogAlert = true;
+  }
+
+  let summaryMessage = "";
+  let recommendation = "";
+
+  if (alertType === 'critical_surge') {
+    summaryMessage = `ALERTA CRÍTICO DE SOBRECARGA: O volume recente de chamados (${recentDailyAverage7d} OS/dia nos últimos 7 dias) subiu ${percentageChange}% acima da média móvel histórica de 30 dias (${movingAverageDaily} OS/dia), resultando em ${activeBacklog.length} chamados no backlog (${urgentHighBacklog.length} urgentes/altos).`;
+    recommendation = "Recomenda-se acionamento emergencial das equipes técnicas de plantão, redistribuição prioritária de rotas e acompanhamento junto aos gestores de área.";
+  } else if (alertType === 'spike') {
+    summaryMessage = `PICO DE MANUTENÇÃO DETECTADO: A média diária recente de chamados (${recentDailyAverage7d} OS/dia nos últimos 7 dias) está ${percentageChange}% acima da média móvel de 30 dias (${movingAverageDaily} OS/dia).`;
+    recommendation = "Recomenda-se verificar a disponibilidade de insumos no almoxarifado e pré-alocar técnicos para evitar represamento nas fases de triagem e execução.";
+  } else if (alertType === 'backlog') {
+    summaryMessage = `ACÚMULO DE BACKLOG OPERACIONAL: O total de chamados ativos em aberto/progresso (${activeBacklog.length} OS) ultrapassou a capacidade diária estimada de vazão (equivalente a mais de 7 dias de carga média móvel).`;
+    recommendation = "Recomenda-se realizar mutirão de encerramento das ordens de serviço pendentes de baixa e priorizar os chamados parados por falta de material.";
+  } else {
+    summaryMessage = `OPERAÇÃO ESTÁVEL: Volume diário recente (${recentDailyAverage7d} OS/dia) alinhado à média móvel de 30 dias (${movingAverageDaily} OS/dia). Backlog sob controle (${activeBacklog.length} OS ativas).`;
+    recommendation = "Manter o ritmo operacional habitual de atendimento e triagem diária.";
+  }
+
+  return {
+    hasSpikeOrBacklogAlert,
+    alertType,
+    movingAverageDaily,
+    recentDailyAverage7d,
+    ordersIn30DaysCount: orders30d.length,
+    recentOrders7dCount: orders7d.length,
+    activeBacklogCount: activeBacklog.length,
+    urgentHighBacklogCount: urgentHighBacklog.length,
+    percentageChange,
+    recommendation,
+    summaryMessage,
+    analyzedAt: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+  };
+}
+
 const DashboardSkeleton = () => (
   <div className="space-y-8 animate-pulse">
     {/* Metrics Cards Grid */}
@@ -110,10 +247,71 @@ export default function Dashboard({
   isInIframe,
   onRequestNotificationPermission
 }: DashboardProps) {
-  const { success: toastSuccess, info: toastInfo, system: toastSystem } = useToast();
+  const { success: toastSuccess, info: toastInfo, system: toastSystem, warn: toastWarn, critical: toastCritical } = useToast();
+  const [backlogAnalysis, setBacklogAnalysis] = useState<BacklogAnalysisResult | null>(null);
+  const [showAnalysisCard, setShowAnalysisCard] = useState<boolean>(true);
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
   const [cacheValue, setCacheValue] = useState<any>(null);
   const [cacheKey, setCacheKey] = useState<string>("");
+
+  /**
+   * Função que analisa os últimos 30 dias de ordens de serviço para calcular a média móvel diária
+   * e emitir notificações de nível de sistema em caso de picos de manutenção ou acúmulo de backlog.
+   */
+  const run30DayBacklogAnalysis = useCallback((isManual = false) => {
+    const ordersToAnalyze = rawOrders && rawOrders.length > 0 ? rawOrders : (orders || []);
+    const result = analyze30DayMovingAverageAndBacklog(ordersToAnalyze);
+    setBacklogAnalysis(result);
+
+    if (result.hasSpikeOrBacklogAlert || isManual) {
+      setShowAnalysisCard(true);
+
+      const sessionKey = `30d_backlog_notified_${result.alertType}_${result.activeBacklogCount}`;
+      const alreadyNotified = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(sessionKey) : null;
+
+      if (isManual || !alreadyNotified) {
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem(sessionKey, "true");
+        }
+
+        if (result.alertType === "critical_surge") {
+          toastCritical(result.summaryMessage, "⚠️ Alerta Crítico: Sobrecarga & Backlog de Manutenção");
+        } else if (result.alertType === "spike") {
+          toastWarn(result.summaryMessage, "📈 Pico de Manutenção Detectado");
+        } else if (result.alertType === "backlog") {
+          toastWarn(result.summaryMessage, "📦 Acúmulo de Backlog Operacional");
+        } else if (isManual) {
+          toastSuccess("Análise da média móvel dos últimos 30 dias concluída com sucesso. Operação dentro do fluxo esperado.", "Média Móvel Reanalisada");
+        }
+
+        // Executa sinal sonoro via Web Audio API
+        playNotificationSound(result.hasSpikeOrBacklogAlert ? "alert" : "chime");
+
+        // Emite notificação nativa do sistema via Browser HTML5 Notifications API
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          try {
+            new Notification(
+              result.hasSpikeOrBacklogAlert
+                ? "⚠️ Alerta de Sobrecarga de Manutenção - Securitas OS"
+                : "📊 Análise de Média Móvel Concluída",
+              {
+                body: result.summaryMessage,
+                tag: "30d-backlog-analysis"
+              }
+            );
+          } catch (err) {
+            console.error("Erro ao disparar notificação nativa do sistema:", err);
+          }
+        }
+      }
+    }
+  }, [orders, rawOrders, toastCritical, toastWarn, toastSuccess]);
+
+  useEffect(() => {
+    if (orders && orders.length > 0) {
+      run30DayBacklogAnalysis(false);
+    }
+  }, [orders, run30DayBacklogAnalysis]);
 
   const loadCaches = () => {
     if (!currentUser) return;
@@ -229,10 +427,19 @@ export default function Dashboard({
               </p>
             </div>
 
-            <div className="z-10 flex items-center gap-2">
+            <div className="z-10 flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => run30DayBacklogAnalysis(true)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-100 font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-2xl border border-slate-700/80 shadow-md active:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                title="Executar análise da média móvel dos últimos 30 dias e verificar acúmulo de backlog"
+              >
+                <TrendingUp className="w-4 h-4 text-amber-400" />
+                Analisar Média Móvel (30d)
+              </button>
               <button
                 onClick={() => onNavigate("assistant")}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg shadow-emerald-900/40 border border-emerald-500/30 active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg shadow-emerald-900/40 border border-emerald-500/30 active:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Sparkles className="w-4 h-4 text-emerald-200 animate-pulse" />
                 IA Diagnósticos
@@ -242,6 +449,127 @@ export default function Dashboard({
             {/* Backdrop visual gradient effect */}
             <div className="absolute top-0 right-0 w-80 h-80 bg-radial-gradient from-teal-500/10 to-transparent rounded-full pointer-events-none transform translate-x-20 -translate-y-20" />
           </div>
+
+          {/* Painel / Alerta de Análise da Média Móvel de 30 Dias e Risco de Backlog */}
+          {backlogAnalysis && showAnalysisCard && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`rounded-3xl p-5 sm:p-6 text-slate-900 shadow-md border-2 transition-all text-left relative overflow-hidden ${
+                backlogAnalysis.alertType === "critical_surge"
+                  ? "bg-gradient-to-r from-red-500/15 via-red-500/10 to-amber-500/10 border-red-500/50"
+                  : backlogAnalysis.alertType === "spike" || backlogAnalysis.alertType === "backlog"
+                  ? "bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-orange-500/10 border-amber-500/50"
+                  : "bg-slate-900 text-white border-slate-800"
+              }`}
+            >
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+                <div className="space-y-3 flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider flex items-center gap-1 ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert
+                        ? "bg-red-500 text-white animate-pulse"
+                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    }`}>
+                      <Activity className="w-3 h-3" />
+                      Análise de Média Móvel (30 Dias)
+                    </span>
+
+                    <span className={`text-[11px] font-bold font-mono px-2 py-0.5 rounded-md ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert ? "bg-black/10 border border-black/10 text-slate-900" : "bg-white/10 border border-white/20 text-slate-200"
+                    }`}>
+                      Atualizado às {backlogAnalysis.analyzedAt}
+                    </span>
+
+                    {backlogAnalysis.percentageChange !== 0 && (
+                      <span className={`text-xs font-black font-mono px-2.5 py-0.5 rounded-md flex items-center gap-1 ${
+                        backlogAnalysis.percentageChange > 0
+                          ? "bg-amber-100 text-amber-900 border border-amber-300"
+                          : "bg-emerald-100 text-emerald-900 border border-emerald-300"
+                      }`}>
+                        {backlogAnalysis.percentageChange > 0 ? "▲ +" : "▼ "}
+                        {backlogAnalysis.percentageChange}% vs Média Histórica
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <h3 className={`font-extrabold text-base sm:text-lg tracking-tight ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert
+                        ? "text-slate-900"
+                        : "text-white"
+                    }`}>
+                      {backlogAnalysis.hasSpikeOrBacklogAlert
+                        ? "⚠️ Alerta de Sistema: Pico de Volume ou Acúmulo de Backlog Detectado"
+                        : "✅ Fluxo Operacional Dentro da Média Móvel Esperada"}
+                    </h3>
+                    <p className={`text-xs sm:text-sm mt-1 leading-relaxed ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert ? "text-slate-800 font-medium" : "text-slate-300 font-normal"
+                    }`}>
+                      {backlogAnalysis.summaryMessage}
+                    </p>
+                  </div>
+
+                  {/* Métricas dinâmicas da análise móvel */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+                    <div className={`p-3 rounded-2xl border shadow-2xs ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert ? "bg-white/70 border-slate-300/80 text-slate-900" : "bg-slate-800/80 border-slate-700/80 text-white"
+                    }`}>
+                      <span className="text-[9px] font-bold uppercase tracking-wider opacity-70 block">Média Móvel 30d</span>
+                      <span className="text-base font-black font-mono block">{backlogAnalysis.movingAverageDaily} OS/dia</span>
+                      <span className="text-[9px] opacity-70 block">({backlogAnalysis.ordersIn30DaysCount} chamados nos últimos 30d)</span>
+                    </div>
+
+                    <div className={`p-3 rounded-2xl border shadow-2xs ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert ? "bg-white/70 border-slate-300/80 text-slate-900" : "bg-slate-800/80 border-slate-700/80 text-white"
+                    }`}>
+                      <span className="text-[9px] font-bold uppercase tracking-wider opacity-70 block">Média Recente 7d</span>
+                      <span className="text-base font-black font-mono block">{backlogAnalysis.recentDailyAverage7d} OS/dia</span>
+                      <span className="text-[9px] opacity-70 block">({backlogAnalysis.recentOrders7dCount} chamados nos últimos 7d)</span>
+                    </div>
+
+                    <div className={`p-3 rounded-2xl border shadow-2xs ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert ? "bg-white/70 border-slate-300/80 text-slate-900" : "bg-slate-800/80 border-slate-700/80 text-white"
+                    }`}>
+                      <span className="text-[9px] font-bold uppercase tracking-wider opacity-70 block">Backlog Ativo</span>
+                      <span className="text-base font-black font-mono block">{backlogAnalysis.activeBacklogCount} Chamados</span>
+                      <span className="text-[9px] opacity-70 block">({backlogAnalysis.urgentHighBacklogCount} com prioridade alta/urgente)</span>
+                    </div>
+
+                    <div className={`p-3 rounded-2xl border shadow-2xs ${
+                      backlogAnalysis.hasSpikeOrBacklogAlert ? "bg-white/70 border-slate-300/80 text-slate-900" : "bg-slate-800/80 border-slate-700/80 text-white"
+                    }`}>
+                      <span className="text-[9px] font-bold uppercase tracking-wider opacity-70 block">Recomendação</span>
+                      <p className="text-[10px] font-bold line-clamp-2 leading-tight mt-0.5">
+                        {backlogAnalysis.recommendation}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-row lg:flex-col items-center gap-2 shrink-0 w-full lg:w-auto justify-end">
+                  <button
+                    type="button"
+                    onClick={() => run30DayBacklogAnalysis(true)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-md active:translate-y-[1px] transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    Reanalisar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAnalysisCard(false)}
+                    className="bg-slate-200/80 hover:bg-slate-300 text-slate-800 font-bold text-xs py-3 px-3 rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                    title="Ocultar Painel de Análise"
+                  >
+                    <X className="w-4 h-4" />
+                    Ocultar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
 
           {/* Notificação de Cadastros Pendentes de Aprovação */}
           {pendingClients.length > 0 && (

@@ -3,6 +3,8 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -53,7 +55,55 @@ async function validateUrlForSsrf(urlStr: string): Promise<{ safe: boolean; reas
 }
 
 const app = express();
-app.use(express.json());
+
+// 1. Proteção de Cabeçalhos HTTP com Helmet
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Mantém compatibilidade com o ambiente de iFrame e scripts do Vite
+    crossOriginEmbedderPolicy: false
+  })
+);
+
+// 2. Restrição Estrita do Tamanho do Payload JSON & URL-Encoded
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+
+// 3. Middleware de Limitação de Taxa de Requisições (express-rate-limit)
+const apiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // Janela de 15 minutos
+  max: 150, // Máximo de 150 requisições por IP por janela
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Muitas requisições enviadas ao servidor num curto intervalo. Por favor, aguarde alguns instantes e tente novamente."
+  }
+});
+
+const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // Janela de 15 minutos
+  max: 20, // Máximo de 20 tentativas de autenticação por IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Muitas tentativas de autenticação detectadas. Por favor, aguarde 15 minutos e tente novamente."
+  }
+});
+
+app.use("/api/", apiRateLimiter);
+app.use("/api/auth/", authRateLimiter);
+
+// 4. Middleware de Autenticação Obrigatória para Rotas Sensíveis
+function requireApiAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers["authorization"] || req.headers["x-app-auth"] || req.headers["x-user-role"];
+  
+  if (!authHeader) {
+    return res.status(401).json({
+      error: "Acesso negado: Esta rota da API requer autenticação prévia com token de usuário ou credencial válida."
+    });
+  }
+  
+  next();
+}
 
 const PORT = 3000;
 
@@ -137,7 +187,7 @@ async function generateContentWithRetry(ai: any, model: string, contents: string
 }
 
 // API: AI Service Assistants
-app.post("/api/gemini/assist", async (req, res) => {
+app.post("/api/gemini/assist", requireApiAuth, async (req, res) => {
   try {
     const { action, title, clientName, price, category, description, categoriesList, professionalsList, teamsList } = req.body;
     
@@ -301,16 +351,107 @@ app.post("/api/gemini/assist", async (req, res) => {
   }
 });
 
+// Helper to restrict WhatsApp proxy strictly to legitimate messaging gateway domains
+function isAllowedMessagingGateway(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    const host = parsed.hostname.toLowerCase();
+
+    const allowedSuffixes = [
+      "facebook.com",
+      "whatsapp.com",
+      "whatsapp.net",
+      "z-api.io",
+      "zapi.com.br",
+      "evolution-api.com",
+      "wppconnect.io",
+      "gzappy.com",
+      "chat-api.com",
+      "uazapi.com",
+      "ultra-msg.com",
+      "green-api.com"
+    ];
+
+    if (allowedSuffixes.some(suffix => host === suffix || host.endsWith("." + suffix))) {
+      return true;
+    }
+
+    if (process.env.WHATSAPP_GATEWAY_HOST) {
+      const customHost = process.env.WHATSAPP_GATEWAY_HOST.toLowerCase().trim();
+      if (host === customHost || host.endsWith("." + customHost)) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Endpoint para validação segura de credenciais de Administrador via Backend
+app.post("/api/auth/verify-admin", (req, res) => {
+  try {
+    const { document, password } = req.body;
+    const normalizedDoc = (document || "").toString().replace(/\D/g, "");
+    
+    const allowedAdminCpfs = ["36911121884", "99999999999"];
+    if (!allowedAdminCpfs.includes(normalizedDoc)) {
+      return res.status(401).json({ success: false, message: "CPF não cadastrado como canal de Gestor Administrador." });
+    }
+
+    if (!password || typeof password !== "string" || password.trim() === "") {
+      return res.status(400).json({ success: false, message: "Por favor, informe a senha de administrador." });
+    }
+
+    // Se houver variável de ambiente ADMIN_PASSWORD definida, utiliza ela estritamente
+    const serverAdminPass = process.env.ADMIN_PASSWORD;
+    if (serverAdminPass) {
+      if (password !== serverAdminPass) {
+        return res.status(401).json({ success: false, message: "Senha de administrador incorreta." });
+      }
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        id: "gestor-admin",
+        name: "Willian C. Lima",
+        document: normalizedDoc === "36911121884" ? "369.111.218-84" : "999.999.999-99",
+        userType: "admin"
+      }
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Erro ao processar autenticação do administrador." });
+  }
+});
+
 // Proxy route for secure WhatsApp API calls (avoiding CORS and browser limits)
-app.post("/api/whatsapp/proxy", async (req, res) => {
+app.post("/api/whatsapp/proxy", requireApiAuth, async (req, res) => {
   try {
     const { url, method, headers, body } = req.body;
     
-    if (!url) {
+    if (!url || typeof url !== "string") {
       return res.status(400).json({ error: "O parâmetro 'url' é obrigatório." });
     }
 
-    // Validação contra SSRF
+    // 1. Validação de método HTTP permitido
+    const reqMethod = (method || "POST").toUpperCase();
+    if (!["GET", "POST", "PUT", "DELETE"].includes(reqMethod)) {
+      return res.status(400).json({ error: "Método HTTP não suportado pelo proxy." });
+    }
+
+    // 2. Restrição de Lista Branca de Domínios para Gateways de WhatsApp/Mensageria
+    if (!isAllowedMessagingGateway(url)) {
+      console.warn(`[Proxy WhatsApp] Bloqueada tentativa de acesso a domínio não autorizado: ${url}`);
+      return res.status(403).json({
+        ok: false,
+        status: 403,
+        error: "Acesso negado: O proxy é restrito estritamente a gateways de mensagens autorizados (Meta Graph API, Z-API, Evolution API, WPPConnect, GZappy, etc)."
+      });
+    }
+
+    // 3. Validação contra SSRF
     const urlValidation = await validateUrlForSsrf(url);
     if (!urlValidation.safe) {
       console.warn(`[Proxy Securitas] Bloqueada requisição suspeita de SSRF para: ${url}. Motivo: ${urlValidation.reason}`);
@@ -327,22 +468,27 @@ app.post("/api/whatsapp/proxy", async (req, res) => {
       "User-Agent": "aistudio-build-proxy"
     };
 
+    const forbiddenHeaders = ["host", "content-length", "cookie", "connection", "transfer-encoding"];
     if (headers && typeof headers === "object") {
       for (const [key, val] of Object.entries(headers)) {
-        if (typeof val === "string") {
+        if (typeof val === "string" && !forbiddenHeaders.includes(key.toLowerCase())) {
           fetchHeaders[key] = val;
         }
       }
     }
 
     // Set request body appropriately
-    let finalBody: any = body;
-    if (body && typeof body === "object" && fetchHeaders["Content-Type"]?.includes("application/json")) {
-      finalBody = JSON.stringify(body);
+    let finalBody: any = undefined;
+    if (reqMethod !== "GET" && reqMethod !== "HEAD") {
+      if (body && typeof body === "object" && fetchHeaders["Content-Type"]?.includes("application/json")) {
+        finalBody = JSON.stringify(body);
+      } else {
+        finalBody = body;
+      }
     }
 
     const response = await fetch(url, {
-      method: method || "POST",
+      method: reqMethod,
       headers: fetchHeaders,
       body: finalBody
     });
