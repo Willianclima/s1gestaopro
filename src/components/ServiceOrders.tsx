@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useFormDraft } from "../hooks/useFormDraft";
-import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team, BlockedDate } from "../types";
+import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser, Team, BlockedDate, ServiceCategory } from "../types";
 import { 
-  FileText, Search, Plus, User, Calendar, Trash2, Edit2, Play, Eye, X, 
+  FileText, Search, Plus, User, Calendar, Trash2, Edit2, Edit3, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
   Filter, QrCode, Tag
 } from "lucide-react";
@@ -17,6 +17,10 @@ interface ServiceOrdersProps {
   globalOrders?: ServiceOrder[];
   clients: Client[];
   categories: any[];
+  rawCategories?: ServiceCategory[];
+  onAddCategory?: (category: ServiceCategory) => void;
+  onUpdateCategory?: (category: ServiceCategory) => void;
+  onDeleteCategory?: (categoryId: string) => void;
   professionalsList: Professional[]; // Full list of professionals with specialties
   teams?: Team[];
   onAddOrder: (order: ServiceOrder) => void;
@@ -98,10 +102,10 @@ const PRESET_COMPLETED_IMAGES = [
 ];
 
 export default function ServiceOrders({ 
-  orders, globalOrders, clients, categories, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = [],
+  orders, globalOrders, clients, categories, rawCategories = [], onAddCategory, onUpdateCategory, onDeleteCategory, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = [],
   initialSelectedOrderId, onClearInitialSelectedOrderId
 }: ServiceOrdersProps) {
-  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo, warn: toastWarn } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("todos");
   const [dateFilterType, setDateFilterType] = useState<string>("todos"); // "todos", "hoje", "7dias", "30dias", "personalizado"
@@ -111,6 +115,14 @@ export default function ServiceOrders({
   const [priorityFilter, setPriorityFilter] = useState<string>("todos");
   const [categoryFilter, setCategoryFilter] = useState<string>("todos");
   const [isLoading, setIsLoading] = useState(true);
+
+  // Category Manager Modal state in ServiceOrders
+  const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
+  const [editingCatInOS, setEditingCatInOS] = useState<ServiceCategory | null>(null);
+  const [catNameInOS, setCatNameInOS] = useState("");
+  const [catColorInOS, setCatColorInOS] = useState("blue");
+
+  const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
 
   // Auto-select order if initialSelectedOrderId is passed (from QR code scan / URL deep link)
   useEffect(() => {
@@ -1689,6 +1701,16 @@ export default function ServiceOrders({
                 ))
               )}
             </select>
+            {isAdminUser && (
+              <button
+                type="button"
+                onClick={() => setIsCategoryManagerOpen(true)}
+                title="Gerenciar Categorias (Inserir / Editar)"
+                className="p-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg border border-purple-200 transition-all cursor-pointer shrink-0"
+              >
+                <Tag className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
           
           {/* Active filter summary indicators */}
@@ -2994,7 +3016,18 @@ export default function ServiceOrders({
                 {/* Category, Priority & Date constraints */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Categoria do Serviço *</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Categoria do Serviço *</label>
+                      {isAdminUser && (
+                        <button
+                          type="button"
+                          onClick={() => setIsCategoryManagerOpen(true)}
+                          className="text-[10px] font-extrabold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Gerenciar
+                        </button>
+                      )}
+                    </div>
                     <select
                       className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-semibold text-slate-700"
                       value={category}
@@ -3755,6 +3788,231 @@ export default function ServiceOrders({
               <p className="text-[10.5px] text-slate-400 leading-relaxed font-medium pt-1">
                 💡 Ao escanear este QR code com qualquer câmera mobile, o navegador abre diretamente o sistema no modo de detalhes da Ordem de Serviço via parâmetro <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">?os={qrCodeModalOrder.id}</code>.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL GERENCIAR CATEGORIAS DE SERVIÇO (APENAS ADMINISTRADORES) */}
+      {isCategoryManagerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-lg shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Tag className="w-5 h-5 text-purple-400" />
+                <h3 className="font-extrabold text-sm uppercase tracking-wider">
+                  Gerenciar Categorias de Serviço
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCategoryManagerOpen(false);
+                  setEditingCatInOS(null);
+                  setCatNameInOS("");
+                }}
+                className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6 overflow-y-auto">
+
+              {!isAdminUser ? (
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-xl text-xs text-amber-800 dark:text-amber-300">
+                  <span className="font-bold block mb-1">Acesso Restrito</span>
+                  Apenas usuários Administrativos têm permissão para criar, editar ou excluir Categorias do Serviço.
+                </div>
+              ) : (
+                <>
+                  {/* Category Form (Create / Edit) */}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!isAdminUser) {
+                        toastError("Apenas usuários Administrativos podem gerenciar categorias.", "Acesso Negado");
+                        return;
+                      }
+                      if (!catNameInOS.trim()) {
+                        toastError("Informe o nome da categoria.", "Campo Obrigatório");
+                        return;
+                      }
+
+                      if (editingCatInOS) {
+                        onUpdateCategory?.({
+                          id: editingCatInOS.id,
+                          name: catNameInOS.trim(),
+                          color: catColorInOS
+                        });
+                        toastSuccess(`Categoria "${catNameInOS}" atualizada com sucesso!`);
+                      } else {
+                        onAddCategory?.({
+                          id: `cat-${Date.now()}`,
+                          name: catNameInOS.trim(),
+                          color: catColorInOS
+                        });
+                        toastSuccess(`Categoria "${catNameInOS}" criada com sucesso!`);
+                      }
+
+                      setEditingCatInOS(null);
+                      setCatNameInOS("");
+                      setCatColorInOS("blue");
+                    }}
+                    className="p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                        {editingCatInOS ? "Editar Categoria" : "Nova Categoria"}
+                      </span>
+                      {editingCatInOS && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCatInOS(null);
+                            setCatNameInOS("");
+                          }}
+                          className="text-[10px] font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 underline cursor-pointer"
+                        >
+                          Cancelar Edição
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
+                          Nome da Categoria *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ex: Climatização"
+                          value={catNameInOS}
+                          onChange={(e) => setCatNameInOS(e.target.value)}
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
+                          Cor Visual
+                        </label>
+                        <select
+                          value={catColorInOS}
+                          onChange={(e) => setCatColorInOS(e.target.value)}
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="blue">Azul</option>
+                          <option value="orange">Laranja</option>
+                          <option value="red">Vermelho</option>
+                          <option value="purple">Roxo</option>
+                          <option value="green">Verde</option>
+                          <option value="cyan">Ciano</option>
+                          <option value="amber">Âmbar</option>
+                          <option value="indigo">Anil</option>
+                          <option value="rose">Rosa</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all shadow-sm cursor-pointer"
+                    >
+                      {editingCatInOS ? "Salvar Alterações" : "Inserir Categoria"}
+                    </button>
+                  </form>
+                </>
+              )}
+
+              {/* Registered Categories List */}
+              <div className="space-y-2">
+                <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider block">
+                  Categorias Atuais ({rawCategories.length > 0 ? rawCategories.length : categories.length})
+                </span>
+
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {(rawCategories.length > 0 ? rawCategories : categories.map((c: any) => ({
+                    id: typeof c === 'string' ? `cat-${c}` : c.id,
+                    name: typeof c === 'string' ? c : c.name,
+                    color: typeof c === 'string' ? 'blue' : (c.color || 'blue')
+                  }))).map((catItem: ServiceCategory) => {
+                    const linkedOsCount = orders.filter(o => o.category === catItem.name).length;
+
+                    return (
+                      <div
+                        key={catItem.id || catItem.name}
+                        className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3"
+                      >
+                        <div>
+                          <span className="font-extrabold text-xs text-slate-800 dark:text-slate-100 block">
+                            {catItem.name}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            {linkedOsCount} Ordem(ns) vinculada(s)
+                          </span>
+                        </div>
+
+                        {isAdminUser && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCatInOS(catItem);
+                                setCatNameInOS(catItem.name);
+                                setCatColorInOS(catItem.color || "blue");
+                              }}
+                              className="p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 text-slate-700 dark:text-slate-200 rounded-lg text-[10px] font-bold cursor-pointer"
+                              title="Editar Categoria"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-indigo-600" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (linkedOsCount > 0) {
+                                  toastWarn(`A categoria "${catItem.name}" possui ${linkedOsCount} OS vinculada(s) e não pode ser excluída.`);
+                                  return;
+                                }
+                                onDeleteCategory?.(catItem.id);
+                                toastSuccess(`Categoria "${catItem.name}" removida com sucesso.`);
+                              }}
+                              disabled={linkedOsCount > 0}
+                              className={`p-1.5 border rounded-lg text-[10px] font-bold ${
+                                linkedOsCount > 0
+                                  ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
+                                  : "bg-white dark:bg-slate-800 border-red-200 hover:bg-red-50 text-red-600 cursor-pointer"
+                              }`}
+                              title={linkedOsCount > 0 ? "Possui OS vinculadas" : "Excluir Categoria"}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3 bg-slate-50 dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCategoryManagerOpen(false);
+                  setEditingCatInOS(null);
+                  setCatNameInOS("");
+                }}
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>

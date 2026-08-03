@@ -1510,6 +1510,125 @@ export default function App() {
     toastSuccess(`Dados de "${updatedProf.name}" foram salvos com sucesso!`, "Técnico Atualizado");
   };
 
+  // Service Category CRUD Handlers (Restricted to Administrative users)
+  const handleAddCategory = (newCat: ServiceCategory) => {
+    const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
+    if (!isAdminUser) {
+      toastError("Apenas usuários Administrativos têm permissão para cadastrar novas categorias de serviço.", "Acesso Restrito");
+      return;
+    }
+    if (!newCat.name || !newCat.name.trim()) {
+      toastWarn("Por favor, informe um nome válido para a categoria.", "Nome Requerido");
+      return;
+    }
+    const cleanName = newCat.name.trim();
+    if (categories.some(c => c.name.toLowerCase() === cleanName.toLowerCase())) {
+      toastWarn(`A categoria "${cleanName}" já existe no sistema.`, "Categoria Existente");
+      return;
+    }
+    const createdCat: ServiceCategory = {
+      id: newCat.id || `cat-${Date.now()}`,
+      name: cleanName,
+      color: newCat.color || "blue"
+    };
+    const updated = [...categories, createdCat];
+    setCategories(updated);
+    localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+    addSystemLog(
+      "Cadastro de Categoria",
+      `Nova categoria de serviço "${createdCat.name}" cadastrada pelo usuário administrativo ${currentUser?.name || ""}.`,
+      "sistema"
+    );
+    toastSuccess(`Categoria "${createdCat.name}" cadastrada com sucesso!`, "Categoria Registrada");
+  };
+
+  const handleUpdateCategory = (updatedCat: ServiceCategory) => {
+    const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
+    if (!isAdminUser) {
+      toastError("Apenas usuários Administrativos têm permissão para editar categorias de serviço.", "Acesso Restrito");
+      return;
+    }
+    const oldCat = categories.find(c => c.id === updatedCat.id);
+    if (!oldCat) return;
+
+    const cleanName = updatedCat.name.trim();
+    if (!cleanName) {
+      toastWarn("Por favor, informe um nome válido para a categoria.", "Nome Requerido");
+      return;
+    }
+
+    const nameChanged = oldCat.name !== cleanName;
+    if (nameChanged && categories.some(c => c.id !== updatedCat.id && c.name.toLowerCase() === cleanName.toLowerCase())) {
+      toastWarn(`Já existe outra categoria cadastrada com o nome "${cleanName}".`, "Nome em Uso");
+      return;
+    }
+
+    const finalCat: ServiceCategory = {
+      ...updatedCat,
+      name: cleanName
+    };
+
+    const updated = categories.map(c => c.id === finalCat.id ? finalCat : c);
+    setCategories(updated);
+    localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+
+    // Update orders and professionals if category name changed
+    if (nameChanged) {
+      const updatedOrders = orders.map(o => o.category === oldCat.name ? { ...o, category: cleanName } : o);
+      setOrders(updatedOrders);
+      localStorage.setItem("service_mgt_orders2", JSON.stringify(updatedOrders));
+
+      const updatedProfs = professionals.map(p => {
+        const isSpec = p.specialty === oldCat.name;
+        const newSpecs = (p.specialties || []).map(s => s === oldCat.name ? cleanName : s);
+        if (isSpec || p.specialties?.includes(oldCat.name)) {
+          return {
+            ...p,
+            specialty: isSpec ? cleanName : p.specialty,
+            specialties: newSpecs
+          };
+        }
+        return p;
+      });
+      setProfessionals(updatedProfs);
+      localStorage.setItem("service_mgt_professionals2", JSON.stringify(updatedProfs));
+    }
+
+    addSystemLog(
+      "Edição de Categoria",
+      `Categoria "${oldCat.name}" atualizada para "${cleanName}" por ${currentUser?.name || "Administrador"}.`,
+      "sistema"
+    );
+    toastSuccess(`Categoria "${cleanName}" atualizada com sucesso!`, "Categoria Salva");
+  };
+
+  const handleDeleteCategory = (categoryId: string) => {
+    const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
+    if (!isAdminUser) {
+      toastError("Apenas usuários Administrativos têm permissão para excluir categorias de serviço.", "Acesso Restrito");
+      return;
+    }
+    const catToDelete = categories.find(c => c.id === categoryId);
+    if (!catToDelete) return;
+
+    const activeOrdersCount = orders.filter(o => o.category === catToDelete.name).length;
+    if (activeOrdersCount > 0) {
+      toastWarn(`A categoria "${catToDelete.name}" possui ${activeOrdersCount} Ordem(ns) de Serviço vinculada(s) e não pode ser excluída.`, "Categoria em Uso");
+      return;
+    }
+
+    const updated = categories.filter(c => c.id !== categoryId);
+    setCategories(updated);
+    localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+
+    addSystemLog(
+      "Exclusão de Categoria",
+      `Categoria "${catToDelete.name}" removida por ${currentUser?.name || "Administrador"}.`,
+      "sistema"
+    );
+    toastWarn(`Categoria "${catToDelete.name}" removida com sucesso.`, "Categoria Excluída");
+  };
+
   const sendProgrammaticWhatsapp = async (targetPhone: string, messageText: string, settings: WhatsappSettings) => {
     if (!settings.enabled) {
       return { status: "idle" as const, message: "Disparador desativado nas Configurações do WhatsApp. Somente simulação exibida." };
@@ -3965,6 +4084,10 @@ export default function App() {
                 globalOrders={orders}
                 clients={clients}
                 categories={categories.map(c => c.name)}
+                rawCategories={categories}
+                onAddCategory={handleAddCategory}
+                onUpdateCategory={handleUpdateCategory}
+                onDeleteCategory={handleDeleteCategory}
                 professionalsList={professionals}
                 teams={teams}
                 onAddOrder={handleAddOrder}
@@ -4045,6 +4168,10 @@ export default function App() {
                 onSavePermissions={updatePermissionsState}
                 almoxarifados={almoxarifados}
                 onSaveAlmoxarifados={handleSaveAlmoxarifados}
+                categories={categories}
+                onAddCategory={handleAddCategory}
+                onUpdateCategory={handleUpdateCategory}
+                onDeleteCategory={handleDeleteCategory}
                 currentUser={currentUser}
                 initialSubTab={settingsSubTab}
                 clients={clients}
