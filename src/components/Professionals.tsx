@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Professional, ServiceCategory, Team, ServiceOrder, Almoxarifado, Client } from "../types";
 import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Check, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star } from "lucide-react";
 
@@ -15,6 +15,7 @@ interface ProfessionalsProps {
   orders?: ServiceOrder[];
   almoxarifados?: Almoxarifado[];
   clients?: Client[];
+  globalSearchTerm?: string;
 }
 
 export default function Professionals({
@@ -29,9 +30,16 @@ export default function Professionals({
   onDeleteTeam,
   orders = [],
   almoxarifados = [],
-  clients = []
+  clients = [],
+  globalSearchTerm
 }: ProfessionalsProps) {
   const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    if (globalSearchTerm !== undefined) {
+      setSearchTerm(globalSearchTerm);
+    }
+  }, [globalSearchTerm]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingProfessional, setEditingProfessional] = useState<Professional | null>(null);
 

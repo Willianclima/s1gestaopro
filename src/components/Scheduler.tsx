@@ -11,6 +11,7 @@ interface SchedulerProps {
   blockedDates?: BlockedDate[];
   onAddBlockedDate?: (bDate: BlockedDate) => void;
   onDeleteBlockedDate?: (id: string) => void;
+  globalSearchTerm?: string;
 }
 
 export default function Scheduler({ 
@@ -21,7 +22,8 @@ export default function Scheduler({
   professionalsList = [],
   blockedDates = [],
   onAddBlockedDate,
-  onDeleteBlockedDate
+  onDeleteBlockedDate,
+  globalSearchTerm
 }: SchedulerProps) {
   const [currentDate, setCurrentDate] = useState(new Date(2026, 5, 15)); // Default to June 15, 2026 (matching current time year-month)
   const [selectedDateStr, setSelectedDateStr] = useState("2026-06-15");
@@ -107,7 +109,19 @@ export default function Scheduler({
 
   // Find orders for a given date string
   const getOrdersForDate = (dateString: string) => {
-    return orders.filter(os => os.startDate === dateString || os.endDate === dateString);
+    let dayOrders = orders.filter(os => os.startDate === dateString || os.endDate === dateString);
+    if (globalSearchTerm && globalSearchTerm.trim()) {
+      const q = globalSearchTerm.toLowerCase().trim();
+      dayOrders = dayOrders.filter(os => {
+        const client = clients.find(c => c.id === os.clientId);
+        return os.id.toLowerCase().includes(q) ||
+               os.title.toLowerCase().includes(q) ||
+               (os.assignedTo && os.assignedTo.toLowerCase().includes(q)) ||
+               (client && client.name.toLowerCase().includes(q)) ||
+               os.category.toLowerCase().includes(q);
+      });
+    }
+    return dayOrders;
   };
 
   const selectedDayOrders = getOrdersForDate(selectedDateStr);

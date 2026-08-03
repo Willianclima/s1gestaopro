@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate, AppNotification } from "./types";
 import { 
   INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS, INITIAL_ALMOXARIFADOS
@@ -23,7 +23,7 @@ import { googleSignIn, logoutUser, subscribeToAuthChanges, saveUserProfile } fro
 import { getApiAuthHeaders } from "./services/apiAuth";
 
 import { 
-  BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench,
+  BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench, Search,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
   Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff,
   ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp, MapPin, RefreshCw, Navigation
@@ -396,6 +396,39 @@ export default function App() {
   // Cross-component routing state (AI Prefills)
   const [selectedOS, setSelectedOS] = useState<ServiceOrder | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
+
+  // Global Header Search state & ref
+  const [globalSearchTerm, setGlobalSearchTerm] = useState("");
+  const [isGlobalSearchFocused, setIsGlobalSearchFocused] = useState(false);
+  const globalSearchInputRef = useRef<HTMLInputElement>(null);
+  const globalSearchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Keyboard shortcut (⌘K or Ctrl+K) and outside-click handler for Global Search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        globalSearchInputRef.current?.focus();
+        setIsGlobalSearchFocused(true);
+      }
+      if (e.key === "Escape") {
+        setIsGlobalSearchFocused(false);
+      }
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (globalSearchContainerRef.current && !globalSearchContainerRef.current.contains(e.target as Node)) {
+        setIsGlobalSearchFocused(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   // Parse URL parameter for direct OS access via QR code deep links
   useEffect(() => {
@@ -2672,6 +2705,45 @@ export default function App() {
     return false;
   });
 
+  // Compute live search results for the instant dropdown overlay
+  const globalSearchQuery = globalSearchTerm.trim().toLowerCase();
+
+  const searchResultsOS = globalSearchQuery
+    ? visibleOrders.filter(os => {
+        const client = clients.find(c => c.id === os.clientId);
+        const clientName = client ? client.name.toLowerCase() : "";
+        const assignedTech = os.assignedTo ? os.assignedTo.toLowerCase() : "";
+        return os.id.toLowerCase().includes(globalSearchQuery) ||
+               os.title.toLowerCase().includes(globalSearchQuery) ||
+               (os.description && os.description.toLowerCase().includes(globalSearchQuery)) ||
+               clientName.includes(globalSearchQuery) ||
+               assignedTech.includes(globalSearchQuery) ||
+               os.category.toLowerCase().includes(globalSearchQuery);
+      }).slice(0, 5)
+    : [];
+
+  const searchResultsClients = globalSearchQuery
+    ? clients.filter(c => {
+        return c.name.toLowerCase().includes(globalSearchQuery) ||
+               c.email.toLowerCase().includes(globalSearchQuery) ||
+               c.phone.includes(globalSearchQuery) ||
+               c.document.includes(globalSearchQuery) ||
+               (c.address && c.address.toLowerCase().includes(globalSearchQuery));
+      }).slice(0, 5)
+    : [];
+
+  const searchResultsProfessionals = globalSearchQuery
+    ? professionals.filter(p => {
+        return p.name.toLowerCase().includes(globalSearchQuery) ||
+               p.role.toLowerCase().includes(globalSearchQuery) ||
+               p.specialty.toLowerCase().includes(globalSearchQuery) ||
+               p.phone.includes(globalSearchQuery) ||
+               (p.workLocation && p.workLocation.toLowerCase().includes(globalSearchQuery));
+      }).slice(0, 5)
+    : [];
+
+  const totalGlobalSearchResults = searchResultsOS.length + searchResultsClients.length + searchResultsProfessionals.length;
+
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 text-white font-sans relative overflow-hidden">
@@ -3931,8 +4003,8 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 min-h-screen relative overflow-hidden">
         
         {/* Top Header layout */}
-        <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between px-6 flex-shrink-0 z-30">
-          <div className="flex items-center gap-3">
+        <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between px-3 sm:px-6 flex-shrink-0 z-30 gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 shrink-0">
             <button 
               onClick={() => setIsSidebarOpen(true)}
               className="md:hidden p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-400 transition-colors cursor-pointer"
@@ -3941,7 +4013,7 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
             <span 
-              className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider hidden md:block truncate max-w-[130px] lg:max-w-[240px]"
+              className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider hidden xl:block truncate max-w-[150px]"
               title={currentUser ? (
                 currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin" ? (
                   almoxarifados.find(a => a.id === currentUser.warehouseId)?.name || "Almoxarifado Central Araçatuba"
@@ -3962,11 +4034,189 @@ export default function App() {
             </span>
           </div>
 
-          <div className="flex items-center gap-4 text-xs font-semibold">
+          {/* GLOBAL SEARCH BAR */}
+          <div ref={globalSearchContainerRef} className="relative flex-1 max-w-xl mx-1 sm:mx-2 z-40">
+            <div className="relative flex items-center">
+              <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 pointer-events-none" />
+              <input
+                type="text"
+                ref={globalSearchInputRef}
+                value={globalSearchTerm}
+                onChange={(e) => {
+                  setGlobalSearchTerm(e.target.value);
+                  setIsGlobalSearchFocused(true);
+                }}
+                onFocus={() => setIsGlobalSearchFocused(true)}
+                placeholder="Busca global (#101, Cliente, Técnico...)"
+                className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:focus:bg-slate-900 text-slate-800 dark:text-slate-100 text-xs font-medium pl-9 pr-16 sm:pr-20 py-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 focus:border-indigo-500 dark:focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-xs"
+              />
+              
+              <div className="absolute right-2.5 flex items-center gap-1.5">
+                {globalSearchTerm ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGlobalSearchTerm("");
+                      setIsGlobalSearchFocused(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-md transition-colors cursor-pointer"
+                    title="Limpar busca"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-700/80 border border-slate-200 dark:border-slate-600 rounded-md shadow-2xs">
+                    <span className="text-[9px]">⌘</span>K
+                  </kbd>
+                )}
+              </div>
+            </div>
+
+            {/* Instant Floating Results Overlay Panel */}
+            {isGlobalSearchFocused && globalSearchQuery.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-2 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl overflow-hidden z-50 max-h-[480px] overflow-y-auto custom-scrollbar">
+                {/* Result Header */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold text-slate-600 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Search className="w-3.5 h-3.5 text-indigo-500" />
+                    Resultados da Busca Global
+                  </span>
+                  <span className="text-[10px] font-black bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200 px-2 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-800">
+                    {totalGlobalSearchResults} encontrado(s)
+                  </span>
+                </div>
+
+                {totalGlobalSearchResults === 0 ? (
+                  <div className="p-6 text-center text-slate-400 text-xs">
+                    <AlertTriangle className="w-6 h-6 mx-auto mb-2 text-amber-500/80" />
+                    <p className="font-bold text-slate-600 dark:text-slate-300">Nenhum resultado encontrado</p>
+                    <p className="text-[11px] mt-0.5 text-slate-400">Tente buscar por outro ID de OS, nome de cliente ou profissional.</p>
+                  </div>
+                ) : (
+                  <div className="p-2 space-y-3">
+                    {/* OS Results */}
+                    {searchResultsOS.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <ClipboardList className="w-3 h-3 text-indigo-500" /> Ordens de Serviço ({searchResultsOS.length})
+                        </div>
+                        <div className="space-y-1">
+                          {searchResultsOS.map((os) => {
+                            const client = clients.find(c => c.id === os.clientId);
+                            return (
+                              <button
+                                key={os.id}
+                                onClick={() => {
+                                  setSelectedOS(os);
+                                  setInitialSelectedOrderId(os.id);
+                                  setActiveTab("orders");
+                                  setIsGlobalSearchFocused(false);
+                                }}
+                                className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="font-mono text-[11px] font-black text-indigo-600 dark:text-indigo-400">#{os.id}</span>
+                                    <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate group-hover:text-indigo-600 transition-colors">{os.title}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 truncate flex items-center gap-2">
+                                    <span>Cliente: <strong>{client?.name || "N/I"}</strong></span>
+                                    {os.assignedTo && <span>• Técnico: <strong>{os.assignedTo}</strong></span>}
+                                  </p>
+                                </div>
+                                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0 uppercase">
+                                  {os.status}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Client Results */}
+                    {searchResultsClients.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Users className="w-3 h-3 text-blue-500" /> Clientes ({searchResultsClients.length})
+                        </div>
+                        <div className="space-y-1">
+                          {searchResultsClients.map((cl) => (
+                            <button
+                              key={cl.id}
+                              onClick={() => {
+                                setActiveTab("clients");
+                                setIsGlobalSearchFocused(false);
+                              }}
+                              className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <span className="font-bold text-xs text-slate-800 dark:text-slate-100 block truncate group-hover:text-blue-600 transition-colors">{cl.name}</span>
+                                <p className="text-[10px] text-slate-500 truncate">
+                                  Doc: {cl.document} • Tel: {cl.phone}
+                                </p>
+                              </div>
+                              <span className="text-[10px] font-bold text-blue-600 bg-blue-50 dark:bg-blue-950/50 px-2 py-0.5 rounded-md shrink-0">
+                                Ver Cliente
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Professional Results */}
+                    {searchResultsProfessionals.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Wrench className="w-3 h-3 text-emerald-500" /> Técnicos ({searchResultsProfessionals.length})
+                        </div>
+                        <div className="space-y-1">
+                          {searchResultsProfessionals.map((prof) => (
+                            <button
+                              key={prof.id}
+                              onClick={() => {
+                                setActiveTab("professionals");
+                                setIsGlobalSearchFocused(false);
+                              }}
+                              className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <span className="font-bold text-xs text-slate-800 dark:text-slate-100 block truncate group-hover:text-emerald-600 transition-colors">{prof.name}</span>
+                                <p className="text-[10px] text-slate-500 truncate">
+                                  Cargo: {prof.role} • Especialidade: {prof.specialty}
+                                </p>
+                              </div>
+                              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md shrink-0">
+                                Ver Técnico
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Footer hint */}
+                <div className="p-2.5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-100 dark:border-slate-800 text-[10px] text-slate-400 flex items-center justify-between">
+                  <span>Pressione <kbd className="font-mono bg-white dark:bg-slate-700 px-1 py-0.5 rounded border border-slate-200 dark:border-slate-600">ESC</kbd> para fechar</span>
+                  <button
+                    onClick={() => setGlobalSearchTerm("")}
+                    className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer"
+                  >
+                    Limpar tudo
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-4 text-xs font-semibold shrink-0">
             {/* Quick indicators */}
-            <div className="hidden sm:flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 p-2.5 py-1.5 rounded-xl text-slate-600 dark:text-slate-400">
+            <div className="hidden lg:flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 p-2.5 py-1.5 rounded-xl text-slate-600 dark:text-slate-400">
               <CheckCircle className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
-              <span>Sessão Encriptada Ativa</span>
+              <span>Sessão Encriptada</span>
             </div>
 
             {/* In-App Notification Center & Web Audio Synthesizer */}
@@ -4075,6 +4325,7 @@ export default function App() {
                 onDeleteClient={handleDeleteClient}
                 almoxarifados={almoxarifados}
                 categories={categories}
+                globalSearchTerm={globalSearchTerm}
               />
             )}
 
@@ -4098,6 +4349,7 @@ export default function App() {
                 blockedDates={blockedDates}
                 initialSelectedOrderId={initialSelectedOrderId}
                 onClearInitialSelectedOrderId={() => setInitialSelectedOrderId(null)}
+                globalSearchTerm={globalSearchTerm}
               />
             )}
 
@@ -4111,6 +4363,7 @@ export default function App() {
                 blockedDates={blockedDates}
                 onAddBlockedDate={handleAddBlockedDate}
                 onDeleteBlockedDate={handleDeleteBlockedDate}
+                globalSearchTerm={globalSearchTerm}
               />
             )}
 
@@ -4128,6 +4381,7 @@ export default function App() {
                 orders={orders}
                 almoxarifados={almoxarifados}
                 clients={clients}
+                globalSearchTerm={globalSearchTerm}
               />
             )}
 

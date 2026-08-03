@@ -12,6 +12,7 @@ interface ClientsProps {
   onDeleteClient: (id: string) => void;
   almoxarifados?: Almoxarifado[];
   categories?: ServiceCategory[];
+  globalSearchTerm?: string;
 }
 
 const formatDoc = (value: string) => {
@@ -72,9 +73,16 @@ export default function Clients({
   onUpdateClient, 
   onDeleteClient, 
   almoxarifados = [],
-  categories = []
+  categories = [],
+  globalSearchTerm
 }: ClientsProps) {
   const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    if (globalSearchTerm !== undefined) {
+      setSearchTerm(globalSearchTerm);
+    }
+  }, [globalSearchTerm]);
   const [statusFilter, setStatusFilter] = useState<string>("todos");
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);

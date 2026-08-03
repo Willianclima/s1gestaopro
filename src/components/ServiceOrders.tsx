@@ -4,7 +4,7 @@ import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Edit3, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
-  Filter, QrCode, Tag
+  Filter, QrCode, Tag, Kanban, List, GripVertical
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
@@ -31,6 +31,7 @@ interface ServiceOrdersProps {
   blockedDates?: BlockedDate[];
   initialSelectedOrderId?: string | null;
   onClearInitialSelectedOrderId?: () => void;
+  globalSearchTerm?: string;
 }
 
 export function getPriorityBadge(priority?: 'low' | 'medium' | 'high' | 'urgent') {
@@ -103,10 +104,16 @@ const PRESET_COMPLETED_IMAGES = [
 
 export default function ServiceOrders({ 
   orders, globalOrders, clients, categories, rawCategories = [], onAddCategory, onUpdateCategory, onDeleteCategory, professionalsList, teams, onAddOrder, onUpdateOrder, onDeleteOrder, onOpenAiAssistantWithOS, currentUser, blockedDates = [],
-  initialSelectedOrderId, onClearInitialSelectedOrderId
+  initialSelectedOrderId, onClearInitialSelectedOrderId, globalSearchTerm
 }: ServiceOrdersProps) {
   const { success: toastSuccess, error: toastError, info: toastInfo, warn: toastWarn } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    if (globalSearchTerm !== undefined) {
+      setSearchTerm(globalSearchTerm);
+    }
+  }, [globalSearchTerm]);
   const [statusFilter, setStatusFilter] = useState<string>("todos");
   const [dateFilterType, setDateFilterType] = useState<string>("todos"); // "todos", "hoje", "7dias", "30dias", "personalizado"
   const [startDateFilter, setStartDateFilter] = useState<string>("");
@@ -121,6 +128,116 @@ export default function ServiceOrders({
   const [editingCatInOS, setEditingCatInOS] = useState<ServiceCategory | null>(null);
   const [catNameInOS, setCatNameInOS] = useState("");
   const [catColorInOS, setCatColorInOS] = useState("blue");
+
+  // View mode & Kanban Drag-and-Drop state
+  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
+  const [activeDropColumn, setActiveDropColumn] = useState<OSStatus | null>(null);
+
+  const KANBAN_COLUMNS: { id: OSStatus; title: string; badgeBg: string; borderTop: string; icon: string }[] = [
+    { 
+      id: "aberto", 
+      title: "Aberto / Pendente", 
+      badgeBg: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/60 dark:text-amber-200", 
+      borderTop: "border-t-amber-500",
+      icon: "🟡"
+    },
+    { 
+      id: "em_progresso", 
+      title: "Em Execução", 
+      badgeBg: "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/60 dark:text-blue-200", 
+      borderTop: "border-t-blue-500",
+      icon: "🔵"
+    },
+    { 
+      id: "aguardando", 
+      title: "Aguardando Material", 
+      badgeBg: "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/60 dark:text-orange-200", 
+      borderTop: "border-t-orange-500",
+      icon: "🟠"
+    },
+    { 
+      id: "concluido", 
+      title: "Concluído", 
+      badgeBg: "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/60 dark:text-emerald-200", 
+      borderTop: "border-t-emerald-500",
+      icon: "🟢"
+    },
+    { 
+      id: "cancelado", 
+      title: "Cancelado", 
+      badgeBg: "bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-900/60 dark:text-rose-200", 
+      borderTop: "border-t-rose-500",
+      icon: "🔴"
+    }
+  ];
+
+  const handleKanbanDragStart = (e: React.DragEvent, orderId: string) => {
+    e.dataTransfer.setData("text/plain", orderId);
+    e.dataTransfer.effectAllowed = "move";
+    setDraggedOrderId(orderId);
+  };
+
+  const handleKanbanDragOver = (e: React.DragEvent, status: OSStatus) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (activeDropColumn !== status) {
+      setActiveDropColumn(status);
+    }
+  };
+
+  const handleKanbanDragLeave = (status: OSStatus) => {
+    if (activeDropColumn === status) {
+      setActiveDropColumn(null);
+    }
+  };
+
+  const handleMoveOrderStatusDirectly = (order: ServiceOrder, targetStatus: OSStatus) => {
+    if (order.status === targetStatus) return;
+
+    const statusLabels: Record<OSStatus, string> = {
+      aberto: "Aberto / Pendente",
+      em_progresso: "Em Execução",
+      aguardando: "Aguardando Material",
+      concluido: "Concluído",
+      cancelado: "Cancelado"
+    };
+
+    const newLog: OSHistoryLog = {
+      id: "h-" + Math.random().toString(36).substr(2, 9),
+      status: targetStatus,
+      comment: `Status alterado no Quadro Kanban para: ${statusLabels[targetStatus] || targetStatus}`,
+      date: new Date().toISOString(),
+      author: "atendente"
+    };
+
+    const updatedOrder: ServiceOrder = {
+      ...order,
+      status: targetStatus,
+      endDate: targetStatus === "concluido" ? new Date().toISOString().split("T")[0] : order.endDate,
+      history: [...(order.history || []), newLog]
+    };
+
+    onUpdateOrder(updatedOrder);
+    toastSuccess(
+      `Ordem de Serviço #${order.id} movida para "${statusLabels[targetStatus]}"!`,
+      "Kanban - Status Atualizado"
+    );
+  };
+
+  const handleKanbanDrop = (e: React.DragEvent, targetStatus: OSStatus) => {
+    e.preventDefault();
+    setActiveDropColumn(null);
+    const orderId = e.dataTransfer.getData("text/plain") || draggedOrderId;
+    setDraggedOrderId(null);
+
+    if (!orderId) return;
+
+    const targetOrder = orders.find(o => o.id === orderId) || globalOrders?.find(o => o.id === orderId);
+    if (!targetOrder) return;
+
+    handleMoveOrderStatusDirectly(targetOrder, targetStatus);
+  };
 
   const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
 
@@ -751,9 +868,13 @@ export default function ServiceOrders({
   const filteredOrders = orders.filter(os => {
     const clientName = getClientName(os.clientId).toLowerCase();
     const osTitle = os.title.toLowerCase();
-    const matchesSearch = osTitle.includes(searchTerm.toLowerCase()) || 
-                          clientName.includes(searchTerm.toLowerCase()) || 
-                          os.id.includes(searchTerm);
+    const term = searchTerm.toLowerCase();
+    const matchesSearch = osTitle.includes(term) || 
+                          clientName.includes(term) || 
+                          os.id.toLowerCase().includes(term) ||
+                          (os.assignedTo && os.assignedTo.toLowerCase().includes(term)) ||
+                          (os.category && os.category.toLowerCase().includes(term)) ||
+                          (os.description && os.description.toLowerCase().includes(term));
     const matchesStatus = statusFilter === "todos" || os.status === statusFilter;
 
     // Date filtering based on createdAt
@@ -1514,13 +1635,45 @@ export default function ServiceOrders({
           <p className="text-sm text-slate-500 font-medium">Controle operacional de ordens e chamados técnicos. Sem movimentação financeira.</p>
         </div>
 
-        <button
-          onClick={() => openForm()}
-          className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider py-3 px-5 rounded-xl shadow-lg shadow-slate-950/5 active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
-        >
-          <Plus className="w-4 h-4 text-emerald-400" />
-          Nova Abrir Requisição
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* View Mode Toggle */}
+          <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => setViewMode("table")}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                viewMode === "table"
+                  ? "bg-white text-slate-800 shadow-xs"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+              title="Visualização em Tabela"
+            >
+              <List className="w-4 h-4" />
+              <span className="hidden sm:inline">Tabela</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("kanban")}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                viewMode === "kanban"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+              title="Visualização em Quadro Kanban"
+            >
+              <Kanban className="w-4 h-4 text-indigo-600" />
+              <span className="hidden sm:inline">Quadro Kanban</span>
+            </button>
+          </div>
+
+          <button
+            onClick={() => openForm()}
+            className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider py-3 px-5 rounded-xl shadow-lg shadow-slate-950/5 active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
+          >
+            <Plus className="w-4 h-4 text-emerald-400" />
+            Nova Abrir Requisição
+          </button>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}
@@ -1734,8 +1887,202 @@ export default function ServiceOrders({
         </div>
       </div>
 
-      {/* Grid List */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      {/* Grid List or Kanban Board */}
+      {viewMode === "kanban" ? (
+        <div className="space-y-4">
+          {/* Kanban Header Banner */}
+          <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-slate-900 text-white p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-indigo-500/20 rounded-xl border border-indigo-400/30 text-indigo-300">
+                <Kanban className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-sm text-white">Quadro Kanban Operacional</h4>
+                <p className="text-slate-300 text-xs">
+                  Arraste os cartões de OS entre as colunas de status para atualizar a gestão em tempo real. Clique em um cartão para abrir a Ficha Técnica.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end md:self-auto text-[11px] font-bold text-indigo-200 bg-white/10 px-3 py-1.5 rounded-xl border border-white/10">
+              <span>Total no Quadro:</span>
+              <strong className="text-white font-extrabold">{filteredOrders.length} OS</strong>
+            </div>
+          </div>
+
+          {/* Kanban Columns Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start overflow-x-auto pb-4">
+            {KANBAN_COLUMNS.map((col) => {
+              const columnOrders = filteredOrders.filter(o => o.status === col.id);
+              const isDropActive = activeDropColumn === col.id;
+
+              return (
+                <div
+                  key={col.id}
+                  onDragOver={(e) => handleKanbanDragOver(e, col.id)}
+                  onDragLeave={() => handleKanbanDragLeave(col.id)}
+                  onDrop={(e) => handleKanbanDrop(e, col.id)}
+                  className={`flex flex-col bg-slate-50/80 dark:bg-slate-900/50 rounded-2xl border-2 transition-all duration-200 min-h-[520px] max-h-[800px] ${
+                    isDropActive
+                      ? "border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/20 ring-4 ring-indigo-500/20 shadow-lg scale-[1.01]"
+                      : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300"
+                  }`}
+                >
+                  {/* Column Header */}
+                  <div className={`p-3.5 border-t-4 ${col.borderTop} bg-white dark:bg-slate-900 rounded-t-2xl border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{col.icon}</span>
+                      <span className="font-extrabold text-xs text-slate-800 dark:text-slate-100 uppercase tracking-wider">
+                        {col.title}
+                      </span>
+                    </div>
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-black border ${col.badgeBg}`}>
+                      {columnOrders.length}
+                    </span>
+                  </div>
+
+                  {/* Column Body / Cards List */}
+                  <div className="p-3 flex-1 overflow-y-auto space-y-3 custom-scrollbar">
+                    {isLoading ? (
+                      <div className="space-y-3">
+                        <div className="h-28 bg-slate-200/60 dark:bg-slate-800 animate-pulse rounded-2xl"></div>
+                        <div className="h-28 bg-slate-200/60 dark:bg-slate-800 animate-pulse rounded-2xl"></div>
+                      </div>
+                    ) : columnOrders.length === 0 ? (
+                      <div className={`h-40 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center p-4 text-center transition-all ${
+                        isDropActive 
+                          ? "border-indigo-400 bg-indigo-100/30 text-indigo-600" 
+                          : "border-slate-200 dark:border-slate-800 text-slate-400"
+                      }`}>
+                        <Kanban className="w-6 h-6 mb-1 opacity-40" />
+                        <p className="text-[11px] font-bold">Nenhuma OS nesta coluna</p>
+                        <p className="text-[10px] text-slate-400">Arraste uma OS para cá</p>
+                      </div>
+                    ) : (
+                      columnOrders.map((os) => {
+                        const client = clients.find(cl => cl.id === os.clientId);
+                        const isBeingDragged = draggedOrderId === os.id;
+                        const prio = os.priority || 'medium';
+                        const priorityStripeColor = 
+                          prio === 'low' ? 'border-l-emerald-500' :
+                          prio === 'high' ? 'border-l-amber-500' :
+                          prio === 'urgent' ? 'border-l-red-500' :
+                          'border-l-blue-500';
+
+                        return (
+                          <motion.div
+                            key={os.id}
+                            layout
+                            draggable={true}
+                            onDragStart={(e) => handleKanbanDragStart(e, os.id)}
+                            onClick={() => setSelectedOrder(os)}
+                            className={`bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 border-l-4 ${priorityStripeColor} p-3.5 shadow-xs hover:shadow-md transition-all duration-200 cursor-grab active:cursor-grabbing group relative ${
+                              isBeingDragged ? "opacity-40 scale-95 border-dashed border-indigo-400" : ""
+                            }`}
+                          >
+                            {/* Top Bar inside card */}
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-1.5">
+                                <GripVertical className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-500 transition-colors" />
+                                <span className="font-mono text-[11px] font-black text-slate-800 dark:text-slate-200">
+                                  #{os.id}
+                                </span>
+                              </div>
+                              {getPriorityBadge(os.priority)}
+                            </div>
+
+                            {/* Title */}
+                            <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 line-clamp-2 mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                              {os.title}
+                            </h4>
+
+                            {/* Requisitante & Category */}
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-1 mb-3">
+                              <p className="truncate font-medium flex items-center gap-1">
+                                <User className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span className="truncate">{client ? client.name : "Requisitante Desconhecido"}</span>
+                              </p>
+                              <p className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                                <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                  {os.category}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  {os.startDate || "Sem data"}
+                                </span>
+                              </p>
+                            </div>
+
+                            {/* Warnings & Badges */}
+                            {(os.hasMissingMaterial || os.unreadByClient || os.unreadByProfessional) && (
+                              <div className="flex flex-wrap gap-1 mb-3">
+                                {os.hasMissingMaterial && (
+                                  <span className="bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 animate-pulse">
+                                    <AlertTriangle className="w-2.5 h-2.5" /> Falta Material
+                                  </span>
+                                )}
+                                {os.unreadByClient && (
+                                  <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded text-[9px] font-extrabold flex items-center gap-0.5">
+                                    💬 Parecer Técnico
+                                  </span>
+                                )}
+                                {os.unreadByProfessional && (
+                                  <span className="bg-slate-100 text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded text-[9px] font-extrabold flex items-center gap-0.5">
+                                    💬 Mensagem Gestor
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Card Footer: Technician & Quick Move Control */}
+                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-[11px]">
+                              <div className="flex items-center gap-1.5 truncate">
+                                {os.assignedTo ? (
+                                  <>
+                                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                                    <span className="font-bold text-slate-700 dark:text-slate-300 truncate">
+                                      {os.assignedTo}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="text-amber-600 dark:text-amber-400 italic text-[10px] font-semibold flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" /> Sem técnico
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Quick Status Move Menu */}
+                              <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                                <select
+                                  value={os.status}
+                                  onChange={(e) => {
+                                    const newSt = e.target.value as OSStatus;
+                                    if (newSt !== os.status) {
+                                      handleMoveOrderStatusDirectly(os, newSt);
+                                    }
+                                  }}
+                                  className="text-[10px] font-extrabold bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-lg px-1.5 py-1 outline-none cursor-pointer"
+                                  title="Alterar status da OS"
+                                >
+                                  <option value="aberto">🟡 Aberto</option>
+                                  <option value="em_progresso">🔵 Em Execução</option>
+                                  <option value="aguardando">🟠 Ag. Material</option>
+                                  <option value="concluido">🟢 Concluído</option>
+                                  <option value="cancelado">🔴 Cancelado</option>
+                                </select>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        /* Grid List */
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         {/* Bulk Action Panel */}
         {selectedOrderIds.length > 0 && (
           <motion.div 
@@ -1978,6 +2325,7 @@ export default function ServiceOrders({
           </table>
         </div>
       </div>
+      )}
 
       {/* REQUISITION INTERACTION & RESPONSIVENESS PANEL */}
       {selectedOrder && (
