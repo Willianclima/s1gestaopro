@@ -176,5 +176,23 @@ export interface BlockedDate {
   professionalId?: string; // "all" or professional's specific ID
 }
 
+export interface TravelReminder {
+  id: string;
+  orderId: string;
+  technicianId?: string;
+  technicianName?: string;
+  travelTimeMinutes: number;
+  leadTimeMinutes: number;
+  transportMode: 'car' | 'motorcycle' | 'transit' | 'walking';
+  notes?: string;
+  scheduledDate: string; // YYYY-MM-DD
+  scheduledTime: string; // HH:mm
+  calculatedDepartureTime: string; // YYYY-MM-DD HH:mm
+  notifyBrowser: boolean;
+  notifyInApp: boolean;
+  status: 'active' | 'notified' | 'cancelled';
+  createdAt: string;
+}
+
 
 

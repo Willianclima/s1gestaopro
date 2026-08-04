@@ -68,7 +68,7 @@ export default function NotificationCenter({
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className={`relative p-2 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
+          className={`relative p-2.5 min-w-[44px] min-h-[44px] touch-manipulation rounded-xl border transition-all cursor-pointer flex items-center justify-center active:scale-95 ${
             unreadCount > 0
               ? 'bg-indigo-950/40 border-indigo-500/50 text-indigo-300 hover:bg-indigo-900/50 shadow-md shadow-indigo-950/50'
               : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700/80'
@@ -89,7 +89,7 @@ export default function NotificationCenter({
         <button
           type="button"
           onClick={handleToggleMute}
-          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-all cursor-pointer hidden sm:flex items-center justify-center"
+          className="p-2.5 min-w-[44px] min-h-[44px] touch-manipulation rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-all cursor-pointer hidden sm:flex items-center justify-center active:scale-95"
           title={isMuted ? 'Áudio de notificações silenciado (Clique para ativar som)' : 'Áudio de notificações ativo (Clique para silenciar)'}
           aria-label="Alternar Áudio"
         >

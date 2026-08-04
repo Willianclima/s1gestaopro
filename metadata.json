@@ -1,6 +1,6 @@
 {
   "name": "Gestão de Serviços",
   "description": "Sistema completo para gestão de clientes, requisições de serviço (OS) com ilustrações fotográficas, acompanhamento de equipe por especialidades técnico-operacionais, agenda e assistente de IA.",
-  "requestFramePermissions": ["geolocation"],
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

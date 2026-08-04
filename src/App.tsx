@@ -25,7 +25,7 @@ import { getApiAuthHeaders } from "./services/apiAuth";
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench, Search,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
-  Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff,
+  Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff, Download, WifiOff,
   ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp, MapPin, RefreshCw, Navigation
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
@@ -120,14 +120,93 @@ export default function App() {
     setAppNotifications([]);
   };
 
+  // PWA & Service Worker States
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
+  const [isPwaInstallable, setIsPwaInstallable] = useState<boolean>(false);
+  const [isOffline, setIsOffline] = useState<boolean>(() => typeof navigator !== "undefined" ? !navigator.onLine : false);
+  const [swRegistration, setSwRegistration] = useState<ServiceWorkerRegistration | null>(null);
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       setIsInIframe(window.self !== window.top);
     }
   }, []);
 
+  // Online / Offline network status listeners
   useEffect(() => {
-    if (typeof window !== "undefined" && "Notification" in window) {
+    if (typeof window === "undefined") return;
+
+    const handleOnline = () => {
+      setIsOffline(false);
+      toastSuccess("Conexão com a internet reestabelecida! Sistema sincronizado.", "Online");
+    };
+
+    const handleOffline = () => {
+      setIsOffline(true);
+      toastWarn("Você está desconectado. O PWA continuará operando com dados cacheados localmente.", "Modo Offline");
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // Captura do evento de instalação do PWA (beforeinstallprompt)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+      setIsPwaInstallable(true);
+      console.log("[PWA] Prompt de instalação nativa registrado com sucesso!");
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  // Registro e ciclo de vida do Service Worker (sw.js) para funcionamento offline e cache
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+
+    const registerServiceWorker = async () => {
+      try {
+        const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+        setSwRegistration(registration);
+        console.log("[PWA] Service Worker ('/sw.js') registrado com sucesso! Escopo:", registration.scope);
+
+        // Monitora atualizações da aplicação e cache
+        registration.onupdatefound = () => {
+          const installingWorker = registration.installing;
+          if (installingWorker) {
+            installingWorker.onstatechange = () => {
+              if (installingWorker.state === "installed") {
+                if (navigator.serviceWorker.controller) {
+                  console.log("[PWA] Nova versão do aplicativo instalada em segundo plano.");
+                  toastInfo("Nova versão do sistema pronta! Atualizações aplicadas no cache.", "PWA Atualizado");
+                } else {
+                  console.log("[PWA] Conteúdo e assets essenciais cacheados para uso offline.");
+                }
+              }
+            };
+          }
+        };
+      } catch (error) {
+        console.error("[PWA] Erro ao registrar o Service Worker ('/sw.js'):", error);
+      }
+    };
+
+    registerServiceWorker();
+
+    if ("Notification" in window) {
       setNotificationPermission(Notification.permission);
       if (Notification.permission === "default" && window.self === window.top) {
         Notification.requestPermission().then((perm) => {
@@ -135,18 +214,27 @@ export default function App() {
         }).catch(err => console.error("Erro ao solicitar permissão de notificação:", err));
       }
     }
-
-    // Registro automático do Service Worker fora do iFrame para suporte a notificações em tempo real
-    if (typeof window !== "undefined" && "serviceWorker" in navigator && window.self === window.top) {
-      navigator.serviceWorker.register("/sw.js")
-        .then((reg) => {
-          console.log("[App] Service Worker registrado automaticamente com sucesso! Escopo:", reg.scope);
-        })
-        .catch((err) => {
-          console.error("[App] Falha ao registrar Service Worker automaticamente:", err);
-        });
-    }
   }, []);
+
+  // Função para disparar a instalação nativa do aplicativo PWA
+  const handleInstallPWA = async () => {
+    if (!deferredInstallPrompt) {
+      toastInfo("O aplicativo já está instalado ou seu navegador não suporta o atalho direto.", "Instalar PWA");
+      return;
+    }
+    try {
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      console.log(`[PWA] Escolha do usuário para instalação: ${outcome}`);
+      if (outcome === "accepted") {
+        toastSuccess("Instalação do aplicativo iniciada com sucesso!", "App Instalado");
+      }
+      setDeferredInstallPrompt(null);
+      setIsPwaInstallable(false);
+    } catch (err) {
+      console.error("[PWA] Erro ao acionar atalho de instalação:", err);
+    }
+  };
 
   const requestNotificationPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
@@ -181,6 +269,70 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "settings" | "bi" | "gmail">("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [cadastrosOpen, setCadastrosOpen] = useState(true);
+
+  // Automatic Mobile & Touch Device Auto-Detection
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return (
+        "ontouchstart" in window ||
+        navigator.maxTouchPoints > 0 ||
+        window.matchMedia("(pointer: coarse)").matches ||
+        window.innerWidth < 768
+      );
+    }
+    return false;
+  });
+
+  const [isMobileWidth, setIsMobileWidth] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      const touch =
+        "ontouchstart" in window ||
+        navigator.maxTouchPoints > 0 ||
+        window.matchMedia("(pointer: coarse)").matches ||
+        mobile;
+      setIsMobileWidth(mobile);
+      setIsTouchDevice(touch);
+    };
+
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+    };
+  }, []);
+
+  // Touch Swipe Gesture Handler for Mobile Sidebar (Swipe Left to Close)
+  const touchStartXRef = useRef<number | null>(null);
+  const touchMoveXRef = useRef<number | null>(null);
+
+  const handleSidebarTouchStart = (e: React.TouchEvent) => {
+    touchStartXRef.current = e.touches[0].clientX;
+  };
+
+  const handleSidebarTouchMove = (e: React.TouchEvent) => {
+    touchMoveXRef.current = e.touches[0].clientX;
+  };
+
+  const handleSidebarTouchEnd = () => {
+    if (touchStartXRef.current !== null && touchMoveXRef.current !== null) {
+      const deltaX = touchMoveXRef.current - touchStartXRef.current;
+      // If user swiped left by 40px or more on touch screen, close sidebar
+      if (deltaX < -40) {
+        setIsSidebarOpen(false);
+      }
+    }
+    touchStartXRef.current = null;
+    touchMoveXRef.current = null;
+  };
 
   // LGPD CPF Auth State
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => {
@@ -3124,7 +3276,7 @@ export default function App() {
                                 setRegAddress(addr);
                                 setRegFormattedAddress(addr);
                                 setRegIsAddressValidated(true);
-                                toastSuccess("Localização atual detectada e endereço preenchido!", "GPS Detectado");
+                                toastSuccess(`Localização atual detectada! Idioma do sistema (${navigator.language || 'pt-BR'}) identificado.`, "GPS & Idioma Identificado");
                               } catch (err) {
                                 console.error("Erro ao obter endereço via GPS:", err);
                                 toastError("Não foi possível converter a localização GPS em endereço.", "Erro de Geocodificação");
@@ -3135,15 +3287,16 @@ export default function App() {
                             (error) => {
                               setIsAddressFetching(false);
                               console.warn("Geolocation error:", error);
-                              let msg = "Erro ao acessar a localização do dispositivo.";
+                              const sysLang = navigator.language || "pt-BR";
+                              let msg = `O acesso à localização é utilizado para o preenchimento de endereço. Idioma do sistema detectado automaticamente: (${sysLang}).`;
                               if (error.code === error.PERMISSION_DENIED) {
-                                msg = "Permissão de geolocalização negada pelo usuário ou navegador.";
+                                msg = `Permissão de localização negada. O idioma do sistema (${sysLang}) continua identificado normalmente pelas configurações do navegador.`;
                               } else if (error.code === error.POSITION_UNAVAILABLE) {
-                                msg = "Informação de localização indisponível no momento.";
+                                msg = `Localização indisponível. Idioma do sistema detectado: (${sysLang}).`;
                               } else if (error.code === error.TIMEOUT) {
-                                msg = "Tempo limite esgotado ao buscar localização do dispositivo.";
+                                msg = `Tempo de resposta do GPS excedido. Idioma do sistema detectado: (${sysLang}).`;
                               }
-                              toastError(msg, "Falha na Localização");
+                              toastError(msg, "Solicitação de Localização");
                             },
                             { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
                           );
@@ -3746,35 +3899,62 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans antialiased text-slate-800">
       
-      {/* Mobile Sidebar overlay toggler */}
+      {/* Mobile Sidebar overlay backdrop with click-outside and touch backdrop dismiss */}
       {isSidebarOpen && (
         <div 
           onClick={() => setIsSidebarOpen(false)}
-          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs md:hidden"
+          onTouchEnd={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs md:hidden animate-in fade-in duration-200"
         />
       )}
 
-      {/* Sidebar navigation */}
+      {/* Sidebar navigation with touch swipe-to-close gestures */}
       <aside 
         id="nav-sidebar"
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col justify-between border-r border-slate-950/20 shadow-2xl md:shadow-none transform md:translate-x-0 transition-transform duration-300 md:static md:flex-shrink-0 ${
+        onTouchStart={handleSidebarTouchStart}
+        onTouchMove={handleSidebarTouchMove}
+        onTouchEnd={handleSidebarTouchEnd}
+        className={`fixed inset-y-0 left-0 z-50 w-72 md:w-64 bg-slate-900 text-white flex flex-col justify-between border-r border-slate-950/20 shadow-2xl md:shadow-none transform md:translate-x-0 transition-transform duration-300 md:static md:flex-shrink-0 touch-none ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="p-6 space-y-8 flex-1 overflow-y-auto">
-          {/* Brand header logo */}
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20">
-              G
+        <div className="p-5 md:p-6 space-y-6 flex-1 overflow-y-auto custom-scrollbar">
+          {/* Brand header logo with mobile touch close button */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20 shrink-0">
+                G
+              </div>
+              <div>
+                <span className="font-extrabold text-sm tracking-tight block">Gestão de serviços</span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Gestão Técnica</span>
+              </div>
             </div>
-            <div>
-              <span className="font-extrabold text-sm tracking-tight block">Gestão de serviços</span>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Gestão Técnica</span>
-            </div>
+
+            {/* Touch close button for mobile screens */}
+            <button
+              onClick={() => setIsSidebarOpen(false)}
+              className="md:hidden p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all active:scale-95 touch-manipulation cursor-pointer"
+              title="Fechar menu"
+              aria-label="Fechar menu"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
-          {/* Navigation Links list */}
-          <nav className="space-y-1">
+          {/* Automatic Mobile/Touch Indicator Badge in Sidebar */}
+          {isTouchDevice && (
+            <div className="px-3 py-2 bg-emerald-950/60 border border-emerald-500/30 rounded-xl flex items-center gap-2 text-[10px] font-bold text-emerald-300 shadow-xs">
+              <Smartphone className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
+              <div>
+                <span className="block font-black uppercase tracking-wider text-[9px] text-emerald-400">Modo Touch Detectado</span>
+                <span className="text-slate-300 text-[10px] font-medium">Controles e gestos ativados</span>
+              </div>
+            </div>
+          )}
+
+          {/* Navigation Links list with touch-friendly spacing & active feedback */}
+          <nav className="space-y-1.5">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-3 px-3">
               {currentUser.userType === "admin" 
                 ? "Painel de Admin" 
@@ -3787,18 +3967,18 @@ export default function App() {
                       : "Portal do Requisitante"}
             </span>
             
-            {/* Painel Geral (Gestores, Admin, GS & Professionals as configured) */}
+            {/* Painel Geral */}
             {hasTabPermission("dashboard") && (
               <button
                 onClick={() => { setActiveTab("dashboard"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "dashboard"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <BarChart className="w-4 h-4" />
-                Painel Geral
+                <BarChart className="w-4.5 h-4.5 shrink-0" />
+                <span>Painel Geral</span>
               </button>
             )}
 
@@ -3806,51 +3986,51 @@ export default function App() {
             {hasTabPermission("bi") && (
               <button
                 onClick={() => { setActiveTab("bi"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "bi"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <TrendingUp className="w-4 h-4 text-indigo-400" />
-                Métricas & Estatísticas (B.I)
+                <TrendingUp className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
+                <span>Métricas & Estatísticas (B.I)</span>
               </button>
             )}
 
             {/* Cadastros Collapsible Accordion Block */}
             {(hasTabPermission("clients") || hasTabPermission("professionals")) && (
-              <div className="space-y-0.5">
+              <div className="space-y-1">
                 <button
                   type="button"
                   onClick={() => setCadastrosOpen(!cadastrosOpen)}
-                  className="w-full flex items-center justify-between px-3 py-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800/40 transition-all cursor-pointer"
+                  className="w-full flex items-center justify-between px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800/40 transition-all touch-manipulation active:scale-[0.98] cursor-pointer"
                 >
                   <div className="flex items-center gap-3.5">
-                    <Folder className="w-4 h-4 text-indigo-400" />
+                    <Folder className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
                     <span>Cadastros</span>
                   </div>
                   {cadastrosOpen ? (
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                    <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
                   ) : (
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+                    <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
                   )}
                 </button>
 
                 {cadastrosOpen && (
-                  <div className="pl-3 border-l border-slate-800/80 ml-5 space-y-1 my-1">
+                  <div className="pl-3 border-l-2 border-slate-800/80 ml-5 space-y-1 my-1">
                     {/* Usuários */}
                     {hasTabPermission("clients") && (
                       <button
                         type="button"
                         onClick={() => { setActiveTab("clients"); setIsSidebarOpen(false); }}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                           activeTab === "clients"
                             ? "bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
                             : "text-slate-400 hover:text-white hover:bg-slate-800/20"
                         }`}
                       >
-                        <Users className="w-3.5 h-3.5" />
-                        Usuários
+                        <Users className="w-4 h-4 shrink-0" />
+                        <span>Usuários</span>
                       </button>
                     )}
 
@@ -3859,14 +4039,14 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => { setActiveTab("professionals"); setIsSidebarOpen(false); }}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                           activeTab === "professionals"
                             ? "bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
                             : "text-slate-400 hover:text-white hover:bg-slate-800/20"
                         }`}
                       >
-                        <Wrench className="w-3.5 h-3.5" />
-                        Técnico & Equipes
+                        <Wrench className="w-4 h-4 shrink-0" />
+                        <span>Técnico & Equipes</span>
                       </button>
                     )}
                   </div>
@@ -3878,14 +4058,14 @@ export default function App() {
             {hasTabPermission("orders") && (
               <button
                 onClick={() => { setActiveTab("orders"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "orders"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <ClipboardList className="w-4 h-4" />
-                {currentUser.userType === "requisitante" ? "Minhas Requisições" : currentUser.userType === "profissional" ? "Atendimentos Designados" : "Requisições de Serviço"}
+                <ClipboardList className="w-4.5 h-4.5 shrink-0" />
+                <span>{currentUser.userType === "requisitante" ? "Minhas Requisições" : currentUser.userType === "profissional" ? "Atendimentos Designados" : "Requisições de Serviço"}</span>
               </button>
             )}
 
@@ -3893,14 +4073,14 @@ export default function App() {
             {hasTabPermission("scheduler") && (
               <button
                 onClick={() => { setActiveTab("scheduler"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "scheduler"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <Calendar className="w-4 h-4" />
-                {currentUser.userType === "profissional" ? "Minha Agenda" : "Agenda / Calendário"}
+                <Calendar className="w-4.5 h-4.5 shrink-0" />
+                <span>{currentUser.userType === "profissional" ? "Minha Agenda" : "Agenda / Calendário"}</span>
               </button>
             )}
 
@@ -3908,14 +4088,14 @@ export default function App() {
             {hasTabPermission("reports") && (
               <button
                 onClick={() => { setActiveTab("reports"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "reports"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <Activity className="w-4 h-4" />
-                Relatórios & Logs
+                <Activity className="w-4.5 h-4.5 shrink-0" />
+                <span>Relatórios & Logs</span>
               </button>
             )}
 
@@ -3923,17 +4103,17 @@ export default function App() {
             {hasTabPermission("gmail") && (
               <button
                 onClick={() => { setActiveTab("gmail"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center justify-between px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "gmail"
                     ? "bg-red-950/60 text-red-400 font-extrabold shadow-sm border border-red-500/30"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
                 <div className="flex items-center gap-3.5">
-                  <Mail className="w-4 h-4 text-red-400" />
+                  <Mail className="w-4.5 h-4.5 text-red-400 shrink-0" />
                   <span>Gmail Workspace</span>
                 </div>
-                <span className="bg-red-500/20 text-red-300 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border border-red-500/30">
+                <span className="bg-red-500/20 text-red-300 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border border-red-500/30 shrink-0">
                   Google
                 </span>
               </button>
@@ -3947,14 +4127,14 @@ export default function App() {
                   setActiveTab("settings"); 
                   setIsSidebarOpen(false); 
                 }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "settings"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <Settings className="w-4 h-4" />
-                Configurações
+                <Settings className="w-4.5 h-4.5 shrink-0" />
+                <span>Configurações</span>
               </button>
             )}
 
@@ -3964,32 +4144,32 @@ export default function App() {
             {hasTabPermission("assistant") && (
               <button
                 onClick={() => { setActiveTab("assistant"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
                   activeTab === "assistant"
                     ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
                     : "text-slate-400 hover:text-white hover:bg-slate-800/40"
                 }`}
               >
-                <Sparkles className="w-4 h-4 text-indigo-400" />
-                Assistente IA Gemini
+                <Sparkles className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
+                <span>Assistente IA Gemini</span>
               </button>
             )}
 
             {/* Sair da Conta */}
             <button
               onClick={handleLogout}
-              className="w-full flex items-center gap-3.5 px-3 py-3 rounded-xl text-xs font-extrabold text-rose-450 text-rose-400 hover:text-white hover:bg-rose-950/40 transition-all border border-dashed border-rose-950/20 hover:border-rose-500/30 mt-6 cursor-pointer"
+              className="w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-extrabold text-rose-400 hover:text-white hover:bg-rose-950/40 transition-all border border-dashed border-rose-950/20 hover:border-rose-500/30 mt-6 cursor-pointer touch-manipulation active:scale-[0.98]"
             >
-              <LogOut className="w-4 h-4" />
-              Encerrar Sessão (Sair)
+              <LogOut className="w-4.5 h-4.5 shrink-0" />
+              <span>Encerrar Sessão (Sair)</span>
             </button>
           </nav>
         </div>
 
         {/* Brand footer credentials panel */}
-        <div className="p-6 border-t border-slate-800 text-slate-500 text-[10px] font-semibold space-y-3.5">
-          <div className="flex items-center gap-2 bg-slate-850 bg-slate-850/40 p-2.5 rounded-lg border border-slate-800/20">
-            <ShieldCheck className="w-4.5 h-4.5 text-indigo-400" />
+        <div className="p-5 md:p-6 border-t border-slate-800 text-slate-500 text-[10px] font-semibold space-y-3.5">
+          <div className="flex items-center gap-2 bg-slate-850/40 p-2.5 rounded-lg border border-slate-800/20">
+            <ShieldCheck className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
             <div>
               <span className="text-slate-300 block">Amortecimento Seguro</span>
               <span className="text-[8px] text-slate-500">Isolamento e Segurança LGPD</span>
@@ -4002,13 +4182,14 @@ export default function App() {
       {/* Main Container viewport */}
       <div className="flex-1 flex flex-col min-w-0 min-h-screen relative overflow-hidden">
         
-        {/* Top Header layout */}
+        {/* Top Header layout - Optimized for Mobile & Touch Gestures */}
         <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between px-3 sm:px-6 flex-shrink-0 z-30 gap-2 sm:gap-4">
           <div className="flex items-center gap-2 shrink-0">
             <button 
               onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-400 transition-colors cursor-pointer"
+              className="md:hidden p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl text-slate-700 dark:text-slate-300 transition-all cursor-pointer active:scale-95 touch-manipulation border border-slate-200/60 dark:border-slate-700/60"
               title="Abrir navegação"
+              aria-label="Abrir navegação"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -4048,10 +4229,10 @@ export default function App() {
                 }}
                 onFocus={() => setIsGlobalSearchFocused(true)}
                 placeholder="Busca global (#101, Cliente, Técnico...)"
-                className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:focus:bg-slate-900 text-slate-800 dark:text-slate-100 text-xs font-medium pl-9 pr-16 sm:pr-20 py-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 focus:border-indigo-500 dark:focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-xs"
+                className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:focus:bg-slate-900 text-slate-800 dark:text-slate-100 text-xs font-medium pl-9 pr-12 sm:pr-20 py-2.5 rounded-xl border border-slate-200/80 dark:border-slate-700/80 focus:border-indigo-500 dark:focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-xs touch-manipulation"
               />
               
-              <div className="absolute right-2.5 flex items-center gap-1.5">
+              <div className="absolute right-1 sm:right-2.5 flex items-center gap-1.5">
                 {globalSearchTerm ? (
                   <button
                     type="button"
@@ -4059,10 +4240,10 @@ export default function App() {
                       setGlobalSearchTerm("");
                       setIsGlobalSearchFocused(false);
                     }}
-                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-md transition-colors cursor-pointer"
+                    className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer touch-manipulation active:scale-95"
                     title="Limpar busca"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-4 h-4" />
                   </button>
                 ) : (
                   <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-700/80 border border-slate-200 dark:border-slate-600 rounded-md shadow-2xs">
@@ -4112,7 +4293,7 @@ export default function App() {
                                   setActiveTab("orders");
                                   setIsGlobalSearchFocused(false);
                                 }}
-                                className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer"
+                                className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer touch-manipulation active:scale-[0.99]"
                               >
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-2 mb-0.5">
@@ -4148,7 +4329,7 @@ export default function App() {
                                 setActiveTab("clients");
                                 setIsGlobalSearchFocused(false);
                               }}
-                              className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer"
+                              className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer touch-manipulation active:scale-[0.99]"
                             >
                               <div className="min-w-0 flex-1">
                                 <span className="font-bold text-xs text-slate-800 dark:text-slate-100 block truncate group-hover:text-blue-600 transition-colors">{cl.name}</span>
@@ -4179,7 +4360,7 @@ export default function App() {
                                 setActiveTab("professionals");
                                 setIsGlobalSearchFocused(false);
                               }}
-                              className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer"
+                              className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between gap-3 group border border-transparent hover:border-slate-200 dark:hover:border-slate-700 cursor-pointer touch-manipulation active:scale-[0.99]"
                             >
                               <div className="min-w-0 flex-1">
                                 <span className="font-bold text-xs text-slate-800 dark:text-slate-100 block truncate group-hover:text-emerald-600 transition-colors">{prof.name}</span>
@@ -4212,7 +4393,41 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-4 text-xs font-semibold shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 text-xs font-semibold shrink-0">
+            {/* PWA Install Button */}
+            {isPwaInstallable && (
+              <button
+                onClick={handleInstallPWA}
+                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-sm transition-all active:scale-95 touch-manipulation cursor-pointer shrink-0"
+                title="Instalar o aplicativo nativamente no seu dispositivo"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Instalar App</span>
+              </button>
+            )}
+
+            {/* Offline Mode Indicator Badge */}
+            {isOffline && (
+              <div 
+                className="flex items-center gap-1.5 bg-amber-50 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-700/80 px-2.5 py-1.5 rounded-xl text-amber-800 dark:text-amber-200 text-[10px] font-extrabold shrink-0 animate-pulse shadow-2xs"
+                title="Sem conexão com a internet. O aplicativo PWA está utilizando dados e assets cacheados."
+              >
+                <WifiOff className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                <span>Modo Offline</span>
+              </div>
+            )}
+
+            {/* Touch Device Adaptive Badge */}
+            {isTouchDevice && (
+              <div 
+                className="hidden sm:flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/80 px-2.5 py-1.5 rounded-xl text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold shrink-0 shadow-2xs"
+                title="Detectado dispositivo com tela de toque - Controles otimizados"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+                <span>Modo Touch</span>
+              </div>
+            )}
+
             {/* Quick indicators */}
             <div className="hidden lg:flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 p-2.5 py-1.5 rounded-xl text-slate-600 dark:text-slate-400">
               <CheckCircle className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
@@ -4230,8 +4445,8 @@ export default function App() {
               }}
             />
 
-            <div className="flex items-center gap-2.5">
-              {/* Clean Profile Button - Theme Selector moved inside Popup */}
+            <div className="flex items-center gap-2">
+              {/* Clean Profile Button - Touch-Friendly Target */}
               <button 
                 onClick={() => {
                   setProfileWarehouseId(currentUser.warehouseId || "");
@@ -4239,7 +4454,7 @@ export default function App() {
                   setIsChangePasswordOpen(true);
                   setShowPasswordSection(false); // Reset password section view initially
                 }}
-                className="flex items-center gap-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 p-1.5 px-3 rounded-xl transition-all border border-slate-200/60 dark:border-slate-700 cursor-pointer text-left shrink-0 shadow-xs"
+                className="flex items-center gap-2 min-h-[44px] bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 p-1.5 px-3 rounded-xl transition-all border border-slate-200/60 dark:border-slate-700 cursor-pointer text-left shrink-0 shadow-xs touch-manipulation active:scale-95"
                 title="Meu Perfil e Preferências"
               >
                 {currentUser.photoURL ? (
@@ -4257,10 +4472,12 @@ export default function App() {
                 </div>
               </button>
 
+              {/* Logout Button - Touch-Friendly Target */}
               <button 
                 onClick={handleLogout}
-                className="bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 p-2.5 rounded-xl transition-all border border-slate-200/60 cursor-pointer dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 touch-manipulation active:scale-95"
                 title="Encerrar sessão segura (LGPD)"
+                aria-label="Encerrar sessão"
               >
                 <LogOut className="w-4 h-4" />
               </button>
