@@ -728,12 +728,14 @@ export default function Dashboard({
           </div>
 
           {/* SECTION: MAPA GEOGRÁFICO DAS ORDENS DE SERVIÇO */}
-          <ServiceOrdersMap
-            orders={orders}
-            clients={clients}
-            onSelectOrder={onSelectOrder}
-            onNavigate={onNavigate}
-          />
+          <div id="map-container" className="w-full">
+            <ServiceOrdersMap
+              orders={orders}
+              clients={clients}
+              onSelectOrder={onSelectOrder}
+              onNavigate={onNavigate}
+            />
+          </div>
 
           {/* SECTION: ATENDIMENTOS HOJE */}
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-6 text-left">

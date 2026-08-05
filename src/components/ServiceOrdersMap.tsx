@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import L from 'leaflet';
 import { ServiceOrder, Client } from '../types';
-import { MapPin, Navigation, Eye, Filter, CheckCircle2, Clock, AlertTriangle, Layers, Building2, User, RefreshCw, CheckCheck } from 'lucide-react';
+import { MapPin, Navigation, Eye, Filter, CheckCircle2, Clock, AlertTriangle, Layers, Building2, User, RefreshCw, CheckCheck, Compass, Target, Locate, LocateFixed } from 'lucide-react';
 
 interface ServiceOrdersMapProps {
   orders: ServiceOrder[];
@@ -56,6 +56,19 @@ const KNOWN_STATIC_COORDINATES: Array<{ key: string; coords: { lat: number; lng:
   { key: "araçatuba", coords: { lat: -21.2089, lng: -50.4328 } }
 ];
 
+// Helper to calculate distance in KM using Haversine formula
+const getHaversineDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 export default function ServiceOrdersMap({
   orders,
   clients,
@@ -65,6 +78,17 @@ export default function ServiceOrdersMap({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const userRadiusCircleRef = useRef<L.Circle | null>(null);
+  const userMarkerRef = useRef<L.Marker | null>(null);
+
+  // Lazy loading state: defer heavy Leaflet initialization until after initial Dashboard render
+  const [isMapLoaded, setIsMapLoaded] = useState<boolean>(false);
+
+  // User Geolocation & 5km Radius Filter state
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [userLocationStatus, setUserLocationStatus] = useState<'idle' | 'detecting' | 'success' | 'denied' | 'error'>('idle');
+  const [userLocationError, setUserLocationError] = useState<string>('');
+  const [filterRadius5km, setFilterRadius5km] = useState<boolean>(false);
 
   const [statusFilter, setStatusFilter] = useState<'aberto_progresso' | 'aberto' | 'em_progresso' | 'aguardando' | 'todos'>('aberto_progresso');
   const [selectedCategory, setSelectedCategory] = useState<string>('todos');
@@ -83,13 +107,77 @@ export default function ServiceOrdersMap({
 
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
 
+  // Lazy loading trigger: Delay map initialization until after initial Dashboard render pass
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsMapLoaded(true);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Detect user geolocation
+  const handleDetectUserLocation = () => {
+    if (!navigator.geolocation) {
+      setUserLocationStatus('error');
+      setUserLocationError('Navegador não suporta geolocalização.');
+      return;
+    }
+
+    setUserLocationStatus('detecting');
+    setUserLocationError('');
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        setUserLocation(coords);
+        setUserLocationStatus('success');
+        setFilterRadius5km(true);
+
+        // Fly map to user location with 5km circle
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.flyTo([coords.lat, coords.lng], 13, { duration: 1.5 });
+        }
+      },
+      (error) => {
+        console.warn('Geolocation error:', error);
+        setUserLocationStatus('denied');
+        setUserLocationError('Permissão de localização negada ou indisponível.');
+        // Fallback to Araçatuba central location if user denies location permission
+        const fallback = REGIONAL_CENTERS.aracatuba;
+        setUserLocation(fallback);
+        setFilterRadius5km(true);
+      },
+      { timeout: 8000, enableHighAccuracy: true }
+    );
+  };
+
   // Helper to find client
   const getClientForOrder = (clientId: string) => {
     return clients.find(c => c.id === clientId);
   };
 
   // Resolve coordinate for any address string
-  const resolveCoordinates = (address: string, id: string): { lat: number; lng: number; isPrecise: boolean } => {
+  const resolveCoordinates = (
+    address: string, 
+    id: string, 
+    directLat?: number, 
+    directLng?: number
+  ): { lat: number; lng: number; isPrecise: boolean } => {
+    // Direct technical GPS coordinates registered during service take highest priority
+    if (
+      typeof directLat === 'number' &&
+      typeof directLng === 'number' &&
+      !isNaN(directLat) &&
+      !isNaN(directLng) &&
+      directLat !== 0 &&
+      directLng !== 0
+    ) {
+      return { lat: directLat, lng: directLng, isPrecise: true };
+    }
+
     if (!address) {
       return { ...REGIONAL_CENTERS.aracatuba, isPrecise: false };
     }
@@ -176,9 +264,8 @@ export default function ServiceOrdersMap({
         if (newCache[key]) continue;
 
         try {
-          // Prepare clean search query
           const searchAddr = rawAddr
-            .replace(/-.*?,/, ",") // clean notes
+            .replace(/-.*?,/, ",")
             .trim();
 
           const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchAddr)}&countrycodes=br&limit=1`;
@@ -199,7 +286,6 @@ export default function ServiceOrdersMap({
           console.warn("Geocoding failed for:", rawAddr, err);
         }
 
-        // Delay between requests to prevent rate limiting
         await new Promise(res => setTimeout(res, 600));
       }
 
@@ -223,7 +309,7 @@ export default function ServiceOrdersMap({
     };
   }, [orders, clients]);
 
-  // Filtered orders
+  // Filtered orders with Status + Category + Search + 5km Geolocation Radius Filter
   const filteredOrders = useMemo(() => {
     return orders.filter(os => {
       // Status filter
@@ -247,12 +333,36 @@ export default function ServiceOrdersMap({
         const title = os.title.toLowerCase();
         const id = os.id.toLowerCase();
 
-        return clientName.includes(searchLower) || address.includes(searchLower) || title.includes(searchLower) || id.includes(searchLower);
+        if (!clientName.includes(searchLower) && !address.includes(searchLower) && !title.includes(searchLower) && !id.includes(searchLower)) {
+          return false;
+        }
+      }
+
+      // 5km Radius Filter from User Location
+      if (filterRadius5km && userLocation) {
+        const client = getClientForOrder(os.clientId);
+        const address = os.location || client?.address || "Araçatuba - SP";
+        const { lat, lng } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
+        const distKm = getHaversineDistanceKm(userLocation.lat, userLocation.lng, lat, lng);
+        if (distKm > 5.0) {
+          return false;
+        }
       }
 
       return true;
     });
-  }, [orders, clients, statusFilter, selectedCategory, searchTerm]);
+  }, [orders, clients, statusFilter, selectedCategory, searchTerm, filterRadius5km, userLocation, geocodedCache]);
+
+  // Count of OS within 5km radius for button feedback
+  const countWithin5km = useMemo(() => {
+    if (!userLocation) return 0;
+    return orders.filter(os => {
+      const client = getClientForOrder(os.clientId);
+      const address = os.location || client?.address || "Araçatuba - SP";
+      const { lat, lng } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
+      return getHaversineDistanceKm(userLocation.lat, userLocation.lng, lat, lng) <= 5.0;
+    }).length;
+  }, [orders, clients, userLocation, geocodedCache]);
 
   // Unique categories for dropdown
   const categories = useMemo(() => {
@@ -275,9 +385,9 @@ export default function ServiceOrdersMap({
     }
   }, []);
 
-  // Initialize Map
+  // Initialize Map after lazy-loading trigger completes
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    if (!isMapLoaded || !mapContainerRef.current) return;
 
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
@@ -305,26 +415,111 @@ export default function ServiceOrdersMap({
         mapInstanceRef.current = null;
       }
     };
-  }, []);
+  }, [isMapLoaded]);
 
-  // Render Pins
+  // Render User Location 5km Radius Circle and User Marker
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    // Clean previous circle & marker
+    if (userRadiusCircleRef.current) {
+      userRadiusCircleRef.current.remove();
+      userRadiusCircleRef.current = null;
+    }
+    if (userMarkerRef.current) {
+      userMarkerRef.current.remove();
+      userMarkerRef.current = null;
+    }
+
+    if (userLocation && filterRadius5km) {
+      // 5km Translucent Circle
+      const circle = L.circle([userLocation.lat, userLocation.lng], {
+        radius: 5000, // 5km radius
+        color: '#2563eb',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.12,
+        weight: 2,
+        dashArray: '6, 6'
+      }).addTo(map);
+
+      userRadiusCircleRef.current = circle;
+
+      // Pulse User Marker Icon
+      const userIcon = L.divIcon({
+        className: 'user-location-pin-icon',
+        html: `
+          <div style="
+            background-color: #2563eb;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.4), 0 4px 10px rgba(0,0,0,0.3);
+            position: relative;
+          ">
+            <span style="
+              position: absolute;
+              top: -6px;
+              left: -6px;
+              width: 26px;
+              height: 26px;
+              border-radius: 50%;
+              background: rgba(37, 99, 235, 0.2);
+              animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+            "></span>
+          </div>
+        `,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+
+      const userMarker = L.marker([userLocation.lat, userLocation.lng], { icon: userIcon })
+        .bindPopup(`
+          <div style="font-family: system-ui, sans-serif; padding: 4px; text-align: center;">
+            <strong style="color: #1e40af; font-size: 12px;">📍 Sua Localização Atual</strong>
+            <p style="margin: 4px 0 0 0; font-size: 10px; color: #475569;">
+              Raio de filtragem ativo: <strong>5.0 km</strong><br/>
+              (${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)})
+            </p>
+          </div>
+        `);
+
+      userMarker.addTo(map);
+      userMarkerRef.current = userMarker;
+    }
+  }, [userLocation, filterRadius5km, isMapLoaded]);
+
+  // Render Pins for Service Orders
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markersGroup = markersGroupRef.current;
-    if (!map || !markersGroup) return;
+    if (!map || !markersGroup || !isMapLoaded) return;
 
     markersGroup.clearLayers();
 
     if (filteredOrders.length === 0) return;
 
     const bounds: L.LatLngBounds = L.latLngBounds([]);
+    const inProgressBounds: L.LatLngBounds = L.latLngBounds([]);
+    const inProgressOrders = filteredOrders.filter(o => o.status === 'em_progresso');
 
     filteredOrders.forEach(os => {
       const client = getClientForOrder(os.clientId);
       const address = os.location || client?.address || "Araçatuba - SP";
-      const { lat, lng, isPrecise } = resolveCoordinates(address, os.id);
+      const { lat, lng, isPrecise } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
 
       bounds.extend([lat, lng]);
+      if (os.status === 'em_progresso') {
+        inProgressBounds.extend([lat, lng]);
+      }
+
+      // Calculate distance if user location is detected
+      let distText = '';
+      if (userLocation) {
+        const d = getHaversineDistanceKm(userLocation.lat, userLocation.lng, lat, lng);
+        distText = ` (${d.toFixed(1)} km de você)`;
+      }
 
       // Determine pin color based on status
       let pinColor = "#f59e0b"; // amber for aberto
@@ -348,24 +543,38 @@ export default function ServiceOrdersMap({
       else if (os.priority === 'high') priorityBadge = "🟠 ALTA";
       else if (os.priority === 'medium') priorityBadge = "🟡 MÉDIA";
 
-      // Custom HTML Marker Icon
+      // Custom HTML Marker Icon with special pulse for em_progresso
+      const isEmProgresso = os.status === 'em_progresso';
       const customIcon = L.divIcon({
         className: 'custom-map-pin-icon',
         html: `
           <div style="
             background-color: ${pinColor};
-            width: 32px;
-            height: 32px;
+            width: 34px;
+            height: 34px;
             border-radius: 50% 50% 50% 0;
             transform: rotate(-45deg);
             display: flex;
             align-items: center;
             justify-content: center;
             border: 3px solid white;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            box-shadow: ${isEmProgresso ? '0 0 0 4px rgba(37,99,235,0.35), 0 4px 12px rgba(0,0,0,0.3)' : '0 4px 10px rgba(0,0,0,0.3)'};
             cursor: pointer;
             transition: transform 0.2s ease;
+            position: relative;
           ">
+            ${isEmProgresso ? `
+              <span style="
+                position: absolute;
+                top: -3px;
+                right: -3px;
+                width: 10px;
+                height: 10px;
+                background-color: #10b981;
+                border: 2px solid white;
+                border-radius: 50%;
+              "></span>
+            ` : ''}
             <div style="
               width: 10px;
               height: 10px;
@@ -374,13 +583,13 @@ export default function ServiceOrdersMap({
             "></div>
           </div>
         `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-        popupAnchor: [0, -32]
+        iconSize: [34, 34],
+        iconAnchor: [17, 34],
+        popupAnchor: [0, -34]
       });
 
       const popupContent = `
-        <div style="font-family: system-ui, sans-serif; padding: 4px; max-width: 270px; text-align: left;">
+        <div style="font-family: system-ui, sans-serif; padding: 4px; max-width: 280px; text-align: left;">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
             <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; background: #e2e8f0; color: #1e293b; padding: 2px 6px; border-radius: 4px; font-family: monospace;">
               #${os.id.substring(0, 8)}
@@ -400,16 +609,17 @@ export default function ServiceOrdersMap({
 
           <div style="font-size: 11px; color: #1e293b; margin-bottom: 6px; line-height: 1.3; background: #f8fafc; padding: 6px 8px; border-radius: 8px; border: 1px solid #e2e8f0;">
             📍 <strong>Endereço:</strong> ${address}
+            ${distText ? `<div style="color: #2563eb; font-weight: 700; margin-top: 2px;">📐 Distância: ${distText}</div>` : ''}
           </div>
 
           <div style="margin-bottom: 8px; font-size: 10px; font-weight: 700;">
             ${isPrecise 
-              ? `<span style="color: #059669; background: #d1fae5; padding: 2px 6px; border-radius: 4px;">✓ GPS Confirmado</span>`
-              : `<span style="color: #d97706; background: #fef3c7; padding: 2px 6px; border-radius: 4px;">⚡ Localização Aproximada</span>`
+              ? `<span style="color: #059669; background: #d1fae5; padding: 3px 8px; border-radius: 6px; display: inline-block;">✓ GPS Técnico Registrado (${lat.toFixed(4)}, ${lng.toFixed(4)})</span>`
+              : `<span style="color: #d97706; background: #fef3c7; padding: 3px 8px; border-radius: 6px; display: inline-block;">⚡ Localização Aproximada</span>`
             }
           </div>
 
-          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 10px;">
+          <div style="display: flex; justify-space-between; align-items: center; font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 10px;">
             <span>Cat: ${os.category || 'Geral'}</span>
             <span>Prioridade: ${priorityBadge}</span>
           </div>
@@ -459,10 +669,35 @@ export default function ServiceOrdersMap({
       markersGroup.addLayer(marker);
     });
 
-    if (filteredOrders.length > 0 && bounds.isValid()) {
+    if (inProgressOrders.length > 0 && inProgressBounds.isValid() && !filterRadius5km) {
+      map.flyToBounds(inProgressBounds, { padding: [60, 60], maxZoom: 15, duration: 1.2 });
+    } else if (filteredOrders.length > 0 && bounds.isValid()) {
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
     }
-  }, [filteredOrders, clients, geocodedCache, onSelectOrder]);
+  }, [filteredOrders, clients, geocodedCache, onSelectOrder, isMapLoaded, filterRadius5km, userLocation]);
+
+  const focusInProgressMarkers = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const inProgressOrders = filteredOrders.filter(o => o.status === 'em_progresso');
+    if (inProgressOrders.length === 0) {
+      fitAllMarkers();
+      return;
+    }
+
+    const bounds = L.latLngBounds([]);
+    inProgressOrders.forEach(os => {
+      const client = getClientForOrder(os.clientId);
+      const address = os.location || client?.address || "Araçatuba - SP";
+      const { lat, lng } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
+      bounds.extend([lat, lng]);
+    });
+
+    if (bounds.isValid()) {
+      map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 15, duration: 1.2 });
+    }
+  };
 
   const fitAllMarkers = () => {
     const map = mapInstanceRef.current;
@@ -472,9 +707,13 @@ export default function ServiceOrdersMap({
     filteredOrders.forEach(os => {
       const client = getClientForOrder(os.clientId);
       const address = os.location || client?.address || "Araçatuba - SP";
-      const { lat, lng } = resolveCoordinates(address, os.id);
+      const { lat, lng } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
       bounds.extend([lat, lng]);
     });
+
+    if (userLocation && filterRadius5km) {
+      bounds.extend([userLocation.lat, userLocation.lng]);
+    }
 
     if (bounds.isValid()) {
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
@@ -486,11 +725,12 @@ export default function ServiceOrdersMap({
     if (!map) return;
     const client = getClientForOrder(os.clientId);
     const address = os.location || client?.address || "Araçatuba - SP";
-    const { lat, lng } = resolveCoordinates(address, os.id);
+    const { lat, lng } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
     map.flyTo([lat, lng], 15, { duration: 1.2 });
     setSelectedOrderState(os);
   };
 
+  const inProgressCount = orders.filter(o => o.status === 'em_progresso').length;
   const openCount = orders.filter(o => o.status === 'aberto' || o.status === 'em_progresso' || o.status === 'aguardando').length;
 
   return (
@@ -503,13 +743,19 @@ export default function ServiceOrdersMap({
               <MapPin className="w-5 h-5" />
             </span>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-base font-extrabold text-slate-900 tracking-tight">
                   Mapa Geográfico de Atendimentos de Campo
                 </h3>
                 <span className="bg-indigo-100 text-indigo-800 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full font-mono">
                   {openCount} OS Abertas
                 </span>
+                {filterRadius5km && (
+                  <span className="bg-blue-100 text-blue-800 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                    <Target className="w-3 h-3 text-blue-600" />
+                    Filtro 5km Ativo ({filteredOrders.length} OS)
+                  </span>
+                )}
                 {isGeocoding && (
                   <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
                     <RefreshCw className="w-3 h-3 animate-spin" />
@@ -525,13 +771,62 @@ export default function ServiceOrdersMap({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Button: Detect User Location & Filter 5km */}
+          <button
+            type="button"
+            onClick={() => {
+              if (filterRadius5km) {
+                setFilterRadius5km(false);
+              } else if (userLocation) {
+                setFilterRadius5km(true);
+              } else {
+                handleDetectUserLocation();
+              }
+            }}
+            className={`text-xs font-extrabold py-2 px-3.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
+              filterRadius5km
+                ? 'bg-blue-600 hover:bg-blue-700 text-white ring-2 ring-blue-500/30'
+                : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200'
+            }`}
+            title="Exibir marcadores de OS dentro do raio de 5km da minha posição"
+          >
+            {userLocationStatus === 'detecting' ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                Detectando Posição GPS...
+              </>
+            ) : filterRadius5km ? (
+              <>
+                <LocateFixed className="w-3.5 h-3.5 text-white" />
+                Raio 5km (Ativo - {filteredOrders.length} OS)
+              </>
+            ) : (
+              <>
+                <Locate className="w-3.5 h-3.5 text-blue-600" />
+                {userLocation ? 'Ativar Raio 5km' : 'Filtrar Raio 5km (GPS)'}
+              </>
+            )}
+          </button>
+
+          {inProgressCount > 0 && (
+            <button
+              type="button"
+              onClick={focusInProgressMarkers}
+              className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-extrabold py-2 px-3.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs animate-pulse"
+              title="Centralizar mapa nos atendimentos em andamento"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              OS Em Progresso ({inProgressCount})
+            </button>
+          )}
+
           <button
             type="button"
             onClick={fitAllMarkers}
             className="bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-extrabold py-2 px-3.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
           >
             <Navigation className="w-3.5 h-3.5 text-indigo-600" />
-            Centralizar Mapa
+            Centralizar Tudo
           </button>
           
           {onNavigate && (
@@ -546,6 +841,20 @@ export default function ServiceOrdersMap({
           )}
         </div>
       </div>
+
+      {/* Geolocation feedback banner if error or denied */}
+      {userLocationStatus === 'denied' && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 px-3.5 py-2 rounded-xl text-xs font-medium flex items-center justify-between gap-2">
+          <span>⚠️ Permissão de GPS negada. Utilizando centro de Araçatuba-SP como referência para o raio de 5km.</span>
+          <button 
+            type="button" 
+            onClick={() => setUserLocationStatus('idle')} 
+            className="text-amber-700 font-bold hover:underline"
+          >
+            Fechar
+          </button>
+        </div>
+      )}
 
       {/* Filter Toolbar */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
@@ -605,18 +914,46 @@ export default function ServiceOrdersMap({
 
       {/* Main Container: Map + Sidebar List */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-stretch">
-        {/* Leaflet Map Canvas */}
-        <div className="lg:col-span-3 min-h-[380px] h-[420px] rounded-2xl border border-slate-200 overflow-hidden relative shadow-inner z-0">
-          <div ref={mapContainerRef} className="w-full h-full" />
+        {/* Leaflet Map Canvas (#map-container with Lazy Loading Skeleton) */}
+        <div className="lg:col-span-3 min-h-[380px] h-[420px] rounded-2xl border border-slate-200 overflow-hidden relative shadow-inner z-0 bg-slate-100">
+          {!isMapLoaded ? (
+            /* Skeleton / Lazy-loading placeholder */
+            <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-slate-50 to-slate-100">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3 animate-pulse border border-indigo-100 shadow-sm">
+                <MapPin className="w-6 h-6 animate-bounce" />
+              </div>
+              <p className="text-xs font-extrabold text-slate-800 tracking-tight">
+                Carregando Visualização Geográfica do Mapa...
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1 max-w-xs font-medium">
+                Inicialização assíncrona inteligente pós-renderização inicial do Dashboard.
+              </p>
+              <div className="mt-4 flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
+                <span className="text-[10px] font-extrabold uppercase text-indigo-700 tracking-widest">
+                  Processando Geocodificação
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div id="map-container" ref={mapContainerRef} className="w-full h-full" />
+          )}
 
           {/* Map Floating Legend */}
-          <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md p-2.5 rounded-xl border border-slate-200 shadow-lg text-[10px] font-bold text-slate-700 space-y-1 z-[1000] pointer-events-auto">
-            <div className="text-[9px] uppercase font-black text-slate-400 tracking-wider mb-1">Legenda dos Pinos</div>
-            <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block border border-white" /> Aberto</div>
-            <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block border border-white" /> Em Progresso</div>
-            <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-600 inline-block border border-white" /> Aguardando Material</div>
-            <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block border border-white" /> Concluído</div>
-          </div>
+          {isMapLoaded && (
+            <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md p-2.5 rounded-xl border border-slate-200 shadow-lg text-[10px] font-bold text-slate-700 space-y-1 z-[1000] pointer-events-auto">
+              <div className="text-[9px] uppercase font-black text-slate-400 tracking-wider mb-1">Legenda dos Pinos</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block border border-white" /> Aberto</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block border border-white" /> Em Progresso</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-600 inline-block border border-white" /> Aguardando Material</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block border border-white" /> Concluído</div>
+              {filterRadius5km && (
+                <div className="pt-1 mt-1 border-t border-slate-200 flex items-center gap-1.5 text-blue-700">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block border border-white animate-pulse" /> Raio 5km Ativo
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Sidebar: Location List */}
@@ -632,16 +969,31 @@ export default function ServiceOrdersMap({
 
           <div className="flex-1 overflow-y-auto space-y-2 pr-1">
             {filteredOrders.length === 0 ? (
-              <div className="text-center py-10 text-slate-400 text-xs font-semibold">
-                Nenhuma ordem de serviço encontrada para os filtros aplicados.
+              <div className="text-center py-10 text-slate-400 text-xs font-semibold space-y-2">
+                <p>Nenhuma ordem de serviço encontrada para os filtros aplicados.</p>
+                {filterRadius5km && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterRadius5km(false)}
+                    className="text-blue-600 font-extrabold hover:underline text-[11px]"
+                  >
+                    Desativar filtro de raio 5km
+                  </button>
+                )}
               </div>
             ) : (
               filteredOrders.map(os => {
                 const client = getClientForOrder(os.clientId);
                 const address = os.location || client?.address || 'Sem endereço informado';
-                const { isPrecise } = resolveCoordinates(address, os.id);
+                const { lat, lng, isPrecise } = resolveCoordinates(address, os.id, os.lat ?? client?.lat, os.lng ?? client?.lng);
                 const isSelected = selectedOrder?.id === os.id;
                 
+                let distText = '';
+                if (userLocation) {
+                  const d = getHaversineDistanceKm(userLocation.lat, userLocation.lng, lat, lng);
+                  distText = `${d.toFixed(1)} km`;
+                }
+
                 let badgeClass = "bg-amber-100 text-amber-800 border-amber-300";
                 if (os.status === "em_progresso") badgeClass = "bg-blue-100 text-blue-800 border-blue-300";
                 else if (os.status === "concluido") badgeClass = "bg-emerald-100 text-emerald-800 border-emerald-300";
@@ -660,9 +1012,16 @@ export default function ServiceOrdersMap({
                       <span className="text-[9px] font-black font-mono uppercase bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">
                         #{os.id.substring(0, 8)}
                       </span>
-                      <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full border ${badgeClass}`}>
-                        {os.status.replace("_", " ")}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        {distText && (
+                          <span className="text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded-md">
+                            📐 {distText}
+                          </span>
+                        )}
+                        <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full border ${badgeClass}`}>
+                          {os.status.replace("_", " ")}
+                        </span>
+                      </div>
                     </div>
 
                     <h5 className="text-xs font-extrabold text-slate-900 line-clamp-1 leading-tight">

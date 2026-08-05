@@ -106,6 +106,9 @@ export const INITIAL_ORDERS: ServiceOrder[] = [
       { id: "h-5", status: "em_progresso", comment: "Visita inicial executada. Mariana Costa iniciou homologação dos cabos.", date: "2026-06-14T11:00:00Z", author: "profissional" }
     ],
     createdAt: "2026-06-13T09:00:00Z",
+    location: "Rua Tabapuã, 450 - Itaim Bibi, São Paulo - SP",
+    lat: -23.5855,
+    lng: -46.6785,
     images: ["https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&q=80&w=400"],
     hasMissingMaterial: false
   },

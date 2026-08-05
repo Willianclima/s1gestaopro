@@ -62,6 +62,8 @@ export interface ServiceOrder {
   history: OSHistoryLog[];
   createdAt: string;
   location?: string; // Specific location/address of the technical service in Aracatuba
+  lat?: number; // Technical GPS latitude registered during service
+  lng?: number; // Technical GPS longitude registered during service
   images?: string[]; // Base64 or online URLs of physical issues
   completedImages?: string[]; // Base64 or online URLs of the completed service/repair
   unreadByClient?: boolean; // Client/Gestor needs to read latest professional's response
