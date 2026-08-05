@@ -56,6 +56,9 @@ async function validateUrlForSsrf(urlStr: string): Promise<{ safe: boolean; reas
 
 const app = express();
 
+// Configura 'trust proxy' para 1 salto de proxy reverso (Cloud Run / Nginx)
+app.set("trust proxy", 1);
+
 // 1. Proteção de Cabeçalhos HTTP com Helmet
 app.use(
   helmet({
@@ -76,7 +79,8 @@ const apiRateLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: "Muitas requisições enviadas ao servidor num curto intervalo. Por favor, aguarde alguns instantes e tente novamente."
-  }
+  },
+  validate: { xForwardedForHeader: false }
 });
 
 const authRateLimiter = rateLimit({
@@ -86,7 +90,8 @@ const authRateLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: "Muitas tentativas de autenticação detectadas. Por favor, aguarde 15 minutos e tente novamente."
-  }
+  },
+  validate: { xForwardedForHeader: false }
 });
 
 app.use("/api/", apiRateLimiter);

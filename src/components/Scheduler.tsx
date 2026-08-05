@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from "react";
-import { ServiceOrder, Client, BlockedDate, Professional, CurrentUser, TravelReminder } from "../types";
+import { ServiceOrder, Client, BlockedDate, Professional, CurrentUser, TravelReminder, ServiceCategory, AppNotification, SlaReminderLog } from "../types";
 import { 
   Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, User, CheckCircle, 
   ArrowRight, Plus, Lock, Trash2, ShieldAlert, Sparkles, AlertTriangle, HelpCircle,
-  Navigation, MapPin, Bell, Volume2, Car, Bike, Bus, Footprints, Send, CheckCircle2, X, Edit2
+  Navigation, MapPin, Bell, Volume2, Car, Bike, Bus, Footprints, Send, CheckCircle2, X, Edit2,
+  Timer, Hourglass, ShieldCheck, Zap, RefreshCw, Filter, Search, Sliders, Check, BellRing
 } from "lucide-react";
 import { playNotificationSound } from "../utils/notificationSound";
+import { calculateOsSlaStatus, triggerManualSlaReminder, checkAndTriggerSlaReminders, OsSlaInfo } from "../utils/slaUtils";
+import { useToast } from "./ToastContext";
 
 interface SchedulerProps {
   orders: ServiceOrder[];
@@ -17,6 +20,10 @@ interface SchedulerProps {
   onAddBlockedDate?: (bDate: BlockedDate) => void;
   onDeleteBlockedDate?: (id: string) => void;
   globalSearchTerm?: string;
+  categories?: ServiceCategory[];
+  onUpdateCategory?: (category: ServiceCategory) => void;
+  onAddNotification?: (notif: AppNotification) => void;
+  onAddSystemLog?: (action: string, details: string, category: "requisicao" | "requisitante" | "tecnico" | "sistema") => void;
 }
 
 export default function Scheduler({ 
@@ -28,8 +35,13 @@ export default function Scheduler({
   blockedDates = [],
   onAddBlockedDate,
   onDeleteBlockedDate,
-  globalSearchTerm
+  globalSearchTerm,
+  categories = [],
+  onUpdateCategory,
+  onAddNotification,
+  onAddSystemLog
 }: SchedulerProps) {
+  const { toastSuccess, toastInfo, toastWarn } = useToast();
   const [currentDate, setCurrentDate] = useState(new Date(2026, 5, 15)); // Default to June 15, 2026 (matching current time year-month)
   const [selectedDateStr, setSelectedDateStr] = useState("2026-06-15");
 
@@ -40,9 +52,39 @@ export default function Scheduler({
   const [blockError, setBlockError] = useState("");
 
   // View mode selector
-  const [viewMode, setViewMode] = useState<"general" | "blocked_calendar" | "travel_reminders">("general");
+  const [viewMode, setViewMode] = useState<"general" | "blocked_calendar" | "travel_reminders" | "sla_reminders">("general");
   const [blockFilterType, setBlockFilterType] = useState<"all" | "holiday" | "day_off">("all");
   const [blockFilterProf, setBlockFilterProf] = useState<string>("all");
+
+  // SLA Management State
+  const [slaFilter, setSlaFilter] = useState<'all' | 'em_dia' | 'vencendo_logo' | 'vencido'>('all');
+  const [slaSearchTerm, setSlaSearchTerm] = useState('');
+  const [editingCatSla, setEditingCatSla] = useState<ServiceCategory | null>(null);
+  const [catSlaHoursInput, setCatSlaHoursInput] = useState<number>(24);
+  const [catReminderIntervalInput, setCatReminderIntervalInput] = useState<number>(4);
+  const [catReminderEnabledInput, setCatReminderEnabledInput] = useState<boolean>(true);
+  const [catNotifyGestorInput, setCatNotifyGestorInput] = useState<boolean>(true);
+  const [catNotifyTechInput, setCatNotifyTechInput] = useState<boolean>(true);
+
+  // SLA Reminder History logs state
+  const [slaLogs, setSlaLogs] = useState<SlaReminderLog[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("gestao_servicos_sla_reminder_history");
+        if (saved) return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  const loadSlaLogs = () => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("gestao_servicos_sla_reminder_history");
+        if (saved) setSlaLogs(JSON.parse(saved));
+      } catch (e) {}
+    }
+  };
 
   // Notification API Permission State
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
@@ -387,13 +429,20 @@ export default function Scheduler({
     return true;
   }).sort((a, b) => a.date.localeCompare(b.date));
 
+  // Active Monitored OS SLA calculations for SLA view & tab badge
+  const activeMonitoredOrders = orders.filter(o => o.status === 'aberto' || o.status === 'em_progresso');
+  const monitoredSlaInfos = activeMonitoredOrders.map(o => calculateOsSlaStatus(o, categories));
+  const overdueSlaCount = monitoredSlaInfos.filter(i => i.isOverdue).length;
+  const expiringSoonSlaCount = monitoredSlaInfos.filter(i => i.isExpiringSoon).length;
+  const healthySlaCount = monitoredSlaInfos.filter(i => i.status === 'em_dia').length;
+
   return (
     <div className="space-y-6">
       {/* Header and Mode Selector */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Agenda de Atendimentos</h1>
-          <p className="text-sm text-slate-500 font-medium font-sans">Acompanhe prazos de início/conclusão de serviços ou planeje feriados e folgas técnicas.</p>
+          <p className="text-sm text-slate-500 font-medium font-sans">Acompanhe prazos de início/conclusão de serviços, SLAs por categoria ou planeje feriados e folgas técnicas.</p>
         </div>
         
         {/* Modern Segmented Control */}
@@ -439,8 +488,535 @@ export default function Scheduler({
               </span>
             )}
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setViewMode("sla_reminders");
+              loadSlaLogs();
+            }}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              viewMode === "sla_reminders"
+                ? "bg-amber-600 text-white shadow-md shadow-amber-600/10"
+                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-400"
+            }`}
+          >
+            <Timer className="w-3.5 h-3.5 text-amber-300" />
+            <span>SLAs & Lembretes Automáticos</span>
+            {(overdueSlaCount > 0 || expiringSoonSlaCount > 0) && (
+              <span className={`ml-1 px-1.5 py-0.2 text-[9px] font-black rounded-full ${
+                overdueSlaCount > 0 ? "bg-red-500 text-white animate-pulse" : "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+              }`}>
+                {overdueSlaCount > 0 ? `${overdueSlaCount} Vencidas` : `${expiringSoonSlaCount} Alertas`}
+              </span>
+            )}
+          </button>
         </div>
       </div>
+
+      {/* SLA & AUTOMATIC REMINDERS TAB VIEW */}
+      {viewMode === "sla_reminders" && (
+        <div className="space-y-6">
+          {/* Hero Banner & Quick Actions */}
+          <div className="bg-gradient-to-r from-slate-900 via-amber-950 to-indigo-950 text-white rounded-2xl p-5 shadow-xl border border-amber-800/40 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+                  <Timer className="w-6 h-6 animate-pulse text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                    Sistema de SLAs & Lembretes Automáticos por Categoria
+                    <span className="text-[10px] bg-amber-500/20 text-amber-300 font-extrabold uppercase px-2 py-0.5 rounded-full border border-amber-500/30">
+                      Monitoramento Ativo
+                    </span>
+                  </h2>
+                  <p className="text-xs text-slate-300 font-medium">
+                    Defina prazos de expiração (SLAs) para cada categoria e acompanhe os disparos automáticos para OS em aberto ou em progresso.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onAddNotification) {
+                      const res = checkAndTriggerSlaReminders(orders, categories, [], onAddNotification, onAddSystemLog);
+                      loadSlaLogs();
+                      toastSuccess(`Verificação concluída. ${res.newRemindersCount} novos lembretes gerados.`, "SLAs Atualizados");
+                    }
+                  }}
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Executar Verificação Manual</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SLA Metrics Summary Stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+              <div className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-3">
+                <div className="p-2 bg-blue-500/20 text-blue-400 rounded-lg">
+                  <Hourglass className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xl font-black text-white">{activeMonitoredOrders.length}</div>
+                  <div className="text-[11px] text-slate-400 font-medium">OS sob Monitoramento</div>
+                </div>
+              </div>
+
+              <div className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xl font-black text-emerald-400">{healthySlaCount}</div>
+                  <div className="text-[11px] text-slate-400 font-medium">SLAs Em Dia</div>
+                </div>
+              </div>
+
+              <div className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-3">
+                <div className="p-2 bg-amber-500/20 text-amber-400 rounded-lg">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xl font-black text-amber-400">{expiringSoonSlaCount}</div>
+                  <div className="text-[11px] text-slate-400 font-medium">Vencendo em Breve</div>
+                </div>
+              </div>
+
+              <div className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-3">
+                <div className="p-2 bg-red-500/20 text-red-400 rounded-lg">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xl font-black text-red-400">{overdueSlaCount}</div>
+                  <div className="text-[11px] text-slate-400 font-medium">SLAs Vencidos / Expirados</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 1: SLA CONFIGURATION BY CATEGORY */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-700/60 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Sliders className="w-5 h-5 text-amber-600" />
+                  <span>Configuração de SLAs e Frequência por Categoria de Serviço</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  O gestor pode definir prazos limite (em horas) e o intervalo de disparos de lembretes automáticos para cada categoria.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {categories.map((cat) => {
+                const catSla = cat.slaHours || 48;
+                const catInterval = cat.reminderIntervalHours || 6;
+                const catEnabled = cat.reminderEnabled !== false;
+
+                const activeCountForCat = activeMonitoredOrders.filter(o => o.category === cat.name).length;
+
+                return (
+                  <div 
+                    key={cat.id} 
+                    className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 hover:border-amber-400 dark:hover:border-amber-500 transition-all space-y-3 flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-bold text-sm text-slate-800 dark:text-white flex items-center gap-2">
+                          <span className={`w-3 h-3 rounded-full inline-block`} style={{ backgroundColor: cat.color }}></span>
+                          {cat.name}
+                        </span>
+                        <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
+                          catEnabled 
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700" 
+                            : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                        }`}>
+                          {catEnabled ? "Lembretes Ativos" : "Pausado"}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs bg-white dark:bg-slate-800 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-700">
+                        <div>
+                          <span className="text-slate-400 text-[10px] uppercase font-extrabold block">Prazo SLA</span>
+                          <span className="font-extrabold text-amber-600 dark:text-amber-400 text-sm">{catSla} horas</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 text-[10px] uppercase font-extrabold block">Intervalo Lembretes</span>
+                          <span className="font-extrabold text-slate-700 dark:text-slate-200 text-sm">a cada {catInterval}h</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
+                        <span>OS ativas nesta categoria:</span>
+                        <span className="font-bold text-slate-700 dark:text-slate-200">{activeCountForCat}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCatSla(cat);
+                        setCatSlaHoursInput(catSla);
+                        setCatReminderIntervalInput(catInterval);
+                        setCatReminderEnabledInput(catEnabled);
+                        setCatNotifyGestorInput(cat.notifyGestor !== false);
+                        setCatNotifyTechInput(cat.notifyTechnician !== false);
+                      }}
+                      className="w-full py-1.5 px-3 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 hover:bg-amber-50 dark:hover:bg-amber-950/30 text-amber-700 dark:text-amber-400 font-bold text-xs rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>Configurar SLA & Disparos</span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* SECTION 2: LIVE MONITORING OF ACTIVE SERVICE ORDERS */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-700/60 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Hourglass className="w-5 h-5 text-indigo-600" />
+                  <span>Ordens de Serviço em Aberto / Em Progresso (Monitoramento de SLA)</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Status em tempo real das OS ativas, tempo restante e envio manual de cobrança para o técnico.
+                </p>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar OS, categoria ou técnico..."
+                    value={slaSearchTerm}
+                    onChange={(e) => setSlaSearchTerm(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-white focus:outline-hidden focus:ring-1 focus:ring-amber-500 w-48 sm:w-64"
+                  />
+                </div>
+
+                <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700 text-xs">
+                  <button
+                    onClick={() => setSlaFilter('all')}
+                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${slaFilter === 'all' ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs' : 'text-slate-500'}`}
+                  >
+                    Todas ({activeMonitoredOrders.length})
+                  </button>
+                  <button
+                    onClick={() => setSlaFilter('em_dia')}
+                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${slaFilter === 'em_dia' ? 'bg-emerald-500 text-white shadow-xs' : 'text-slate-500'}`}
+                  >
+                    Em dia ({healthySlaCount})
+                  </button>
+                  <button
+                    onClick={() => setSlaFilter('vencendo_logo')}
+                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${slaFilter === 'vencendo_logo' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-500'}`}
+                  >
+                    Vencendo ({expiringSoonSlaCount})
+                  </button>
+                  <button
+                    onClick={() => setSlaFilter('vencido')}
+                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${slaFilter === 'vencido' ? 'bg-red-500 text-white shadow-xs' : 'text-slate-500'}`}
+                  >
+                    Vencidas ({overdueSlaCount})
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* List of OS under SLA tracking */}
+            {(() => {
+              const filteredSlaInfos = monitoredSlaInfos.filter(info => {
+                if (slaFilter !== 'all' && info.status !== slaFilter) return false;
+                if (slaSearchTerm.trim()) {
+                  const q = slaSearchTerm.toLowerCase();
+                  return info.osId.toLowerCase().includes(q) ||
+                    info.osTitle.toLowerCase().includes(q) ||
+                    info.categoryName.toLowerCase().includes(q) ||
+                    info.assignedTo.toLowerCase().includes(q);
+                }
+                return true;
+              });
+
+              if (filteredSlaInfos.length === 0) {
+                return (
+                  <div className="py-12 text-center text-slate-400 space-y-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
+                    <CheckCircle className="w-10 h-10 mx-auto text-emerald-500" />
+                    <p className="font-bold text-sm text-slate-700 dark:text-slate-300">Nenhuma Ordem de Serviço encontrada para o filtro selecionado.</p>
+                    <p className="text-xs text-slate-400">Todas as ordens de serviço ativas estão com o SLA em dia!</p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300 border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-700 text-slate-400 uppercase font-black text-[10px] tracking-wider">
+                        <th className="py-3 px-3">OS / Título</th>
+                        <th className="py-3 px-3">Categoria</th>
+                        <th className="py-3 px-3">Status OS</th>
+                        <th className="py-3 px-3">Técnico Atribuído</th>
+                        <th className="py-3 px-3">Prazo SLA / Expiração</th>
+                        <th className="py-3 px-3">Progresso SLA</th>
+                        <th className="py-3 px-3 text-right">Ação de Cobrança</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                      {filteredSlaInfos.map(info => {
+                        const matchedOS = orders.find(o => o.id === info.osId);
+                        if (!matchedOS) return null;
+
+                        return (
+                          <tr key={info.osId} className="hover:bg-slate-50/80 dark:hover:bg-slate-900/30 transition-colors">
+                            <td className="py-3 px-3 font-bold text-slate-800 dark:text-white">
+                              <div>#{info.osId}</div>
+                              <div className="text-xs font-normal text-slate-500 line-clamp-1">{info.osTitle}</div>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="font-semibold text-slate-700 dark:text-slate-300">{info.categoryName}</span>
+                              <span className="block text-[10px] text-slate-400">SLA: {info.slaHours}h</span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                matchedOS.status === 'aberto' ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                              }`}>
+                                {matchedOS.status === 'aberto' ? 'Aberto' : 'Em Progresso'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 font-medium text-slate-700 dark:text-slate-300">
+                              {info.assignedTo}
+                            </td>
+                            <td className="py-3 px-3">
+                              <div className="font-bold">{info.deadlineFormatted}</div>
+                              <div className={`text-[11px] font-black ${
+                                info.status === 'vencido' ? 'text-red-600 dark:text-red-400' :
+                                info.status === 'vencendo_logo' ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
+                              }`}>
+                                {info.formattedRemaining}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 w-36">
+                              <div className="flex items-center gap-2">
+                                <div className="w-full bg-slate-200 dark:bg-slate-700 h-2 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full rounded-full transition-all ${
+                                      info.status === 'vencido' ? 'bg-red-500' :
+                                      info.status === 'vencendo_logo' ? 'bg-amber-500' : 'bg-emerald-500'
+                                    }`}
+                                    style={{ width: `${info.percentageElapsed}%` }}
+                                  ></div>
+                                </div>
+                                <span className="text-[10px] font-extrabold text-slate-500">{info.percentageElapsed}%</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onAddNotification) {
+                                    triggerManualSlaReminder(matchedOS, categories, onAddNotification, onAddSystemLog);
+                                    loadSlaLogs();
+                                    toastSuccess(`Lembrete de cobrança de SLA enviado com sucesso para ${info.assignedTo}!`, "Lembrete Disparado");
+                                  }
+                                }}
+                                className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-lg transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <BellRing className="w-3.5 h-3.5" />
+                                <span>Cobrar Técnico</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* SECTION 3: RECENT AUTOMATIC REMINDER DISPATCH LOGS */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700/60 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Bell className="w-5 h-5 text-amber-500" />
+                  <span>Histórico de Lembretes de SLA Disparados pelo Sistema</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Registro de auditoria dos alertas de vencimento e cobranças enviadas para a equipe.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={loadSlaLogs}
+                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 text-slate-700 dark:text-slate-200 font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Atualizar Histórico</span>
+              </button>
+            </div>
+
+            {slaLogs.length === 0 ? (
+              <div className="py-8 text-center text-slate-400 text-xs">
+                Nenhum disparo de lembrete de SLA registrado recentemente.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {slaLogs.map(log => (
+                  <div key={log.id} className="p-3 bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-200/80 dark:border-slate-700/60 text-xs flex flex-col md:flex-row md:items-center justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase ${
+                          log.reminderType === 'expired' ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300' :
+                          log.reminderType === 'warning' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' :
+                          'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                        }`}>
+                          {log.reminderType === 'expired' ? 'SLA Expirado' : log.reminderType === 'warning' ? 'Aviso Vencimento' : 'Cobrança Manual'}
+                        </span>
+                        <span className="font-bold text-slate-800 dark:text-white">OS #{log.osId} - {log.osTitle}</span>
+                      </div>
+                      <p className="text-slate-600 dark:text-slate-300 text-[11px]">{log.message}</p>
+                    </div>
+
+                    <div className="text-right text-[11px] text-slate-400 shrink-0">
+                      <div>{new Date(log.sentAt).toLocaleString("pt-BR")}</div>
+                      <div className="font-semibold text-slate-600 dark:text-slate-300">Para: {log.recipientName}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* EDIT CATEGORY SLA MODAL */}
+          {editingCatSla && (
+            <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl max-w-md w-full border border-slate-200 dark:border-slate-700 shadow-2xl p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+                  <h3 className="font-black text-lg text-slate-800 dark:text-white flex items-center gap-2">
+                    <Timer className="w-5 h-5 text-amber-500" />
+                    <span>SLA: {editingCatSla.name}</span>
+                  </h3>
+                  <button
+                    onClick={() => setEditingCatSla(null)}
+                    className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-4 text-xs">
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1">Prazo do SLA da Categoria (em horas)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="720"
+                      value={catSlaHoursInput}
+                      onChange={(e) => setCatSlaHoursInput(Number(e.target.value))}
+                      className="w-full p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white font-bold"
+                    />
+                    <span className="text-[11px] text-slate-400 mt-1 block">
+                      Ex: 24 horas (1 dia), 48 horas (2 dias), 72 horas (3 dias).
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1">Intervalo de Reenvio de Lembretes (em horas)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="48"
+                      value={catReminderIntervalInput}
+                      onChange={(e) => setCatReminderIntervalInput(Number(e.target.value))}
+                      className="w-full p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white font-bold"
+                    />
+                    <span className="text-[11px] text-slate-400 mt-1 block">
+                      Frequência em que os lembretes automáticos de cobrança serão reenviados após o vencimento.
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={catReminderEnabledInput}
+                        onChange={(e) => setCatReminderEnabledInput(e.target.checked)}
+                        className="rounded-md text-amber-600 focus:ring-amber-500 w-4 h-4"
+                      />
+                      <span className="font-bold text-slate-800 dark:text-white">Ativar Lembretes Automáticos para esta Categoria</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer pl-6">
+                      <input
+                        type="checkbox"
+                        checked={catNotifyGestorInput}
+                        onChange={(e) => setCatNotifyGestorInput(e.target.checked)}
+                        className="rounded-md text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+                      />
+                      <span className="text-slate-600 dark:text-slate-300">Notificar Gestores quando SLA expirar</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer pl-6">
+                      <input
+                        type="checkbox"
+                        checked={catNotifyTechInput}
+                        onChange={(e) => setCatNotifyTechInput(e.target.checked)}
+                        className="rounded-md text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+                      />
+                      <span className="text-slate-600 dark:text-slate-300">Notificar Técnico responsável pela OS</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setEditingCatSla(null)}
+                    className="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-xs hover:bg-slate-200 transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onUpdateCategory && editingCatSla) {
+                        onUpdateCategory({
+                          ...editingCatSla,
+                          slaHours: catSlaHoursInput,
+                          reminderIntervalHours: catReminderIntervalInput,
+                          reminderEnabled: catReminderEnabledInput,
+                          notifyGestor: catNotifyGestorInput,
+                          notifyTechnician: catNotifyTechInput
+                        });
+                        toastSuccess(`Configurações de SLA para "${editingCatSla.name}" salvas com sucesso!`, "SLA Atualizado");
+                        setEditingCatSla(null);
+                      }
+                    }}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Salvar Alterações de SLA</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* TRAVEL REMINDERS TAB VIEW */}
       {viewMode === "travel_reminders" && (

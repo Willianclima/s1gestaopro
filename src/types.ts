@@ -74,6 +74,25 @@ export interface ServiceCategory {
   id: string;
   name: string;
   color: string;
+  slaHours?: number; // Prazo padrão do SLA em horas (ex: 24, 48, 72)
+  reminderIntervalHours?: number; // Frequência de lembretes em horas (ex: 4, 8, 12)
+  reminderEnabled?: boolean; // Lembretes automáticos ativados (padrão: true)
+  notifyGestor?: boolean; // Enviar notificação ao gestor
+  notifyTechnician?: boolean; // Enviar notificação ao técnico atribuído
+}
+
+export interface SlaReminderLog {
+  id: string;
+  osId: string;
+  osTitle: string;
+  categoryName: string;
+  reminderType: 'warning' | 'expired' | 'manual';
+  recipientName?: string;
+  recipientRole?: string;
+  sentAt: string;
+  slaHours: number;
+  timeOverdueMinutes?: number;
+  message: string;
 }
 
 export interface Professional {

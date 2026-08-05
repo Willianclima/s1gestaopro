@@ -4,13 +4,15 @@ import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Edit3, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
-  Filter, QrCode, Tag, Kanban, List, GripVertical
+  Filter, QrCode, Tag, Kanban, List, GripVertical, Timer, BellRing
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
 import { useToast } from "./ToastContext";
 import { motion } from "motion/react";
 import { getApiAuthHeaders } from "../services/apiAuth";
+import { compressImageWithCanvas, cacheEvidencePhotosInSW } from "../utils/imageCompression";
+import { calculateOsSlaStatus, triggerManualSlaReminder } from "../utils/slaUtils";
 
 interface ServiceOrdersProps {
   orders: ServiceOrder[];
@@ -1204,20 +1206,33 @@ export default function ServiceOrders({
     setIsFormOpen(true);
   };
 
-  // Base64 File Uploader hook
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Base64 File Uploader hook com compressão automática via Canvas
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    Array.from(files).forEach((file: File) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          setPreviewImages(prev => [...prev, reader.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    const fileList = Array.from(files) as File[];
+    for (const file of fileList) {
+      try {
+        const compressedUrl = await compressImageWithCanvas(file, {
+          maxWidth: 1280,
+          maxHeight: 1280,
+          quality: 0.75,
+          format: 'image/jpeg'
+        });
+        setPreviewImages(prev => [...prev, compressedUrl]);
+        toastSuccess("Foto de evidência comprimida com sucesso via Canvas!", "Compressão Concluída");
+      } catch (err) {
+        console.warn("Fallback FileReader para imagem de evidência:", err);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === "string") {
+            setPreviewImages(prev => [...prev, reader.result as string]);
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
   };
 
   const handleInsertPresetImage = (url: string) => {
@@ -1270,6 +1285,9 @@ export default function ServiceOrders({
       }
       
       onUpdateOrder(updatedOS);
+      if (previewImages.length > 0) {
+        cacheEvidencePhotosInSW(previewImages, editingOrder.id);
+      }
     } else {
       const ordersForIdCalc = globalOrders || orders;
       const numericIds = ordersForIdCalc
@@ -1304,6 +1322,9 @@ export default function ServiceOrders({
         ]
       };
       onAddOrder(newOS);
+      if (previewImages.length > 0) {
+        cacheEvidencePhotosInSW(previewImages, newOSId);
+      }
     }
 
     setIsFormOpen(false);
@@ -1530,19 +1551,32 @@ export default function ServiceOrders({
     setCompletionImages([]); // clean previous
   };
 
-  const handleCompletionImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCompletionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    Array.from(files).forEach((file: File) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          setCompletionImages(prev => [...prev, reader.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    const fileList = Array.from(files) as File[];
+    for (const file of fileList) {
+      try {
+        const compressedUrl = await compressImageWithCanvas(file, {
+          maxWidth: 1280,
+          maxHeight: 1280,
+          quality: 0.75,
+          format: 'image/jpeg'
+        });
+        setCompletionImages(prev => [...prev, compressedUrl]);
+        toastSuccess("Foto de conclusão comprimida via Canvas!", "Compressão Concluída");
+      } catch (err) {
+        console.warn("Fallback FileReader para imagem de conclusão:", err);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === "string") {
+            setCompletionImages(prev => [...prev, reader.result as string]);
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
   };
 
   const handleInsertCompletionPresetImage = (url: string) => {
@@ -1581,6 +1615,9 @@ export default function ServiceOrders({
     };
 
     onUpdateOrder(updatedOrder);
+    if (completionImages.length > 0) {
+      cacheEvidencePhotosInSW(completionImages, selectedOrder.id);
+    }
     setSelectedOrder(updatedOrder);
     setIsCompletingService(false);
     setCompletionImages([]);

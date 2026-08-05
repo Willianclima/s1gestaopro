@@ -63,6 +63,75 @@ async function prunePhotoCache(maxBytes = MAX_PHOTO_CACHE_BYTES, maxEntries = MA
   }
 }
 
+// Função para escanear o CacheStorage 'service-photos' e remover arquivos expirados ou sem referência ativa em OS registradas
+async function clearExpiredPhotos(activePhotoUrls = null, maxAgeMs = 14 * 24 * 60 * 60 * 1000) {
+  try {
+    const photoCache = await caches.open(PHOTOS_CACHE_NAME);
+    const requests = await photoCache.keys();
+    if (requests.length === 0) return;
+
+    console.log(`[SW clearExpiredPhotos] Escaneando ${requests.length} fotos no CacheStorage '${PHOTOS_CACHE_NAME}'...`);
+    const now = Date.now();
+    let removedCount = 0;
+
+    // Tenta obter a lista de fotos de OS ativas caso fornecida
+    const activeUrlsSet = activePhotoUrls && Array.isArray(activePhotoUrls) 
+      ? new Set(activePhotoUrls.map(u => typeof u === 'string' ? u.toLowerCase() : ''))
+      : null;
+
+    for (const request of requests) {
+      const url = request.url;
+      const urlLower = url.toLowerCase();
+      let shouldDelete = false;
+
+      // 1. Se possuir lista de fotos de OS ativas e a URL da foto não constar no conjunto ativo
+      if (activeUrlsSet && activeUrlsSet.size > 0) {
+        if (!activeUrlsSet.has(urlLower) && !Array.from(activeUrlsSet).some(activeUrl => activeUrl && (urlLower.includes(activeUrl) || activeUrl.includes(urlLower)))) {
+          shouldDelete = true;
+          console.log(`[SW clearExpiredPhotos] Foto órfã detectada (sem referência ativa em nenhuma OS): ${url}`);
+        }
+      }
+
+      // 2. Se não foi deletada como órfã, verifica expiração por idade / data HTTP
+      if (!shouldDelete) {
+        const response = await photoCache.match(request);
+        if (response) {
+          const expiresHeader = response.headers.get('expires');
+          const dateHeader = response.headers.get('date');
+
+          if (expiresHeader) {
+            const expiresTime = new Date(expiresHeader).getTime();
+            if (!isNaN(expiresTime) && expiresTime < now) {
+              shouldDelete = true;
+            }
+          }
+
+          if (!shouldDelete && dateHeader) {
+            const cachedTime = new Date(dateHeader).getTime();
+            if (!isNaN(cachedTime) && (now - cachedTime) > maxAgeMs) {
+              shouldDelete = true;
+              console.log(`[SW clearExpiredPhotos] Foto expirada por tempo limite de retenção (>14 dias): ${url}`);
+            }
+          }
+        }
+      }
+
+      if (shouldDelete) {
+        await photoCache.delete(request);
+        removedCount++;
+      }
+    }
+
+    if (removedCount > 0) {
+      console.log(`[SW clearExpiredPhotos] Varredura concluída: ${removedCount} foto(s) de evidência órfã(s) ou expirada(s) removida(s) de '${PHOTOS_CACHE_NAME}'.`);
+    } else {
+      console.log(`[SW clearExpiredPhotos] Varredura concluída: Nenhuma foto órfã ou expirada encontrada.`);
+    }
+  } catch (err) {
+    console.warn('[SW clearExpiredPhotos] Erro durante o escaneamento de fotos de evidência:', err);
+  }
+}
+
 // Instalação do Service Worker
 self.addEventListener('install', (event) => {
   console.log('[Service Worker] Instalando Service Worker com CacheStorage dedicado para evidências...');
@@ -79,7 +148,7 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Ativação do Service Worker e limpeza de caches antigos
+// Ativação do Service Worker e limpeza de caches antigos + remoção de fotos órfãs/expiradas
 self.addEventListener('activate', (event) => {
   console.log('[Service Worker] Ativando e assumindo controle...');
   const currentCaches = [CACHE_NAME, PHOTOS_CACHE_NAME];
@@ -93,7 +162,9 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    }).then(() => self.clients.claim())
+    })
+    .then(() => clearExpiredPhotos())
+    .then(() => self.clients.claim())
   );
 });
 
@@ -230,23 +301,52 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Comunicação com o App (ex: Pré-cache manual de fotos de uma Ordem de Serviço)
+// Comunicação com o App (ex: Pré-cache manual de fotos de uma Ordem de Serviço e Limpeza de Fotos Órfãs/Expiradas)
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'CACHE_EVIDENCE_PHOTOS' && Array.isArray(event.data.urls)) {
+  if (!event.data) return;
+
+  if (event.data.type === 'CACHE_EVIDENCE_PHOTOS' && Array.isArray(event.data.urls)) {
     event.waitUntil(
-      caches.open(PHOTOS_CACHE_NAME).then((photoCache) => {
-        return Promise.all(
-          event.data.urls.map((url) => {
-            if (!url || typeof url !== 'string' || url.startsWith('data:')) return Promise.resolve();
-            return fetch(url, { mode: 'no-cors' }).then((res) => {
-              if (res && (res.status === 200 || res.type === 'opaque')) {
-                return photoCache.put(url, res);
+      caches.open(PHOTOS_CACHE_NAME).then(async (photoCache) => {
+        const orderId = event.data.orderId || 'os_evidence';
+        await Promise.all(
+          event.data.urls.map(async (url, idx) => {
+            if (!url || typeof url !== 'string') return;
+            try {
+              if (url.startsWith('data:')) {
+                // Armazena fotos comprimidas em formato Data URL no CacheStorage 'service-photos'
+                const res = await fetch(url);
+                const blob = await res.blob();
+                const key = `/photos/compressed_${orderId}_${idx}.jpg`;
+                const responseToCache = new Response(blob, {
+                  headers: {
+                    'Content-Type': blob.type || 'image/jpeg',
+                    'Cache-Control': 'public, max-age=31536000, immutable',
+                    'Content-Length': blob.size.toString(),
+                    'X-Canvas-Compressed': 'true'
+                  }
+                });
+                await photoCache.put(key, responseToCache);
+                await photoCache.put(url, responseToCache.clone());
+              } else {
+                const res = await fetch(url, { mode: 'no-cors' });
+                if (res && (res.status === 200 || res.type === 'opaque')) {
+                  await photoCache.put(url, res);
+                }
               }
-            }).catch((err) => console.warn('[SW] Não foi possível pré-cachear foto:', url, err));
+            } catch (err) {
+              console.warn('[SW] Não foi possível salvar foto no CacheStorage service-photos:', url, err);
+            }
           })
         );
+        await prunePhotoCache();
       })
     );
+  }
+
+  if (event.data.type === 'CLEAR_EXPIRED_PHOTOS' || event.data.type === 'SYNC_ACTIVE_OS_PHOTOS') {
+    const activePhotoUrls = Array.isArray(event.data.activePhotoUrls) ? event.data.activePhotoUrls : null;
+    event.waitUntil(clearExpiredPhotos(activePhotoUrls));
   }
 });
 

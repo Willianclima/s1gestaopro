@@ -19,6 +19,7 @@ import NotificationCenter from "./components/NotificationCenter";
 import { reverseGeocodeCoordinates, fetchAddressFromCep } from "./services/addressValidation";
 import { playNotificationSound } from "./utils/notificationSound";
 import { broadcastNotification } from "./utils/broadcastNotification";
+import { checkAndTriggerSlaReminders } from "./utils/slaUtils";
 import { googleSignIn, logoutUser, subscribeToAuthChanges, saveUserProfile } from "./services/firebaseAuth";
 import { getApiAuthHeaders } from "./services/apiAuth";
 
@@ -1161,6 +1162,33 @@ export default function App() {
       return updated;
     });
   };
+
+  // Automatic SLA Reminder Engine - Periodic background monitor
+  useEffect(() => {
+    if (!orders || orders.length === 0 || !categories || categories.length === 0) return;
+
+    const runSlaCheck = () => {
+      checkAndTriggerSlaReminders(
+        orders,
+        categories,
+        appNotifications,
+        (notif) => {
+          notifyUser({
+            title: notif.title,
+            message: notif.message,
+            type: notif.type,
+            serviceOrderId: notif.serviceOrderId,
+            soundType: 'alert'
+          });
+        },
+        addSystemLog
+      );
+    };
+
+    runSlaCheck();
+    const interval = setInterval(runSlaCheck, 40000);
+    return () => clearInterval(interval);
+  }, [orders, categories]);
 
   const addLoginAttempt = (username: string, userId: string, status: "success" | "failed", userType: string, details: string) => {
     const attempt: LoginAttempt = {
@@ -2939,51 +2967,7 @@ export default function App() {
             <div className="space-y-6 text-left">
               <div className="space-y-1">
                 <h2 className="text-xl font-extrabold tracking-tight text-white">Acesse o Sistema</h2>
-                <p className="text-xs text-slate-400 font-medium">Insira seu CPF de cadastro e sua senha ou conecte via Google Workspace.</p>
-              </div>
-
-              {/* Google Workspace First Access & Login Option */}
-              <div className="space-y-3 bg-slate-900/90 p-4.5 rounded-2xl border border-indigo-500/40 shadow-lg">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-300">Acesso Integrado Google Workspace</span>
-                  </div>
-                  <span className="bg-indigo-950 text-indigo-300 border border-indigo-800 text-[10px] font-black px-2 py-0.5 rounded-full">
-                    G Suite / Gmail
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  disabled={isGoogleLoading}
-                  onClick={handleGoogleWorkspaceAuth}
-                  className="w-full bg-slate-950 hover:bg-slate-900 text-white font-bold text-xs py-3.5 px-4 rounded-xl border border-indigo-500/40 shadow-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer hover:border-indigo-400 group active:scale-[0.99]"
-                >
-                  {isGoogleLoading ? (
-                    <RefreshCw className="w-4.5 h-4.5 text-indigo-400 animate-spin" />
-                  ) : (
-                    <svg className="w-4.5 h-4.5 shrink-0" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                    </svg>
-                  )}
-                  <span className="truncate">
-                    {isGoogleLoading ? "Conectando ao Google Workspace..." : "Entrar / Primeiro Acesso com Google Workspace"}
-                  </span>
-                </button>
-                <p className="text-[10px] text-slate-400 leading-tight">
-                  Autenticação instantânea para servidores e requisitantes Prefeitura. Localiza ou cria seu acesso em 1 clique.
-                </p>
-              </div>
-
-              <div className="relative flex py-0.5 items-center">
-                <div className="flex-grow border-t border-slate-800"></div>
-                <span className="flex-shrink mx-3 text-[10px] font-extrabold text-slate-500 uppercase tracking-widest">
-                  ou entre com CPF e Senha
-                </span>
-                <div className="flex-grow border-t border-slate-800"></div>
+                <p className="text-xs text-slate-400 font-medium">Insira seu CPF de cadastro e sua senha para entrar ou conecte via Conta Google.</p>
               </div>
 
               {/* Secure Message */}
@@ -3073,12 +3057,50 @@ export default function App() {
 
                 <button
                   type="submit"
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-widest py-4 px-6 rounded-2xl shadow-lg cursor-pointer flex items-center justify-center gap-2 transition-all shadow-indigo-600/20"
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase tracking-widest py-4 px-6 rounded-2xl shadow-lg cursor-pointer flex items-center justify-center gap-2 transition-all shadow-indigo-600/20 hover:shadow-indigo-600/30 active:scale-[0.99]"
                 >
                   <ShieldCheck className="w-4.5 h-4.5 text-indigo-200" />
                   Entrar
                 </button>
               </form>
+
+              {/* Divider */}
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-800"></div>
+                <span className="flex-shrink mx-3 text-[10px] font-extrabold text-slate-500 uppercase tracking-widest">
+                  ou entre com sua conta Google
+                </span>
+                <div className="flex-grow border-t border-slate-800"></div>
+              </div>
+
+              {/* Google Integrated Login Option - Placed below 'Entrar' */}
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  disabled={isGoogleLoading}
+                  onClick={handleGoogleWorkspaceAuth}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-3.5 px-4 rounded-2xl border border-slate-700/80 shadow-md flex items-center justify-center gap-3 transition-all cursor-pointer hover:border-indigo-500/60 hover:shadow-indigo-500/10 group active:scale-[0.99]"
+                >
+                  {isGoogleLoading ? (
+                    <RefreshCw className="w-5 h-5 text-indigo-400 animate-spin" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-white flex items-center justify-center p-1 shadow-xs shrink-0">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                      </svg>
+                    </div>
+                  )}
+                  <span className="text-xs sm:text-sm font-bold text-slate-200 group-hover:text-white transition-colors">
+                    {isGoogleLoading ? "Conectando ao Google..." : "Entrar com Conta Google"}
+                  </span>
+                </button>
+                <p className="text-[10px] text-slate-400 leading-tight text-center">
+                  Acesso rápido e automático para servidores e requisitantes municipais.
+                </p>
+              </div>
 
               <div className="flex flex-col sm:flex-row justify-between items-center border-t border-slate-800 pt-4 gap-3 text-xs font-semibold">
                 <div className="flex items-center gap-1.5">
@@ -4581,6 +4603,10 @@ export default function App() {
                 onAddBlockedDate={handleAddBlockedDate}
                 onDeleteBlockedDate={handleDeleteBlockedDate}
                 globalSearchTerm={globalSearchTerm}
+                categories={categories}
+                onUpdateCategory={handleUpdateCategory}
+                onAddNotification={(notif) => notifyUser({ title: notif.title, message: notif.message, type: notif.type, serviceOrderId: notif.serviceOrderId, soundType: 'alert' })}
+                onAddSystemLog={addSystemLog}
               />
             )}
 

@@ -417,10 +417,6 @@ export default function Dashboard({
           {/* Welcome Banner */}
           <div className="bg-slate-900 rounded-3xl border border-slate-950/10 shadow-xl p-6 sm:p-8 text-white relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
             <div className="z-10 space-y-2">
-              <div className="flex items-center gap-2 bg-slate-800 border border-slate-700/50 px-3 py-1 rounded-full w-max text-emerald-400 font-bold text-[10px] uppercase tracking-wider">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Painel Operacional Simplificado</span>
-              </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Painel de Triagem & Atividades</h1>
               <p className="text-xs sm:text-sm text-slate-400 font-medium">
                 Resumo operacional em tempo real e visualização consolidada dos atendimentos agendados para hoje.

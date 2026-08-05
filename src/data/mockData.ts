@@ -7,14 +7,14 @@ export const INITIAL_ALMOXARIFADOS: Almoxarifado[] = [
 ];
 
 export const INITIAL_CATEGORIES: ServiceCategory[] = [
-  { id: "cat-1", name: "Suporte de TI & Redes", color: "blue" },
-  { id: "cat-2", name: "Eletrodomésticos & Climatização", color: "orange" },
-  { id: "cat-3", name: "Mecânica & Automotivo", color: "red" },
-  { id: "cat-4", name: "Design & Móveis Planejados", color: "purple" },
-  { id: "cat-5", name: "Serviços Gerais & Elétrica", color: "green" },
-  { id: "cat-6", name: "Serviços Gerais & hidraulica", color: "cyan" },
-  { id: "cat-7", name: "Serviços Gerais & Fundações", color: "amber" },
-  { id: "cat-8", name: "Serviços Gerais & construções", color: "indigo" }
+  { id: "cat-1", name: "Suporte de TI & Redes", color: "blue", slaHours: 24, reminderIntervalHours: 4, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-2", name: "Eletrodomésticos & Climatização", color: "orange", slaHours: 48, reminderIntervalHours: 6, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-3", name: "Mecânica & Automotivo", color: "red", slaHours: 36, reminderIntervalHours: 6, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-4", name: "Design & Móveis Planejados", color: "purple", slaHours: 72, reminderIntervalHours: 12, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-5", name: "Serviços Gerais & Elétrica", color: "green", slaHours: 24, reminderIntervalHours: 4, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-6", name: "Serviços Gerais & hidraulica", color: "cyan", slaHours: 24, reminderIntervalHours: 4, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-7", name: "Serviços Gerais & Fundações", color: "amber", slaHours: 96, reminderIntervalHours: 12, reminderEnabled: true, notifyGestor: true, notifyTechnician: true },
+  { id: "cat-8", name: "Serviços Gerais & construções", color: "indigo", slaHours: 120, reminderIntervalHours: 24, reminderEnabled: true, notifyGestor: true, notifyTechnician: true }
 ];
 
 export const INITIAL_PROFESSIONALS: Professional[] = [
