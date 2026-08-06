@@ -297,9 +297,9 @@ export default function RolePermissionsManager({
   const [newProfileName, setNewProfileName] = useState<string>("");
   const [newProfileDesc, setNewProfileDesc] = useState<string>("");
 
-  // Preferencia visual do administrador: 'cards' ou 'list'
+  // Preferencia visual do administrador: 'list' (padrão) ou 'cards'
   const [viewMode, setViewMode] = useState<"cards" | "list">(() => {
-    return (localStorage.getItem("permissions_view_mode") as "cards" | "list") || "cards";
+    return (localStorage.getItem("permissions_view_mode") as "cards" | "list") || "list";
   });
 
   // Filtro de busca para rotinas
@@ -475,11 +475,25 @@ export default function RolePermissionsManager({
 
         {/* Controles do Administrador: Estilo de Exibição & Criar Perfil */}
         <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-between lg:justify-end">
-          {/* Switcher de Formato: Grade (Cards) vs Lista */}
+          {/* Switcher de Formato: Lista (Padrão) vs Grade (Cards) */}
           <div className="bg-slate-950 p-1.5 rounded-2xl border border-amber-500/40 flex items-center gap-1.5 shadow-lg">
             <span className="text-[10px] font-black uppercase text-slate-400 pl-2 pr-1 hidden md:inline">
               Visualização:
             </span>
+            <button
+              type="button"
+              onClick={() => handleSetViewMode("list")}
+              className={`flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                viewMode === "list"
+                  ? "bg-amber-500 text-slate-950 shadow-md"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              }`}
+              title="Modo de Visualização em Lista Compacta"
+            >
+              <List className="w-4 h-4" />
+              <span>Lista (Padrão)</span>
+            </button>
+
             <button
               type="button"
               onClick={() => handleSetViewMode("cards")}
@@ -492,20 +506,6 @@ export default function RolePermissionsManager({
             >
               <LayoutGrid className="w-4 h-4" />
               <span>Grade (Cards)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleSetViewMode("list")}
-              className={`flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                viewMode === "list"
-                  ? "bg-amber-500 text-slate-950 shadow-md"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/60"
-              }`}
-              title="Modo de Visualização em Lista Compacta"
-            >
-              <List className="w-4 h-4" />
-              <span>Lista</span>
             </button>
           </div>
 
