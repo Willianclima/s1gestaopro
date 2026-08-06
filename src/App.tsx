@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate, AppNotification } from "./types";
+import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate, AppNotification, AccessProfile } from "./types";
 import { 
   INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS, INITIAL_ALMOXARIFADOS
 } from "./data/mockData";
@@ -16,6 +16,7 @@ import AddressValidationWidget from "./components/AddressValidationWidget";
 import GmailIntegrationPanel from "./components/GmailIntegrationPanel";
 import MapLocationPickerModal from "./components/MapLocationPickerModal";
 import NotificationCenter from "./components/NotificationCenter";
+import RolePermissionsManager, { DEFAULT_ACCESS_PROFILES } from "./components/RolePermissionsManager";
 import { reverseGeocodeCoordinates, fetchAddressFromCep } from "./services/addressValidation";
 import { playNotificationSound } from "./utils/notificationSound";
 import { broadcastNotification } from "./utils/broadcastNotification";
@@ -506,18 +507,48 @@ export default function App() {
     localStorage.setItem("service_mgt_permissions3", JSON.stringify(newPerms));
   };
 
+  const [accessProfiles, setAccessProfiles] = useState<AccessProfile[]>(() => {
+    const saved = localStorage.getItem("service_mgt_access_profiles");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
+    }
+    return DEFAULT_ACCESS_PROFILES;
+  });
+
+  const handleSaveAccessProfiles = (updatedProfiles: AccessProfile[]) => {
+    setAccessProfiles(updatedProfiles);
+    localStorage.setItem("service_mgt_access_profiles", JSON.stringify(updatedProfiles));
+    addSystemLog(
+      "Matriz de Permissões Atualizada",
+      `O Administrador atualizou as rotinas e permissões dos perfis de acesso do sistema.`,
+      "sistema"
+    );
+  };
+
   const hasTabPermission = (tab: string) => {
     if (!currentUser) return false;
     const userRole = currentUser.userType || "requisitante";
-    if (userRole === "admin") return true; // master always has access to all resources
-    if (tab === "bi" || tab === "gmail") {
-      return true;
-    }
-    if (tab === "settings") {
-      return ["gestor", "gestor_servicos", "profissional", "requisitante"].includes(userRole);
-    }
-    const allowed = permissions[tab] || [];
-    return allowed.includes(userRole);
+    if (userRole === "admin") return true; // Administrador mestre possui acesso irrestrito
+
+    const userProfile = accessProfiles.find(p => p.id === userRole) || accessProfiles.find(p => p.id === "requisitante");
+    if (!userProfile) return true;
+
+    if (tab === "dashboard") return !!userProfile.permissions.view_dashboard;
+    if (tab === "bi") return !!userProfile.permissions.view_bi_metrics;
+    if (tab === "clients") return !!userProfile.permissions.view_clients || !!userProfile.permissions.manage_client_approvals;
+    if (tab === "orders") return !!userProfile.permissions.view_all_orders || !!userProfile.permissions.view_own_requisitions || !!userProfile.permissions.create_requisition;
+    if (tab === "scheduler") return !!userProfile.permissions.view_scheduler;
+    if (tab === "professionals") return !!userProfile.permissions.view_professionals;
+    if (tab === "assistant") return !!userProfile.permissions.use_ai_assistant;
+    if (tab === "reports") return !!userProfile.permissions.export_reports || !!userProfile.permissions.view_system_logs;
+    if (tab === "permissions" || tab === "perfis") return !!userProfile.permissions.manage_access_profiles;
+    if (tab === "settings") return ["gestor", "gestor_servicos", "admin"].includes(userRole) || !!userProfile.permissions.manage_access_profiles;
+    if (tab === "gmail") return true;
+
+    return true;
   };
 
   const [clients, setClients] = useState<Client[]>([]);
@@ -2809,8 +2840,21 @@ export default function App() {
     }, 2500);
   };
 
-  // Approve pending client
-  const handleApproveClient = (clientId: string, type: "gestor" | "requisitante" | "gestor_servicos" | "admin", warehouseId?: string, workLocation?: string) => {
+  // Approve pending client with custom access options
+  const handleApproveClient = (
+    clientId: string, 
+    type: "gestor" | "requisitante" | "gestor_servicos" | "admin", 
+    warehouseId?: string, 
+    workLocation?: string,
+    approvalOptions?: {
+      isTrialRequested?: boolean;
+      trialDays?: number;
+      enablePurchaseOpportunity?: boolean;
+      proposalEmail?: string;
+      selectedPlan?: string;
+      proposalValue?: number;
+    }
+  ) => {
     const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
     const updated = activeClients.map(c => {
       if (c.id === clientId) {
@@ -2819,7 +2863,14 @@ export default function App() {
           status: "ativo" as const, 
           userType: type,
           warehouseId: warehouseId || undefined,
-          workLocation: workLocation || undefined
+          workLocation: workLocation || undefined,
+          isTrialRequested: approvalOptions?.isTrialRequested !== undefined ? approvalOptions.isTrialRequested : c.isTrialRequested,
+          trialDays: approvalOptions?.trialDays !== undefined ? approvalOptions.trialDays : c.trialDays,
+          enablePurchaseOpportunity: approvalOptions?.enablePurchaseOpportunity !== undefined ? approvalOptions.enablePurchaseOpportunity : c.enablePurchaseOpportunity,
+          proposalEmail: approvalOptions?.proposalEmail || c.proposalEmail || c.email,
+          selectedPlan: approvalOptions?.selectedPlan || c.selectedPlan,
+          proposalValue: approvalOptions?.proposalValue || c.proposalValue,
+          trialRequestedAt: c.trialRequestedAt || new Date().toISOString()
         };
       }
       return c;
@@ -2829,12 +2880,15 @@ export default function App() {
 
     const client = activeClients.find(c => c.id === clientId);
     if (client) {
+      const modeText = approvalOptions?.isTrialRequested
+        ? `Degustação (${approvalOptions.trialDays || 15} dias)`
+        : "Acesso Completo Ilimitado";
       addSystemLog(
         "Cadastro Autorizado", 
-        `CPF ${client.document} (${client.name}) aprovado pelo Gestor como ${type === "gestor" ? "Gestor" : "Requisitante"}.`, 
+        `CPF ${client.document} (${client.name}) aprovado pelo Gestor como ${type}. Modalidade: ${modeText}.`, 
         "sistema"
       );
-      toastSuccess(`Cadastro de "${client.name}" autorizado com sucesso!`, "Acesso Liberado");
+      toastSuccess(`Cadastro de "${client.name}" autorizado (${modeText})!`, "Acesso Liberado");
     }
   };
 
@@ -4020,7 +4074,7 @@ export default function App() {
             )}
 
             {/* Cadastros Collapsible Accordion Block */}
-            {(hasTabPermission("clients") || hasTabPermission("professionals")) && (
+            {(hasTabPermission("clients") || hasTabPermission("professionals") || hasTabPermission("permissions")) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -4069,6 +4123,22 @@ export default function App() {
                       >
                         <Wrench className="w-4 h-4 shrink-0" />
                         <span>Técnico & Equipes</span>
+                      </button>
+                    )}
+
+                    {/* Perfis de Acesso & Permissões */}
+                    {hasTabPermission("permissions") && (
+                      <button
+                        type="button"
+                        onClick={() => { setActiveTab("permissions"); setIsSidebarOpen(false); }}
+                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                          activeTab === "permissions"
+                            ? "bg-amber-950/60 text-amber-400 font-extrabold shadow-sm border border-amber-500/30"
+                            : "text-slate-400 hover:text-amber-300 hover:bg-slate-800/20"
+                        }`}
+                      >
+                        <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Gestão de Perfis</span>
                       </button>
                     )}
                   </div>
@@ -4511,6 +4581,70 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-4 sm:p-8">
           <div className="w-full max-w-6xl mx-auto pb-12">
             
+            {/* Contexto Cadastros: Sub-Navegação Compartilhada */}
+            {["clients", "professionals", "permissions"].includes(activeTab) && (
+              <div className="mb-6 bg-slate-900 border border-slate-800 p-2.5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+                <div className="flex items-center gap-3 px-2">
+                  <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl border border-indigo-500/30 shrink-0">
+                    <Folder className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] uppercase font-black tracking-widest text-slate-400">Módulo Cadastros</span>
+                    <span className="text-sm font-extrabold text-white">
+                      {activeTab === "clients" ? "Cadastro de Usuários & Pessoas" : activeTab === "professionals" ? "Técnicos & Equipes" : "Gestão de Perfis & Permissões"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800/80 w-full sm:w-auto">
+                  {hasTabPermission("clients") && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("clients")}
+                      className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        activeTab === "clients"
+                          ? "bg-indigo-600 text-white shadow-sm font-black"
+                          : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>Usuários</span>
+                    </button>
+                  )}
+
+                  {hasTabPermission("professionals") && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("professionals")}
+                      className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        activeTab === "professionals"
+                          ? "bg-indigo-600 text-white shadow-sm font-black"
+                          : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                      }`}
+                    >
+                      <Wrench className="w-3.5 h-3.5" />
+                      <span>Técnico & Equipes</span>
+                    </button>
+                  )}
+
+                  {hasTabPermission("permissions") && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("permissions")}
+                      className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        activeTab === "permissions"
+                          ? "bg-amber-500 text-slate-950 shadow-sm font-black"
+                          : "text-slate-400 hover:text-amber-300 hover:bg-slate-800/50"
+                      }`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>Gestão de Perfis</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            
             {activeTab === "dashboard" && hasTabPermission("dashboard") && (
               <Dashboard 
                 orders={visibleOrders} 
@@ -4519,6 +4653,7 @@ export default function App() {
                 professionals={professionals}
                 currentUser={currentUser}
                 logs={logs}
+                accessProfiles={accessProfiles}
                 onNavigate={setActiveTab}
                 onSelectOrder={(os) => {
                   setInitialSelectedOrderId(os.id);
@@ -4652,6 +4787,13 @@ export default function App() {
                 onToastSuccess={toastSuccess}
                 onToastError={toastError}
                 onToastInfo={toastInfo}
+              />
+            )}
+
+            {activeTab === "permissions" && (
+              <RolePermissionsManager
+                profiles={accessProfiles}
+                onSaveProfiles={handleSaveAccessProfiles}
               />
             )}
 

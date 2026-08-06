@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { Client, ServiceOrder, Almoxarifado, ServiceCategory } from "../types";
-import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database } from "lucide-react";
+import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database, Sparkles, ShieldCheck, ShoppingBag, Clock, Send } from "lucide-react";
 import { motion } from "motion/react";
 import AddressValidationWidget from "./AddressValidationWidget";
+import UserProposalEditalModal from "./UserProposalEditalModal";
 
 interface ClientsProps {
   clients: Client[];
@@ -118,6 +119,15 @@ export default function Clients({
   const [specialty, setSpecialty] = useState("");
   const [technicalRole, setTechnicalRole] = useState("Técnico");
 
+  // Administrator dynamic trial & purchase opportunity fields
+  const [enablePurchaseOpportunity, setEnablePurchaseOpportunity] = useState(true);
+  const [proposalEmail, setProposalEmail] = useState("");
+  const [isTrialRequested, setIsTrialRequested] = useState(true);
+  const [trialDays, setTrialDays] = useState(15);
+
+  // Proposal Edital preview modal target
+  const [editalModalClient, setEditalModalClient] = useState<Client | null>(null);
+
   // Detailed view of client (history of Service Orders)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
 
@@ -159,6 +169,10 @@ export default function Clients({
       setIsTechnician(client.isTechnician || false);
       setSpecialty(client.specialty || "");
       setTechnicalRole(client.technicalRole || "Técnico");
+      setEnablePurchaseOpportunity(client.enablePurchaseOpportunity !== false);
+      setProposalEmail(client.proposalEmail || client.email || "");
+      setIsTrialRequested(client.isTrialRequested !== false);
+      setTrialDays(client.trialDays || 15);
     } else {
       setEditingClient(null);
       setName("");
@@ -178,6 +192,10 @@ export default function Clients({
       setIsTechnician(false);
       setSpecialty("");
       setTechnicalRole("Técnico");
+      setEnablePurchaseOpportunity(true);
+      setProposalEmail("");
+      setIsTrialRequested(true);
+      setTrialDays(15);
     }
     setIsFormOpen(true);
   };
@@ -205,7 +223,11 @@ export default function Clients({
         warehouseId: warehouseId || undefined,
         isTechnician,
         specialty: isTechnician ? (specialty || (categories[0]?.name || "Geral")) : undefined,
-        technicalRole: isTechnician ? technicalRole : undefined
+        technicalRole: isTechnician ? technicalRole : undefined,
+        enablePurchaseOpportunity,
+        proposalEmail: proposalEmail || email,
+        isTrialRequested,
+        trialDays
       });
     } else {
       const newClient: Client = {
@@ -228,7 +250,12 @@ export default function Clients({
         warehouseId: warehouseId || undefined,
         isTechnician,
         specialty: isTechnician ? (specialty || (categories[0]?.name || "Geral")) : undefined,
-        technicalRole: isTechnician ? technicalRole : undefined
+        technicalRole: isTechnician ? technicalRole : undefined,
+        enablePurchaseOpportunity,
+        proposalEmail: proposalEmail || email,
+        isTrialRequested,
+        trialDays,
+        trialRequestedAt: new Date().toISOString()
       };
       onAddClient(newClient);
     }
@@ -483,21 +510,52 @@ export default function Clients({
                           <span className="text-slate-500 font-normal line-clamp-1">{client.address}</span>
                         </div>
                       )}
+
+                      {/* Status de Degustação e Oportunidade de Compra */}
+                      <div className="flex items-center gap-1.5 flex-wrap pt-2">
+                        {client.isTrialRequested !== false && (
+                          <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-md text-[10px] font-bold">
+                            <Clock className="w-3 h-3 text-amber-600" />
+                            Degustação ({client.trialDays || 15}d)
+                          </span>
+                        )}
+
+                        {client.enablePurchaseOpportunity !== false && (
+                          <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md text-[10px] font-bold">
+                            <ShoppingBag className="w-3 h-3 text-indigo-600" />
+                            Lei 14.133 Habilitada
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between mt-5 pt-3 border-t border-slate-50">
+                  <div className="flex items-center justify-between mt-5 pt-3 border-t border-slate-50 gap-2 flex-wrap">
                     <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all">
                       <Briefcase className="w-3 h-3" />
                       <span>{history.length} {history.length === 1 ? "Serviço" : "Serviços"}</span>
                     </div>
 
-                    <button 
-                      onClick={() => setSelectedClient(client)}
-                      className="text-xs font-bold text-slate-800 hover:text-slate-900 border border-slate-200 hover:border-slate-300 rounded-lg px-3 py-1.5 shadow-sm transition-all bg-white"
-                    >
-                      Ver Histórico
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {client.enablePurchaseOpportunity !== false && (
+                        <button
+                          type="button"
+                          onClick={() => setEditalModalClient(client)}
+                          className="text-xs font-bold text-indigo-700 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-300 rounded-lg px-2.5 py-1.5 shadow-xs transition-all bg-indigo-50/50 flex items-center gap-1 cursor-pointer"
+                          title="Visualizar Minuta do Edital e Proposta sob a Lei 14.133"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                          Edital (Lei 14.133)
+                        </button>
+                      )}
+
+                      <button 
+                        onClick={() => setSelectedClient(client)}
+                        className="text-xs font-bold text-slate-800 hover:text-slate-900 border border-slate-200 hover:border-slate-300 rounded-lg px-3 py-1.5 shadow-sm transition-all bg-white cursor-pointer"
+                      >
+                        Ver Histórico
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
               );
@@ -893,6 +951,59 @@ export default function Clients({
                   )}
                 </div>
 
+                {/* Controle do Administrador: Teste 15 Dias e Oportunidade de Compra (Lei 14.133) */}
+                <div className="p-4 bg-amber-50/90 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-800 rounded-2xl space-y-3.5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-black text-amber-950 dark:text-amber-200 uppercase tracking-wide flex items-center gap-1.5">
+                        <ShoppingBag className="w-4 h-4 text-amber-600" />
+                        Dar Oportunidade de Compra (Lei nº 14.133/2021)
+                      </h4>
+                      <p className="text-[10px] text-amber-800 dark:text-amber-300 mt-0.5 leading-tight font-medium">
+                        Habilita na tela do usuário a opção de selecionar planos e enviar a proposta ao e-mail de compras/edital ao término dos 15 dias.
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={enablePurchaseOpportunity}
+                        onChange={(e) => setEnablePurchaseOpportunity(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-amber-200 dark:border-amber-900">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider mb-1">
+                        E-mail de Destino para Proposta / Edital
+                      </label>
+                      <input
+                        type="email"
+                        className="w-full text-xs border border-amber-300 rounded-lg px-3 py-2 bg-white dark:bg-slate-900 font-bold text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        placeholder="Ex: compras@licitacao.gov.br"
+                        value={proposalEmail}
+                        onChange={(e) => setProposalEmail(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider mb-1">
+                        Dias de Degustação Concedidos
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={180}
+                        className="w-full text-xs border border-amber-300 rounded-lg px-3 py-2 bg-white dark:bg-slate-900 font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        value={trialDays}
+                        onChange={(e) => setTrialDays(parseInt(e.target.value) || 15)}
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Observações Adicionais</label>
                   <textarea
@@ -924,6 +1035,19 @@ export default function Clients({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Modal de Minuta de Edital / Proposta do Cliente */}
+      {editalModalClient && (
+        <UserProposalEditalModal
+          isOpen={!!editalModalClient}
+          onClose={() => setEditalModalClient(null)}
+          clientName={editalModalClient.name}
+          document={editalModalClient.document}
+          proposalEmail={editalModalClient.proposalEmail || editalModalClient.email || ""}
+          planName={editalModalClient.selectedPlan || "Módulo Corporativo OS + Almoxarifados & B.I."}
+          planValue={editalModalClient.proposalValue || 1850.00}
+        />
       )}
     </div>
   );

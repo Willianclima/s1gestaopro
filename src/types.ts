@@ -28,6 +28,14 @@ export interface Client {
   lgpdAccepted?: boolean;
   biddingTermsAccepted?: boolean;
   googleUid?: string;
+  enablePurchaseOpportunity?: boolean;
+  proposalEmail?: string;
+  proposalStatus?: "nenhuma" | "solicitada" | "proposta_enviada" | "contratado";
+  proposalRequestedAt?: string;
+  selectedPlan?: string;
+  proposalValue?: number;
+  accessProfileId?: string;
+  customPermissions?: Record<string, boolean>;
 }
 
 export interface Almoxarifado {
@@ -136,13 +144,40 @@ export interface CurrentUser {
   id: string;
   name: string;
   document: string;
-  userType: "admin" | "gestor" | "gestor_servicos" | "requisitante" | "profissional";
+  userType: "admin" | "gestor" | "gestor_servicos" | "requisitante" | "profissional" | string;
   warehouseId?: string;
   workLocation?: string;
   email?: string;
   photoURL?: string;
   googleUid?: string;
   isGoogleWorkspace?: boolean;
+  isTrialRequested?: boolean;
+  trialDays?: number;
+  trialRequestedAt?: string;
+  status?: "ativo" | "pendente_autorizacao";
+  enablePurchaseOpportunity?: boolean;
+  proposalEmail?: string;
+  proposalStatus?: "nenhuma" | "solicitada" | "proposta_enviada" | "contratado";
+  proposalRequestedAt?: string;
+  selectedPlan?: string;
+  proposalValue?: number;
+  customPermissions?: Record<string, boolean>;
+}
+
+export interface PermissionRoutine {
+  key: string;
+  label: string;
+  description: string;
+  category: "dashboard" | "orders" | "bi" | "scheduler" | "professionals" | "clients" | "system";
+}
+
+export interface AccessProfile {
+  id: string;
+  name: string;
+  description: string;
+  color?: string;
+  isSystemDefault?: boolean;
+  permissions: Record<string, boolean>;
 }
 
 export interface Toast {

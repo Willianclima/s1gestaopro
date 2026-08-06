@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { motion } from "motion/react";
 import { useToast } from "./ToastContext";
-import { ServiceOrder, Client, CurrentUser, Professional, SystemLog, Almoxarifado } from "../types";
+import { ServiceOrder, Client, CurrentUser, Professional, SystemLog, Almoxarifado, AccessProfile } from "../types";
 import { playNotificationSound } from "../utils/notificationSound";
 import { 
   Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from "recharts";
 import ServiceOrdersMap from "./ServiceOrdersMap";
+import AccountApprovalModal from "./AccountApprovalModal";
 
 interface DashboardProps {
   orders: ServiceOrder[];
@@ -17,9 +18,23 @@ interface DashboardProps {
   professionals: Professional[];
   currentUser?: CurrentUser | null;
   logs?: SystemLog[];
+  accessProfiles?: AccessProfile[];
   onNavigate: (tab: "dashboard" | "clients" | "orders" | "scheduler" | "professionals" | "assistant" | "reports" | "bi") => void;
   onSelectOrder: (order: ServiceOrder) => void;
-  onApproveClient?: (clientId: string, type: "gestor" | "requisitante" | "gestor_servicos" | "admin", warehouseId?: string, workLocation?: string) => void;
+  onApproveClient?: (
+    clientId: string, 
+    type: "gestor" | "requisitante" | "gestor_servicos" | "admin", 
+    warehouseId?: string, 
+    workLocation?: string,
+    approvalOptions?: {
+      isTrialRequested?: boolean;
+      trialDays?: number;
+      enablePurchaseOpportunity?: boolean;
+      proposalEmail?: string;
+      selectedPlan?: string;
+      proposalValue?: number;
+    }
+  ) => void;
   onRejectClient?: (clientId: string) => void;
   onResetPassword?: (id: string, type: "client" | "professional") => void;
   almoxarifados?: Almoxarifado[];
@@ -240,8 +255,12 @@ export default function Dashboard({
   clients, 
   professionals,
   currentUser, 
+  logs,
+  accessProfiles,
   onNavigate, 
   onSelectOrder,
+  onApproveClient,
+  onRejectClient,
   almoxarifados = [],
   notificationPermission,
   isInIframe,
@@ -253,6 +272,9 @@ export default function Dashboard({
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
   const [cacheValue, setCacheValue] = useState<any>(null);
   const [cacheKey, setCacheKey] = useState<string>("");
+
+  // Modal para aprovação de cadastros e parâmetros de acesso (15 dias teste vs completo)
+  const [approvalModalClient, setApprovalModalClient] = useState<Client | null>(null);
 
   /**
    * Função que analisa os últimos 30 dias de ordens de serviço para calcular a média móvel diária
@@ -596,22 +618,51 @@ export default function Dashboard({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => onNavigate("clients")}
-                className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg hover:shadow-xl active:translate-y-[1px] transition-all shrink-0 flex items-center gap-2 cursor-pointer w-full md:w-auto justify-center"
-              >
-                Analisar e Aprovar Usuários
-                <ArrowRight className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2 flex-wrap w-full md:w-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setApprovalModalClient(pendingClients[0])}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg hover:shadow-xl active:translate-y-[1px] transition-all flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  Aprovação de Conta ({pendingClients.length})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onNavigate("clients")}
+                  className="bg-slate-900 hover:bg-slate-800 text-slate-100 font-bold text-xs uppercase tracking-wider py-3.5 px-4 rounded-2xl border border-amber-500/30 flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
+                >
+                  Ver Lista
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
             </motion.div>
           )}
 
           {/* SECTION: QUICK OPERATIONAL RESUME */}
           <div className="space-y-4">
-            <div className="flex items-center gap-2 text-left">
-              <span className="w-1.5 h-4.5 bg-indigo-600 rounded-full animate-pulse" />
-              <h2 className="font-extrabold text-slate-850 text-xs tracking-widest uppercase">Resumo Operacional</h2>
+            <div className="flex items-center justify-between text-left flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-4.5 bg-indigo-600 rounded-full animate-pulse" />
+                <h2 className="font-extrabold text-slate-850 text-xs tracking-widest uppercase">Resumo Operacional</h2>
+              </div>
+
+              {clients && clients.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setApprovalModalClient(pendingClients[0] || clients[0])}
+                  className="bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-700 hover:border-amber-500/40 text-[11px] font-black uppercase tracking-wider px-3.5 py-1.5 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+                  Aprovação de Conta & Modalidades
+                  {pendingClients.length > 0 && (
+                    <span className="bg-amber-500 text-slate-950 text-[9px] font-black px-1.5 py-0.2 rounded-full">
+                      {pendingClients.length}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 text-left">
@@ -1216,6 +1267,29 @@ export default function Dashboard({
             </div>
           </motion.div>
         </div>
+      )}
+
+      {/* Modal de Aprovação de Conta & Configuração de Acesso */}
+      {approvalModalClient && (
+        <AccountApprovalModal
+          isOpen={!!approvalModalClient}
+          onClose={() => setApprovalModalClient(null)}
+          client={approvalModalClient}
+          pendingClientsList={pendingClients}
+          onSelectClient={(c) => setApprovalModalClient(c)}
+          almoxarifados={almoxarifados}
+          accessProfiles={accessProfiles}
+          onApproveClient={(clientId, type, warehouseId, workLocation, options) => {
+            if (onApproveClient) {
+              onApproveClient(clientId, type as any, warehouseId, workLocation, options);
+            }
+          }}
+          onRejectClient={(clientId) => {
+            if (onRejectClient) {
+              onRejectClient(clientId);
+            }
+          }}
+        />
       )}
     </div>
   );
