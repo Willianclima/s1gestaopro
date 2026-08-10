@@ -350,4 +350,22 @@
   background: #2d749a !important;
 }
 
+/* Transição de escala suave e sombra sutil para Cards e Elementos Interativos do Sistema */
+.interactive-card,
+.hover-scale {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease !important;
+}
+
+.interactive-card:hover,
+.hover-scale:hover {
+  transform: scale(1.02) translateY(-2px) !important;
+  box-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.08), 0 4px 12px -2px rgba(0, 0, 0, 0.04) !important;
+}
+
+.dark .interactive-card:hover,
+.dark .hover-scale:hover {
+  box-shadow: 0 14px 28px -6px rgba(0, 0, 0, 0.5), 0 6px 16px -2px rgba(245, 158, 11, 0.1) !important;
+}
+
+
 

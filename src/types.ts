@@ -178,6 +178,7 @@ export interface AccessProfile {
   color?: string;
   isSystemDefault?: boolean;
   permissions: Record<string, boolean>;
+  createdAt?: string;
 }
 
 export interface Toast {

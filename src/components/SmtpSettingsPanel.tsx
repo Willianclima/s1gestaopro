@@ -2087,80 +2087,82 @@ export default function SmtpSettingsPanel({
                   </div>
 
                   {/* External file restore */}
-                  <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-4">
-                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2.5">
-                      <Upload className="w-4 h-4 text-indigo-500 shrink-0" />
-                      Restaurar Base (Carregar Arquivo .JSON Externo)
-                    </h3>
-                    
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal font-medium">
-                      O processo de restauração lerá o arquivo `.json` exportado anteriormente e reiniciará o portal do gestor recarregando os chamados, equipes, usuários e logs gravados originalmente no backup.
-                    </p>
+                  {currentUser?.userType === "admin" && (
+                    <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-4">
+                      <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                        <Upload className="w-4 h-4 text-indigo-500 shrink-0" />
+                        Restaurar Base (Carregar Arquivo .JSON Externo)
+                      </h3>
+                      
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal font-medium">
+                        O processo de restauração lerá o arquivo `.json` exportado anteriormente e reiniciará o portal do gestor recarregando os chamados, equipes, usuários e logs gravados originalmente no backup.
+                      </p>
 
-                    <div 
-                      onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-                      onDragLeave={() => setDragActive(false)}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        setDragActive(false);
-                        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                          handleImportFile(e.dataTransfer.files[0]);
-                        }
-                      }}
-                      className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all flex flex-col items-center justify-center gap-3 cursor-pointer ${
-                        dragActive 
-                          ? "border-indigo-500 bg-indigo-50/50 text-indigo-600 scale-[0.99]" 
-                          : "border-slate-200 bg-white hover:border-indigo-400 hover:bg-slate-50/50 text-slate-500"
-                      }`}
-                      onClick={() => {
-                        const input = document.createElement("input");
-                        input.type = "file";
-                        input.accept = ".json";
-                        input.onchange = (e: any) => {
-                          if (e.target.files && e.target.files[0]) {
-                            handleImportFile(e.target.files[0]);
+                      <div 
+                        onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                        onDragLeave={() => setDragActive(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDragActive(false);
+                          if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                            handleImportFile(e.dataTransfer.files[0]);
                           }
-                        };
-                        input.click();
-                      }}
-                    >
-                      <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-2xl text-indigo-600">
-                        <Upload className="w-6 h-6 animate-pulse" />
-                      </div>
-                      <div>
-                        <span className="font-extrabold text-xs text-slate-800 block">Arraste ou clique para selecionar</span>
-                        <span className="text-[10px] text-slate-400 font-medium">Aceita apenas arquivos JSON gerados pelo sistema Araçatuba</span>
-                      </div>
-                    </div>
-
-                    {importError && (
-                      <div className="bg-rose-50 border border-rose-205 border-rose-200 text-rose-700 p-3.5 rounded-xl text-xs font-bold leading-normal text-left flex items-start gap-2 animate-fade-in">
-                        <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5 animate-bounce" />
+                        }}
+                        className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all flex flex-col items-center justify-center gap-3 cursor-pointer ${
+                          dragActive 
+                            ? "border-indigo-500 bg-indigo-50/50 text-indigo-600 scale-[0.99]" 
+                            : "border-slate-200 bg-white hover:border-indigo-400 hover:bg-slate-50/50 text-slate-500"
+                        }`}
+                        onClick={() => {
+                          const input = document.createElement("input");
+                          input.type = "file";
+                          input.accept = ".json";
+                          input.onchange = (e: any) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleImportFile(e.target.files[0]);
+                            }
+                          };
+                          input.click();
+                        }}
+                      >
+                        <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-2xl text-indigo-600">
+                          <Upload className="w-6 h-6 animate-pulse" />
+                        </div>
                         <div>
-                          <span className="uppercase text-[9px] block font-black text-rose-800 tracking-wider">Falha de Integridade</span>
-                          <span>{importError}</span>
+                          <span className="font-extrabold text-xs text-slate-800 block">Arraste ou clique para selecionar</span>
+                          <span className="text-[10px] text-slate-400 font-medium">Aceita apenas arquivos JSON gerados pelo sistema Araçatuba</span>
                         </div>
                       </div>
-                    )}
 
-                    {importSuccess && (
-                      <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3.5 rounded-xl text-xs font-bold leading-normal text-left flex items-start gap-2 animate-pulse">
-                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                      {importError && (
+                        <div className="bg-rose-50 border border-rose-205 border-rose-200 text-rose-700 p-3.5 rounded-xl text-xs font-bold leading-normal text-left flex items-start gap-2 animate-fade-in">
+                          <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5 animate-bounce" />
+                          <div>
+                            <span className="uppercase text-[9px] block font-black text-rose-800 tracking-wider">Falha de Integridade</span>
+                            <span>{importError}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {importSuccess && (
+                        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3.5 rounded-xl text-xs font-bold leading-normal text-left flex items-start gap-2 animate-pulse">
+                          <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="uppercase text-[9px] block font-black text-emerald-800 tracking-wider">Assinatura Válida</span>
+                            <span>Dados restaurados com êxito! Aplicando sincronização e recarregando em 2 segundos...</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="bg-amber-55/60 bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-[10.5px] leading-relaxed text-left flex items-start gap-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                         <div>
-                          <span className="uppercase text-[9px] block font-black text-emerald-800 tracking-wider">Assinatura Válida</span>
-                          <span>Dados restaurados com êxito! Aplicando sincronização e recarregando em 2 segundos...</span>
+                          <strong className="uppercase text-[9px] font-black text-amber-900 tracking-wider block">⚠️ AVISO DE SUBSTITUIÇÃO</strong>
+                          <span>A importação de um backup <strong>sobrescreve totalmente</strong> as informações de chamados e configurações locais atuais. Recomenda-se baixar um backup atual preventivamente.</span>
                         </div>
                       </div>
-                    )}
-
-                    <div className="bg-amber-55/60 bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-[10.5px] leading-relaxed text-left flex items-start gap-2.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="uppercase text-[9px] font-black text-amber-900 tracking-wider block">⚠️ AVISO DE SUBSTITUIÇÃO</strong>
-                        <span>A importação de um backup <strong>sobrescreve totalmente</strong> as informações de chamados e configurações locais atuais. Recomenda-se baixar um backup atual preventivamente.</span>
-                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
 

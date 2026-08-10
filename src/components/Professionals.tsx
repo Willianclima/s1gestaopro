@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Professional, ServiceCategory, Team, ServiceOrder, Almoxarifado, Client } from "../types";
-import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Check, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star } from "lucide-react";
+import { User, Shield, Briefcase, Plus, Trash2, CheckCircle, Check, Search, Mail, Tag, Edit2, Users, Crown, X, AlertCircle, Star, List, LayoutGrid } from "lucide-react";
 
 interface ProfessionalsProps {
   professionals: Professional[];
@@ -34,6 +34,45 @@ export default function Professionals({
   globalSearchTerm
 }: ProfessionalsProps) {
   const [searchTerm, setSearchTerm] = useState("");
+
+  const [viewMode, setViewMode] = useState<"cards" | "list">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("professionals_view_mode");
+      if (saved === "cards" || saved === "list") return saved;
+    }
+    return "list";
+  });
+
+  const handleSetViewMode = (mode: "cards" | "list") => {
+    setViewMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("professionals_view_mode", mode);
+    }
+  };
+
+  const [selectedProfIds, setSelectedProfIds] = useState<string[]>([]);
+
+  const handleToggleSelectProf = (id: string) => {
+    setSelectedProfIds(prev =>
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAllProfs = () => {
+    if (selectedProfIds.length === filteredProfessionals.length) {
+      setSelectedProfIds([]);
+    } else {
+      setSelectedProfIds(filteredProfessionals.map(p => p.id));
+    }
+  };
+
+  const handleBatchDeleteProfs = () => {
+    if (selectedProfIds.length === 0) return;
+    if (confirm(`Tem certeza que deseja remover os ${selectedProfIds.length} integrantes selecionados?`)) {
+      selectedProfIds.forEach(id => onDeleteProfessional(id));
+      setSelectedProfIds([]);
+    }
+  };
 
   useEffect(() => {
     if (globalSearchTerm !== undefined) {
@@ -312,12 +351,12 @@ export default function Professionals({
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs">
-        <div className="relative">
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="relative flex-1">
           <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
           <input
             type="text"
-            className="w-full text-xs border border-slate-200 rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700"
+            className="w-full text-xs border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white dark:bg-slate-900 transition-all font-medium text-slate-700 dark:text-slate-200"
             placeholder={
               activeTabSection === "individuals"
                 ? "Buscar técnico por nome, cargo ou especialidade..."
@@ -327,138 +366,339 @@ export default function Professionals({
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+
+        {/* Seletor de Modo: Lista | Grade (Cards) */}
+        <div className="bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center gap-1 shrink-0 self-end sm:self-auto">
+          <button
+            type="button"
+            onClick={() => handleSetViewMode("list")}
+            className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+              viewMode === "list"
+                ? "bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs font-bold"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+            }`}
+            title="Visão em Lista Compacta"
+          >
+            <List className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSetViewMode("cards")}
+            className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+              viewMode === "cards"
+                ? "bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs font-bold"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+            }`}
+            title="Visão em Grade (Cards)"
+          >
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      {/* INDIVIDUAL PROFESSIONALS LIST */}
-      {activeTabSection === "individuals" && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-bold text-[11px] uppercase tracking-wider">
-                  <th className="px-6 py-4">Nome / Cadastro</th>
-                  <th className="px-6 py-4">Cargo / Atribuição</th>
-                  <th className="px-6 py-4">Especialidades Técnicas</th>
-                  <th className="px-6 py-4">Carga de Trabalho (OS)</th>
-                  <th className="px-6 py-4 text-center">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
-                {filteredProfessionals.length > 0 ? (
-                  filteredProfessionals.map(prof => {
-                    const techOrders = orders.filter(o => o.assignedTo === prof.name);
-                    const activeOrders = techOrders.filter(o => o.status !== "concluido" && o.status !== "cancelado");
-                    
-                    const maxCapacity = 5;
-                    const percentage = Math.min(100, Math.round((activeOrders.length / maxCapacity) * 100));
+      {/* Batch Selection Action Bar */}
+      {activeTabSection === "individuals" && filteredProfessionals.length > 0 && (
+        <div className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs font-semibold">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors">
+              <input
+                type="checkbox"
+                checked={filteredProfessionals.length > 0 && selectedProfIds.length === filteredProfessionals.length}
+                onChange={handleSelectAllProfs}
+                className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+              />
+              <span>Selecionar Todos ({filteredProfessionals.length})</span>
+            </label>
 
-                    let barColor = "bg-emerald-500";
-                    let textColor = "text-emerald-700 bg-emerald-50 border-emerald-150";
-                    let statusText = "Sob Controle";
-
-                    if (activeOrders.length === 0) {
-                      barColor = "bg-slate-200";
-                      textColor = "text-slate-500 bg-slate-50 border-slate-150";
-                      statusText = "Livre / Disponível";
-                    } else if (activeOrders.length >= 4) {
-                      barColor = "bg-rose-500";
-                      textColor = "text-rose-700 bg-rose-50 border-rose-150";
-                      statusText = "Carga Crítica";
-                    } else if (activeOrders.length >= 2) {
-                      barColor = "bg-amber-500";
-                      textColor = "text-amber-700 bg-amber-50 border-amber-150";
-                      statusText = "Moderada";
-                    }
-
-                    return (
-                      <tr key={prof.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700 font-bold shrink-0 uppercase text-[10px]">
-                              {prof.name.split(" ").slice(0, 2).map(n => n[0]).join("")}
-                            </div>
-                            <div>
-                              <span className="font-extrabold text-slate-850 block">{prof.name}</span>
-                              <span className="text-[10px] text-slate-400 block font-mono">ID: {prof.id}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 font-bold text-slate-650">
-                          {prof.role}
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-wrap gap-1 md:max-w-[325px]">
-                            {prof.specialties && prof.specialties.length > 0 ? (
-                              prof.specialties.map((spec, sidx) => (
-                                <span key={sidx} className="inline-block bg-slate-100 border border-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase tracking-wide">
-                                  {spec}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="inline-block bg-indigo-50 border border-indigo-150 text-indigo-700 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase">
-                                {prof.specialty || "Geral"}
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="space-y-1.5 max-w-[160px]">
-                            <div className="flex items-center justify-between text-[10px]">
-                              <span className={`px-1.5 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider ${textColor}`}>
-                                {activeOrders.length} {activeOrders.length === 1 ? "Ativa" : "Ativas"}
-                              </span>
-                              <span className="text-slate-500 font-extrabold font-mono">
-                                {percentage}%
-                              </span>
-                            </div>
-                            <div className="w-full h-1.5 bg-slate-100 border border-slate-200/50 rounded-full overflow-hidden">
-                              <div 
-                                className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
-                                style={{ width: `${percentage}%` }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between text-[9px] text-slate-400 select-none">
-                              <span>Teto ideal: {maxCapacity} OS</span>
-                              <span className="font-bold">{statusText}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => handleOpenForm(prof)}
-                              className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
-                              title="Editar cadastro do integrante"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (confirm(`Remover definitivamente o integrante ${prof.name}?`)) {
-                                  onDeleteProfessional(prof.id);
-                                }
-                              }}
-                              className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg transition-colors cursor-pointer"
-                              title="Excluir integrante"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="text-center py-12 text-slate-400 font-medium">
-                      Nenhum integrante cadastrado ou encontrado com esses filtros.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            {selectedProfIds.length > 0 && (
+              <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-400 font-extrabold px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 text-xs">
+                {selectedProfIds.length} selecionado(s)
+              </span>
+            )}
           </div>
+
+          {selectedProfIds.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleBatchDeleteProfs}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Excluir Selecionados ({selectedProfIds.length})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedProfIds([])}
+                className="px-3 py-1.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                Desmarcar
+              </button>
+            </div>
+          )}
         </div>
+      )}
+
+      {/* INDIVIDUAL PROFESSIONALS LIST / CARDS */}
+      {activeTabSection === "individuals" && (
+        viewMode === "list" ? (
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold text-[11px] uppercase tracking-wider">
+                    <th className="px-4 py-4 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={filteredProfessionals.length > 0 && selectedProfIds.length === filteredProfessionals.length}
+                        onChange={handleSelectAllProfs}
+                        className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                      />
+                    </th>
+                    <th className="px-6 py-4">Nome / Cadastro</th>
+                    <th className="px-6 py-4">Cargo / Atribuição</th>
+                    <th className="px-6 py-4">Especialidades Técnicas</th>
+                    <th className="px-6 py-4">Carga de Trabalho (OS)</th>
+                    <th className="px-6 py-4 text-center">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  {filteredProfessionals.length > 0 ? (
+                    filteredProfessionals.map(prof => {
+                      const techOrders = orders.filter(o => o.assignedTo === prof.name);
+                      const activeOrders = techOrders.filter(o => o.status !== "concluido" && o.status !== "cancelado");
+                      const isSelected = selectedProfIds.includes(prof.id);
+                      
+                      const maxCapacity = 5;
+                      const percentage = Math.min(100, Math.round((activeOrders.length / maxCapacity) * 100));
+
+                      let barColor = "bg-emerald-500";
+                      let textColor = "text-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-150 dark:border-emerald-800";
+                      let statusText = "Sob Controle";
+
+                      if (activeOrders.length === 0) {
+                        barColor = "bg-slate-200 dark:bg-slate-700";
+                        textColor = "text-slate-500 bg-slate-50 dark:bg-slate-800 border-slate-150 dark:border-slate-700";
+                        statusText = "Livre / Disponível";
+                      } else if (activeOrders.length >= 4) {
+                        barColor = "bg-rose-500";
+                        textColor = "text-rose-700 bg-rose-50 dark:bg-rose-950/60 border-rose-150 dark:border-rose-800";
+                        statusText = "Carga Crítica";
+                      } else if (activeOrders.length >= 2) {
+                        barColor = "bg-amber-500";
+                        textColor = "text-amber-700 bg-amber-50 dark:bg-amber-950/60 border-amber-150 dark:border-amber-800";
+                        statusText = "Moderada";
+                      }
+
+                      return (
+                        <tr key={prof.id} className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors ${isSelected ? "bg-amber-50/40 dark:bg-amber-950/20" : ""}`}>
+                          <td className="px-4 py-4 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectProf(prof.id)}
+                              className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                            />
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 bg-slate-100 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-700 dark:text-slate-300 font-bold shrink-0 uppercase text-[10px]">
+                                {prof.name.split(" ").slice(0, 2).map(n => n[0]).join("")}
+                              </div>
+                              <div>
+                                <span className="font-extrabold text-slate-850 dark:text-white block">{prof.name}</span>
+                                <span className="text-[10px] text-slate-400 block font-mono">ID: {prof.id}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 font-bold text-slate-650 dark:text-slate-300">
+                            {prof.role}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex flex-wrap gap-1 md:max-w-[325px]">
+                              {prof.specialties && prof.specialties.length > 0 ? (
+                                prof.specialties.map((spec, sidx) => (
+                                  <span key={sidx} className="inline-block bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase tracking-wide">
+                                    {spec}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="inline-block bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-150 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase">
+                                  {prof.specialty || "Geral"}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="space-y-1.5 max-w-[160px]">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className={`px-1.5 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider ${textColor}`}>
+                                  {activeOrders.length} {activeOrders.length === 1 ? "Ativa" : "Ativas"}
+                                </span>
+                                <span className="text-slate-500 font-extrabold font-mono">
+                                  {percentage}%
+                                </span>
+                              </div>
+                              <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
+                                  style={{ width: `${percentage}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-[9px] text-slate-400 select-none">
+                                <span>Teto ideal: {maxCapacity} OS</span>
+                                <span className="font-bold">{statusText}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => handleOpenForm(prof)}
+                                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg transition-colors cursor-pointer"
+                                title="Editar cadastro do integrante"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Remover definitivamente o integrante ${prof.name}?`)) {
+                                    onDeleteProfessional(prof.id);
+                                  }
+                                }}
+                                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/50 text-slate-400 hover:text-red-500 rounded-lg transition-colors cursor-pointer"
+                                title="Excluir integrante"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="text-center py-12 text-slate-400 font-medium">
+                        Nenhum integrante cadastrado ou encontrado com esses filtros.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredProfessionals.length > 0 ? (
+              filteredProfessionals.map(prof => {
+                const techOrders = orders.filter(o => o.assignedTo === prof.name);
+                const activeOrders = techOrders.filter(o => o.status !== "concluido" && o.status !== "cancelado");
+                const maxCapacity = 5;
+                const percentage = Math.min(100, Math.round((activeOrders.length / maxCapacity) * 100));
+
+                let barColor = "bg-emerald-500";
+                let textColor = "text-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800";
+                let statusText = "Sob Controle";
+
+                if (activeOrders.length === 0) {
+                  barColor = "bg-slate-200 dark:bg-slate-700";
+                  textColor = "text-slate-500 bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700";
+                  statusText = "Livre / Disponível";
+                } else if (activeOrders.length >= 4) {
+                  barColor = "bg-rose-500";
+                  textColor = "text-rose-700 bg-rose-50 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800";
+                  statusText = "Carga Crítica";
+                } else if (activeOrders.length >= 2) {
+                  barColor = "bg-amber-500";
+                  textColor = "text-amber-700 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800";
+                  statusText = "Moderada";
+                }
+
+                const isSelected = selectedProfIds.includes(prof.id);
+
+                return (
+                  <div key={prof.id} className={`bg-white dark:bg-slate-900 rounded-2xl border ${
+                    isSelected ? "border-amber-500 ring-2 ring-amber-500/20 shadow-md" : "border-slate-100 dark:border-slate-800 shadow-sm hover:border-slate-300 dark:hover:border-slate-700"
+                  } p-5 space-y-4 flex flex-col justify-between transition-all duration-200 hover:scale-[1.015] hover:shadow-md transform`}>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleSelectProf(prof.id)}
+                            className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                          />
+                          <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-700 dark:text-slate-200 font-extrabold uppercase text-xs">
+                            {prof.name.split(" ").slice(0, 2).map(n => n[0]).join("")}
+                          </div>
+                          <div>
+                            <h4 className="font-extrabold text-slate-800 dark:text-white text-sm">{prof.name}</h4>
+                            <span className="text-[10px] text-slate-400 font-bold uppercase">{prof.role}</span>
+                          </div>
+                        </div>
+
+                        <span className={`px-2 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider shrink-0 ${textColor}`}>
+                          {statusText}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        {prof.specialties && prof.specialties.length > 0 ? (
+                          prof.specialties.map((spec, sidx) => (
+                            <span key={sidx} className="inline-block bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase">
+                              {spec}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="inline-block bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400 font-bold px-2 py-0.5 rounded-lg text-[9px] uppercase">
+                            {prof.specialty || "Geral"}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-100 dark:border-slate-800/80">
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="font-bold text-slate-500 dark:text-slate-400 uppercase">Carga Ativa: {activeOrders.length} OS</span>
+                          <span className="font-mono font-extrabold text-slate-700 dark:text-slate-300">{percentage}%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full ${barColor}`} style={{ width: `${percentage}%` }} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                      <button
+                        onClick={() => handleOpenForm(prof)}
+                        className="px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl border border-slate-200 dark:border-slate-800 transition-all cursor-pointer flex items-center gap-1"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" /> Editar
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm(`Remover definitivamente o integrante ${prof.name}?`)) {
+                            onDeleteProfessional(prof.id);
+                          }
+                        }}
+                        className="p-2 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-xl transition-all cursor-pointer"
+                        title="Excluir"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="col-span-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-12 text-center text-slate-400">
+                Nenhum integrante cadastrado ou encontrado.
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* TEAM CREATION / GRID AREA */}

@@ -4,7 +4,7 @@ import { ServiceOrder, Client, Professional, SystemLog, LoginAttempt } from "../
 import { 
   BarChart3, FileText, Search, Clock, CheckCircle2, AlertTriangle, 
   X, HelpCircle, Users, Activity, SlidersHorizontal, Wrench, RefreshCw, Trash2,
-  Download, Lock, ShieldCheck, ShieldAlert
+  Download, Lock, ShieldCheck, ShieldAlert, List, LayoutGrid
 } from "lucide-react";
 
 interface ReportsAndLogsProps {
@@ -27,6 +27,48 @@ export default function ReportsAndLogs({
   const [logUserFilter, setLogUserFilter] = useState<string>("all");
   const [accessSearch, setAccessSearch] = useState("");
   const [accessStatusFilter, setAccessStatusFilter] = useState<string>("all");
+
+  const [viewMode, setViewMode] = useState<"cards" | "list">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("reports_view_mode");
+      if (saved === "cards" || saved === "list") return saved;
+    }
+    return "list";
+  });
+
+  const handleSetViewMode = (mode: "cards" | "list") => {
+    setViewMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("reports_view_mode", mode);
+    }
+  };
+
+  const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
+  const [selectedAccessIds, setSelectedAccessIds] = useState<string[]>([]);
+
+  const handleToggleSelectLog = (id: string) => {
+    setSelectedLogIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const handleSelectAllLogs = () => {
+    if (selectedLogIds.length === filteredLogs.length) {
+      setSelectedLogIds([]);
+    } else {
+      setSelectedLogIds(filteredLogs.map(l => l.id));
+    }
+  };
+
+  const handleToggleSelectAccess = (id: string) => {
+    setSelectedAccessIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const handleSelectAllAccess = () => {
+    if (selectedAccessIds.length === filteredAccessAttempts.length) {
+      setSelectedAccessIds([]);
+    } else {
+      setSelectedAccessIds(filteredAccessAttempts.map(a => a.id));
+    }
+  };
 
   // Calculations for executive reports
   const totalOrders = orders.length;
@@ -568,6 +610,37 @@ export default function ReportsAndLogs({
             </button>
           </div>
 
+          {/* Seletor de Modo de Exibição (Lista / Cards) para os Logs/Auditoria */}
+          {(activeTab === "audit" || activeTab === "access") && (
+            <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleSetViewMode("list")}
+                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  viewMode === "list"
+                    ? "bg-slate-900 text-white shadow-xs font-bold"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+                title="Visão em Lista"
+              >
+                <List className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSetViewMode("cards")}
+                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  viewMode === "cards"
+                    ? "bg-slate-900 text-white shadow-xs font-bold"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+                title="Visão em Cards"
+              >
+                <LayoutGrid className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* Export PDF Button */}
           <button
             onClick={exportToPDF}
@@ -1033,61 +1106,170 @@ export default function ReportsAndLogs({
                 Limpar Logs
               </button>
             </div>
+            {/* Batch Selection Ribbon for Audit Logs */}
+            {filteredLogs.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs font-semibold">
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-slate-900 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={filteredLogs.length > 0 && selectedLogIds.length === filteredLogs.length}
+                      onChange={handleSelectAllLogs}
+                      className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <span>Selecionar Todos ({filteredLogs.length})</span>
+                  </label>
+
+                  {selectedLogIds.length > 0 && (
+                    <span className="bg-indigo-50 text-indigo-700 font-extrabold px-2 py-0.5 rounded-lg border border-indigo-100 text-xs">
+                      {selectedLogIds.length} selecionado(s)
+                    </span>
+                  )}
+                </div>
+
+                {selectedLogIds.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLogIds([])}
+                      className="px-2.5 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                    >
+                      Desmarcar
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Logs List Pane */}
-          <div className="flex-1 overflow-y-auto max-h-[500px]">
-            <div className="divide-y divide-slate-100">
-              {filteredLogs.map((log) => {
-                // Determine layout indicators based on log category
-                let badgeClr = "bg-slate-100 text-slate-600";
-                let iconEl = <SlidersHorizontal className="w-4 h-4 text-slate-500" />;
-                
-                if (log.category === "requisicao") {
-                  badgeClr = "bg-indigo-55 bg-indigo-50 text-indigo-700 border border-indigo-100";
-                  iconEl = <FileText className="w-4 h-4 text-indigo-600" />;
-                } else if (log.category === "requisitante") {
-                  badgeClr = "bg-blue-55 bg-blue-50 text-blue-750 text-blue-700 border border-blue-105";
-                  iconEl = <Users className="w-4 h-4 text-blue-600" />;
-                } else if (log.category === "tecnico") {
-                  badgeClr = "bg-emerald-50 border border-emerald-100 text-emerald-700";
-                  iconEl = <Wrench className="w-4 h-4 text-emerald-600" />;
-                }
+          {/* Logs List / Cards Pane */}
+          <div className="flex-1 overflow-y-auto max-h-[500px] p-4">
+            {viewMode === "list" ? (
+              <div className="divide-y divide-slate-100">
+                {filteredLogs.map((log) => {
+                  let badgeClr = "bg-slate-100 text-slate-600";
+                  let iconEl = <SlidersHorizontal className="w-4 h-4 text-slate-500" />;
+                  
+                  if (log.category === "requisicao") {
+                    badgeClr = "bg-indigo-50 text-indigo-700 border border-indigo-100";
+                    iconEl = <FileText className="w-4 h-4 text-indigo-600" />;
+                  } else if (log.category === "requisitante") {
+                    badgeClr = "bg-blue-50 text-blue-700 border border-blue-105";
+                    iconEl = <Users className="w-4 h-4 text-blue-600" />;
+                  } else if (log.category === "tecnico") {
+                    badgeClr = "bg-emerald-50 border border-emerald-100 text-emerald-700";
+                    iconEl = <Wrench className="w-4 h-4 text-emerald-600" />;
+                  }
 
-                return (
-                  <div key={log.id} className="p-4 hover:bg-slate-50/50 transition-colors flex gap-4 items-start text-xs font-medium">
-                    {/* Visual icon container */}
-                    <div className="p-2 border border-slate-100 rounded-xl bg-white shrink-0 shadow-xs">
-                      {iconEl}
-                    </div>
+                  const isSelected = selectedLogIds.includes(log.id);
 
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-slate-850 text-sm">{log.action}</span>
-                          <span className={`text-[9px] font-extrabold font-sans uppercase px-1.5 py-0.5 rounded-lg ${badgeClr}`}>
-                            {log.category}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono font-bold shrink-0">
-                          {new Date(log.timestamp).toLocaleString("pt-BR")}
-                        </span>
+                  return (
+                    <div key={log.id} className={`p-3.5 hover:bg-slate-50/50 transition-colors flex gap-3 items-start text-xs font-medium rounded-xl ${isSelected ? "bg-indigo-50/40" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggleSelectLog(log.id)}
+                        className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0 mt-2"
+                      />
+
+                      <div className="p-2 border border-slate-100 rounded-xl bg-white shrink-0 shadow-xs">
+                        {iconEl}
                       </div>
 
-                      <p className="text-slate-600 leading-relaxed font-semibold text-xs pr-4">{log.details}</p>
-                    </div>
-                  </div>
-                );
-              })}
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-slate-850 text-sm">{log.action}</span>
+                            <span className={`text-[9px] font-extrabold font-sans uppercase px-1.5 py-0.5 rounded-lg ${badgeClr}`}>
+                              {log.category}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-mono font-bold shrink-0">
+                            {new Date(log.timestamp).toLocaleString("pt-BR")}
+                          </span>
+                        </div>
 
-              {filteredLogs.length === 0 && (
-                <div className="p-16 text-center text-slate-400 flex flex-col items-center justify-center">
-                  <Activity className="w-12 h-12 text-slate-205 text-slate-300 mb-2 animate-pulse" />
-                  <p className="font-bold text-slate-500 text-sm">Nenhum registro de log localizado.</p>
-                  <p className="text-[11px] text-slate-400 mt-1">Insira novas requisições, altere status de serviços ou mude filtros para gerar logs na trilha de auditoria.</p>
-                </div>
-              )}
-            </div>
+                        <p className="text-slate-600 leading-relaxed font-semibold text-xs pr-4">{log.details}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filteredLogs.length === 0 && (
+                  <div className="p-16 text-center text-slate-400 flex flex-col items-center justify-center">
+                    <Activity className="w-12 h-12 text-slate-300 mb-2 animate-pulse" />
+                    <p className="font-bold text-slate-500 text-sm">Nenhum registro de log localizado.</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Insira novas requisições, altere status de serviços ou mude filtros para gerar logs na trilha de auditoria.</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* CARDS MODE FOR AUDIT LOGS */
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredLogs.map((log) => {
+                  let badgeClr = "bg-slate-100 text-slate-600";
+                  let iconEl = <SlidersHorizontal className="w-4 h-4 text-slate-500" />;
+                  
+                  if (log.category === "requisicao") {
+                    badgeClr = "bg-indigo-50 text-indigo-700 border border-indigo-100";
+                    iconEl = <FileText className="w-4 h-4 text-indigo-600" />;
+                  } else if (log.category === "requisitante") {
+                    badgeClr = "bg-blue-50 text-blue-700 border border-blue-105";
+                    iconEl = <Users className="w-4 h-4 text-blue-600" />;
+                  } else if (log.category === "tecnico") {
+                    badgeClr = "bg-emerald-50 border border-emerald-100 text-emerald-700";
+                    iconEl = <Wrench className="w-4 h-4 text-emerald-600" />;
+                  }
+
+                  const isSelected = selectedLogIds.includes(log.id);
+
+                  return (
+                    <div
+                      key={log.id}
+                      className={`p-4 bg-white border ${
+                        isSelected ? "border-indigo-500 ring-2 ring-indigo-500/20 shadow-md" : "border-slate-150 shadow-xs"
+                      } rounded-2xl flex flex-col justify-between space-y-3 hover:border-slate-300 transition-all`}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectLog(log.id)}
+                              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                            />
+                            <div className="p-1.5 border border-slate-100 rounded-lg bg-slate-50">
+                              {iconEl}
+                            </div>
+                            <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-md ${badgeClr}`}>
+                              {log.category}
+                            </span>
+                          </div>
+                          <span className="text-[9px] text-slate-400 font-mono font-bold">
+                            {new Date(log.timestamp).toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+
+                        <h4 className="font-extrabold text-slate-800 text-xs leading-snug">{log.action}</h4>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed line-clamp-3">{log.details}</p>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-400 font-mono font-semibold">
+                        {new Date(log.timestamp).toLocaleDateString("pt-BR")}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filteredLogs.length === 0 && (
+                  <div className="col-span-full p-12 text-center text-slate-400 flex flex-col items-center justify-center">
+                    <Activity className="w-10 h-10 text-slate-300 mb-2 animate-pulse" />
+                    <p className="font-bold text-slate-500 text-xs">Nenhum registro de log encontrado.</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1157,20 +1339,155 @@ export default function ReportsAndLogs({
             </div>
           </div>
 
+          {/* Batch Selection Ribbon for Access Logs */}
+          {filteredAccessAttempts.length > 0 && (
+            <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-slate-900 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={filteredAccessAttempts.length > 0 && selectedAccessIds.length === filteredAccessAttempts.length}
+                    onChange={handleSelectAllAccess}
+                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span>Selecionar Todos ({filteredAccessAttempts.length})</span>
+                </label>
+
+                {selectedAccessIds.length > 0 && (
+                  <span className="bg-indigo-50 text-indigo-700 font-extrabold px-2 py-0.5 rounded-lg border border-indigo-100 text-xs">
+                    {selectedAccessIds.length} selecionado(s)
+                  </span>
+                )}
+              </div>
+
+              {selectedAccessIds.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAccessIds([])}
+                    className="px-2.5 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Desmarcar
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Access Logs List Segment */}
-          <div className="flex-1 overflow-x-auto">
-            <table className="w-full table-auto border-collapse text-left">
-              <thead>
-                <tr className="bg-slate-50/75 border-b border-slate-150 text-[10px] font-extrabold text-slate-450 uppercase tracking-wider font-sans">
-                  <th className="px-6 py-3.5">Status</th>
-                  <th className="px-6 py-3.5">Carimbo de Data/Hora</th>
-                  <th className="px-6 py-3.5">Chave Informada (Doc)</th>
-                  <th className="px-6 py-3.5">ID Resolvido</th>
-                  <th className="px-6 py-3.5">Perfil</th>
-                  <th className="px-6 py-3.5">Descrição do Evento</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs text-slate-600 font-medium">
+          <div className="flex-1 p-4 overflow-x-auto">
+            {viewMode === "list" ? (
+              <table className="w-full table-auto border-collapse text-left">
+                <thead>
+                  <tr className="bg-slate-50/75 border-b border-slate-150 text-[10px] font-extrabold text-slate-450 uppercase tracking-wider font-sans">
+                    <th className="px-4 py-3.5 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={filteredAccessAttempts.length > 0 && selectedAccessIds.length === filteredAccessAttempts.length}
+                        onChange={handleSelectAllAccess}
+                        className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                    </th>
+                    <th className="px-6 py-3.5">Status</th>
+                    <th className="px-6 py-3.5">Carimbo de Data/Hora</th>
+                    <th className="px-6 py-3.5">Chave Informada (Doc)</th>
+                    <th className="px-6 py-3.5">ID Resolvido</th>
+                    <th className="px-6 py-3.5">Perfil</th>
+                    <th className="px-6 py-3.5">Descrição do Evento</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs text-slate-600 font-medium">
+                  {filteredAccessAttempts.map((attempt) => {
+                    let profileBadgeColor = "bg-slate-100 text-slate-600";
+                    let profileLabel = attempt.userType;
+
+                    if (attempt.userType === "gestor") {
+                      profileBadgeColor = "bg-indigo-50 border border-indigo-100 text-indigo-700";
+                      profileLabel = "Gestor / Diretor";
+                    } else if (attempt.userType === "requisitante") {
+                      profileBadgeColor = "bg-blue-50 border border-blue-105 text-blue-700";
+                      profileLabel = "Requisitante";
+                    } else if (attempt.userType === "profissional") {
+                      profileBadgeColor = "bg-emerald-50 border border-emerald-100 text-emerald-700";
+                      profileLabel = "Técnico de Campo";
+                    } else {
+                      profileBadgeColor = "bg-slate-100 text-slate-500 border border-slate-200";
+                      profileLabel = "Desconhecido";
+                    }
+
+                    const isSelected = selectedAccessIds.includes(attempt.id);
+
+                    return (
+                      <tr 
+                        key={attempt.id} 
+                        className={`hover:bg-slate-50/45 transition-colors ${isSelected ? "bg-indigo-50/40" : ""} ${
+                          attempt.status === "failed" ? "hover:bg-red-50/15" : "hover:bg-emerald-50/10"
+                        }`}
+                      >
+                        <td className="px-4 py-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleSelectAccess(attempt.id)}
+                            className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {attempt.status === "success" ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-lg font-bold text-[10px] uppercase tracking-wider">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              Sucesso
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-100 text-red-700 rounded-lg font-bold text-[10px] uppercase tracking-wider">
+                              <ShieldAlert className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                              Bloqueado / Falha
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap font-mono font-bold text-slate-500">
+                          {new Date(attempt.timestamp).toLocaleString("pt-BR")}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap font-mono font-semibold text-slate-700">
+                          {attempt.username || "Não preenchido"}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap font-mono text-xs font-bold text-slate-800">
+                          {attempt.userId === "desconhecido" ? (
+                            <span className="text-slate-400 font-sans font-medium">Não Identificado</span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded text-[10px]">
+                              {attempt.userId}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-lg ${profileBadgeColor}`}>
+                            {profileLabel}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 leading-relaxed font-semibold text-slate-600 whitespace-nowrap sm:whitespace-normal">
+                          {attempt.details}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredAccessAttempts.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-16 text-slate-400">
+                        <div className="flex flex-col items-center justify-center">
+                          <Lock className="w-12 h-12 text-slate-300 mb-2 animate-pulse" />
+                          <p className="font-bold text-slate-500 text-sm">Nenhuma tentativa de logon localizada.</p>
+                          <p className="text-[11px] text-slate-400 mt-1 max-w-sm">Tente reajustar seus termos de filtragem ou de status de auditoria.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              /* CARDS MODE FOR ACCESS LOGS */
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredAccessAttempts.map((attempt) => {
                   let profileBadgeColor = "bg-slate-100 text-slate-600";
                   let profileLabel = attempt.userType;
@@ -1189,66 +1506,63 @@ export default function ReportsAndLogs({
                     profileLabel = "Desconhecido";
                   }
 
+                  const isSelected = selectedAccessIds.includes(attempt.id);
+
                   return (
-                    <tr 
-                      key={attempt.id} 
-                      className={`hover:bg-slate-50/45 transition-colors ${
-                        attempt.status === "failed" ? "hover:bg-red-50/15" : "hover:bg-emerald-50/10"
-                      }`}
+                    <div
+                      key={attempt.id}
+                      className={`p-4 bg-white border ${
+                        isSelected ? "border-indigo-500 ring-2 ring-indigo-500/20 shadow-md" : "border-slate-150 shadow-xs"
+                      } rounded-2xl flex flex-col justify-between space-y-3 hover:border-slate-300 transition-all`}
                     >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {attempt.status === "success" ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-lg font-bold text-[10px] uppercase tracking-wider">
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            Sucesso
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectAccess(attempt.id)}
+                              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                            />
+                            {attempt.status === "success" ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-md font-bold text-[9px] uppercase tracking-wider">
+                                <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0" />
+                                Sucesso
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-50 border border-red-100 text-red-700 rounded-md font-bold text-[9px] uppercase tracking-wider">
+                                <ShieldAlert className="w-3 h-3 text-red-600 shrink-0" />
+                                Falha
+                              </span>
+                            )}
+                          </div>
+                          <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-md ${profileBadgeColor}`}>
+                            {profileLabel}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-100 text-red-700 rounded-lg font-bold text-[10px] uppercase tracking-wider">
-                            <ShieldAlert className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                            Bloqueado / Falha
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap font-mono font-bold text-slate-500">
-                        {new Date(attempt.timestamp).toLocaleString("pt-BR")}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap font-mono font-semibold text-slate-700">
-                        {attempt.username || "Não preenchido"}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap font-mono text-xs font-bold text-slate-800">
-                        {attempt.userId === "desconhecido" ? (
-                          <span className="text-slate-400 font-sans font-medium">Não Identificado</span>
-                        ) : (
-                          <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded text-[10px]">
-                            {attempt.userId}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-lg ${profileBadgeColor}`}>
-                          {profileLabel}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 leading-relaxed font-semibold text-slate-600 whitespace-nowrap sm:whitespace-normal">
-                        {attempt.details}
-                      </td>
-                    </tr>
+                        </div>
+
+                        <div className="space-y-1">
+                          <p className="text-xs font-extrabold text-slate-800">{attempt.username || "Chave não preenchida"}</p>
+                          <p className="text-[11px] text-slate-600 font-medium leading-relaxed">{attempt.details}</p>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono font-semibold">
+                        <span>{attempt.userId !== "desconhecido" ? `ID: ${attempt.userId}` : "Não Identificado"}</span>
+                        <span>{new Date(attempt.timestamp).toLocaleString("pt-BR")}</span>
+                      </div>
+                    </div>
                   );
                 })}
 
                 {filteredAccessAttempts.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="text-center py-16 text-slate-400">
-                      <div className="flex flex-col items-center justify-center">
-                        <Lock className="w-12 h-12 text-slate-300 mb-2 animate-pulse" />
-                        <p className="font-bold text-slate-500 text-sm">Nenhuma tentativa de logon localizada.</p>
-                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm">Tente reajustar seus termos de filtragem ou de status de auditoria.</p>
-                      </div>
-                    </td>
-                  </tr>
+                  <div className="col-span-full p-12 text-center text-slate-400 flex flex-col items-center justify-center">
+                    <Lock className="w-10 h-10 text-slate-300 mb-2 animate-pulse" />
+                    <p className="font-bold text-slate-500 text-xs">Nenhuma tentativa de acesso encontrada.</p>
+                  </div>
                 )}
-              </tbody>
-            </table>
+              </div>
+            )}
           </div>
         </div>
       )}

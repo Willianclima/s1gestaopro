@@ -28,7 +28,8 @@ import {
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench, Search,
   Settings, HelpCircle, LogOut, Menu, X, ShieldCheck, CheckCircle, Activity, FileText, Lock,
   Mail, Smartphone, Send, Copy, AlertTriangle, Bell, BellOff, Download, WifiOff,
-  ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp, MapPin, RefreshCw, Navigation
+  ChevronDown, ChevronRight, Folder, User, Sun, Moon, Monitor, TrendingUp, MapPin, RefreshCw, Navigation,
+  List, LayoutGrid, SlidersHorizontal
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
 import { useSystemTheme } from "./hooks/useSystemTheme";
@@ -440,6 +441,23 @@ export default function App() {
   const [settingsSubTab, setSettingsSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic" | undefined>(undefined);
   const [profileWarehouseId, setProfileWarehouseId] = useState("");
   const [profileWorkLocation, setProfileWorkLocation] = useState("");
+  
+  // User Default View Preference for Gestão de Perfis (Lista vs Cards)
+  const [permissionsViewMode, setPermissionsViewMode] = useState<"cards" | "list">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("permissions_view_mode") as "cards" | "list") || "list";
+    }
+    return "list";
+  });
+
+  const handleSetPermissionsViewMode = (mode: "cards" | "list") => {
+    setPermissionsViewMode(mode);
+    localStorage.setItem("permissions_view_mode", mode);
+    toastSuccess(
+      `Visão padrão da Gestão de Perfis salva como '${mode === "list" ? "Lista (Padrão)" : "Grade (Cards)"}'!`,
+      "Preferências do Usuário"
+    );
+  };
   const [showPasswordSection, setShowPasswordSection] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -4583,20 +4601,20 @@ export default function App() {
             
             {/* Contexto Cadastros: Sub-Navegação Compartilhada */}
             {["clients", "professionals", "permissions"].includes(activeTab) && (
-              <div className="mb-6 bg-slate-900 border border-slate-800 p-2.5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+              <div className="mb-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-2.5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md dark:shadow-xl transition-colors">
                 <div className="flex items-center gap-3 px-2">
-                  <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl border border-indigo-500/30 shrink-0">
+                  <div className="p-2 bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-xl border border-indigo-500/30 shrink-0">
                     <Folder className="w-4 h-4" />
                   </div>
                   <div>
-                    <span className="block text-[10px] uppercase font-black tracking-widest text-slate-400">Módulo Cadastros</span>
-                    <span className="text-sm font-extrabold text-white">
+                    <span className="block text-[10px] uppercase font-black tracking-widest text-slate-500 dark:text-slate-400">Módulo Cadastros</span>
+                    <span className="text-sm font-extrabold text-slate-900 dark:text-white">
                       {activeTab === "clients" ? "Cadastro de Usuários & Pessoas" : activeTab === "professionals" ? "Técnicos & Equipes" : "Gestão de Perfis & Permissões"}
                     </span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800/80 w-full sm:w-auto">
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-950/80 p-1 rounded-xl border border-slate-200 dark:border-slate-800/80 w-full sm:w-auto">
                   {hasTabPermission("clients") && (
                     <button
                       type="button"
@@ -4604,7 +4622,7 @@ export default function App() {
                       className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                         activeTab === "clients"
                           ? "bg-indigo-600 text-white shadow-sm font-black"
-                          : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                          : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800/50"
                       }`}
                     >
                       <Users className="w-3.5 h-3.5" />
@@ -4619,7 +4637,7 @@ export default function App() {
                       className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                         activeTab === "professionals"
                           ? "bg-indigo-600 text-white shadow-sm font-black"
-                          : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                          : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800/50"
                       }`}
                     >
                       <Wrench className="w-3.5 h-3.5" />
@@ -4634,7 +4652,7 @@ export default function App() {
                       className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                         activeTab === "permissions"
                           ? "bg-amber-500 text-slate-950 shadow-sm font-black"
-                          : "text-slate-400 hover:text-amber-300 hover:bg-slate-800/50"
+                          : "text-slate-600 dark:text-slate-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-slate-200/60 dark:hover:bg-slate-800/50"
                       }`}
                     >
                       <ShieldCheck className="w-3.5 h-3.5" />
@@ -4794,6 +4812,7 @@ export default function App() {
               <RolePermissionsManager
                 profiles={accessProfiles}
                 onSaveProfiles={handleSaveAccessProfiles}
+                currentUser={currentUser}
               />
             )}
 
@@ -4927,6 +4946,49 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Default View Mode Preference for Profiles & Permissions */}
+                    {(currentUser.userType === "admin" || currentUser.userType === "gestor") && (
+                      <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
+                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block border-b border-slate-200 dark:border-slate-850 pb-1 flex items-center gap-1.5">
+                          <SlidersHorizontal className="w-3.5 h-3.5 text-amber-500" />
+                          Visão Padrão de Perfis & Permissões
+                        </span>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight">Escolha se prefere 'Lista' ou 'Cards' como visualização padrão ao abrir o sistema.</p>
+                          
+                          <div className="flex items-center gap-0.5 bg-white dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800/80 shadow-xs shrink-0 self-start sm:self-center">
+                            <button
+                              type="button"
+                              onClick={() => handleSetPermissionsViewMode("list")}
+                              className={`p-1.5 px-3 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
+                                permissionsViewMode === "list"
+                                  ? "bg-amber-500 text-slate-950 shadow-xs font-black"
+                                  : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                              }`}
+                              title="Modo Lista Compacta (Padrão)"
+                            >
+                              <List className="w-3.5 h-3.5" />
+                              <span>Lista (Padrão)</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleSetPermissionsViewMode("cards")}
+                              className={`p-1.5 px-3 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
+                                permissionsViewMode === "cards"
+                                  ? "bg-amber-500 text-slate-950 shadow-xs font-black"
+                                  : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                              }`}
+                              title="Modo Grade / Cards"
+                            >
+                              <LayoutGrid className="w-3.5 h-3.5" />
+                              <span>Grade (Cards)</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Allocation / Work Location Editing Block */}
                     {(currentUser.userType === "gestor" || currentUser.userType === "gestor_servicos" || currentUser.userType === "admin" || currentUser.userType === "profissional") && (

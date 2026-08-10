@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Client, ServiceOrder, Almoxarifado, ServiceCategory } from "../types";
-import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database, Sparkles, ShieldCheck, ShoppingBag, Clock, Send } from "lucide-react";
-import { motion } from "motion/react";
+import { User, Search, Plus, Phone, Mail, FileText, Trash2, Edit2, MapPin, X, HelpCircle, Check, Briefcase, Database, Sparkles, ShieldCheck, ShoppingBag, Clock, Send, List, LayoutGrid } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import AddressValidationWidget from "./AddressValidationWidget";
 import UserProposalEditalModal from "./UserProposalEditalModal";
 
@@ -78,6 +78,60 @@ export default function Clients({
   globalSearchTerm
 }: ClientsProps) {
   const [searchTerm, setSearchTerm] = useState("");
+
+  const [viewMode, setViewMode] = useState<"cards" | "list">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("users_view_mode");
+      if (saved === "cards" || saved === "list") return saved;
+    }
+    return "cards";
+  });
+
+  const handleSetViewMode = (mode: "cards" | "list") => {
+    setViewMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("users_view_mode", mode);
+    }
+  };
+
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === filteredClients.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredClients.map(c => c.id));
+    }
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedIds.length === 0) return;
+    if (confirm(`Tem certeza que deseja remover os ${selectedIds.length} usuários selecionados?`)) {
+      selectedIds.forEach(id => onDeleteClient(id));
+      setSelectedIds([]);
+    }
+  };
+
+  const handleBatchApprove = () => {
+    const pendingSelected = filteredClients.filter(c => selectedIds.includes(c.id) && c.status === "pendente_autorizacao");
+    if (pendingSelected.length === 0) return;
+    if (confirm(`Aprovar e conceder permissão para os ${pendingSelected.length} usuário(s) pendente(s) selecionado(s)?`)) {
+      pendingSelected.forEach(c => {
+        onUpdateClient({
+          ...c,
+          status: "ativo",
+          notes: (c.notes || "") + ` | Permissão concedida pelo Administrador em ${new Date().toLocaleDateString('pt-BR')}.`
+        });
+      });
+      setSelectedIds([]);
+    }
+  };
 
   useEffect(() => {
     if (globalSearchTerm !== undefined) {
@@ -335,14 +389,14 @@ export default function Clients({
         </div>
 
         {/* Status Filter Pills */}
-        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 shrink-0 overflow-x-auto">
+        <div className="flex bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800 gap-1 shrink-0 overflow-x-auto">
           <button
             type="button"
             onClick={() => setStatusFilter("todos")}
             className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
               statusFilter === "todos"
-                ? "bg-white text-slate-800 shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
+                ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             Todos os Usuários ({clients.length})
@@ -352,8 +406,8 @@ export default function Clients({
             onClick={() => setStatusFilter("ativos")}
             className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
               statusFilter === "ativos"
-                ? "bg-white text-slate-800 shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
+                ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             Ativos ({clients.length - pendingCount})
@@ -366,35 +420,129 @@ export default function Clients({
                 ? "bg-amber-500 text-white shadow-xs"
                 : pendingCount > 0 
                   ? "bg-amber-100 text-amber-900 hover:bg-amber-200" 
-                  : "text-slate-600 hover:text-slate-900"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             Pendentes ({pendingCount})
             {pendingCount > 0 && <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />}
           </button>
         </div>
+
+        {/* Seletor de Modo: Lista | Grade (Cards) */}
+        <div className="bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center gap-1 shrink-0 self-end md:self-auto">
+          <button
+            type="button"
+            onClick={() => handleSetViewMode("list")}
+            className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+              viewMode === "list"
+                ? "bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs font-bold"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+            }`}
+            title="Visão em Lista Compacta"
+          >
+            <List className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSetViewMode("cards")}
+            className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+              viewMode === "cards"
+                ? "bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs font-bold"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+            }`}
+            title="Visão em Grade (Cards)"
+          >
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      {/* Clients Grid */}
-      {isLoading ? (
-        <ClientsSkeleton />
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Batch Selection Action Bar */}
+      {filteredClients.length > 0 && (
+        <div className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs font-semibold">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors">
+              <input
+                type="checkbox"
+                checked={filteredClients.length > 0 && selectedIds.length === filteredClients.length}
+                onChange={handleSelectAll}
+                className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+              />
+              <span>Selecionar Todos ({filteredClients.length})</span>
+            </label>
+
+            {selectedIds.length > 0 && (
+              <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-400 font-extrabold px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 text-xs">
+                {selectedIds.length} selecionado(s)
+              </span>
+            )}
+          </div>
+
+          {selectedIds.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {filteredClients.some(c => selectedIds.includes(c.id) && c.status === "pendente_autorizacao") && (
+                <button
+                  type="button"
+                  onClick={handleBatchApprove}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Aprovar Selecionados
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleBatchDelete}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Excluir Selecionados ({selectedIds.length})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="px-3 py-1.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                Desmarcar
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Clients Grid / List */}
+      <AnimatePresence mode="wait">
+        {isLoading ? (
+          <ClientsSkeleton />
+        ) : viewMode === "cards" ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredClients.length > 0 ? (
             filteredClients.map((client, index) => {
               const history = getClientOSHistory(client.id);
               const ut = client.userType || "requisitante";
+              const isSelected = selectedIds.includes(client.id);
               return (
                 <motion.div 
                   key={client.id} 
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
-                  className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:border-slate-300 p-5 transition-all flex flex-col justify-between group"
+                  className={`bg-white rounded-2xl border ${
+                    isSelected ? "border-amber-500 ring-2 ring-amber-500/20 shadow-md" : "border-slate-100 shadow-sm hover:border-slate-300"
+                  } p-5 transition-all duration-200 hover:scale-[1.015] hover:shadow-md flex flex-col justify-between group transform`}
                 >
                   <div>
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelect(client.id)}
+                          className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0 mt-1"
+                        />
                         <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600 font-bold text-sm">
                           {client.name.split(" ").slice(0, 2).map(n => n[0]).join("").toUpperCase()}
                         </div>
@@ -561,14 +709,120 @@ export default function Clients({
               );
             })
           ) : (
-            <div className="col-span-1 md:col-span-2 bg-white rounded-2xl border border-slate-100 p-12 text-center text-slate-400 flex flex-col items-center justify-center">
-              <User className="w-12 h-12 text-slate-300 mb-2" />
-              <p className="font-bold text-slate-500">Nenhum requisitante cadastrado ou encontrado.</p>
-              <p className="text-xs text-slate-400 mt-1">Clique em "Novo Requisitante" para começar a abastecer seu cadastro de GS.</p>
+            <div className="col-span-1 md:col-span-2 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-12 text-center text-slate-400 flex flex-col items-center justify-center">
+              <User className="w-12 h-12 text-slate-300 dark:text-slate-700 mb-2" />
+              <p className="font-bold text-slate-500 dark:text-slate-400">Nenhum requisitante cadastrado ou encontrado.</p>
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Clique em "Cadastrar Usuário" para começar a abastecer seu cadastro de GS.</p>
             </div>
           )}
         </div>
-      )}
+        ) : (
+          <div className="bg-white dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800/80 shadow-xs">
+            {filteredClients.length > 0 ? (
+              filteredClients.map((client) => {
+                const history = getClientOSHistory(client.id);
+                const ut = client.userType || "requisitante";
+                const isSelected = selectedIds.includes(client.id);
+                return (
+                  <div
+                    key={client.id}
+                    className={`p-3.5 sm:p-4 hover:bg-slate-50 dark:hover:bg-slate-900/60 transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 text-left ${
+                      isSelected ? "bg-amber-50/50 dark:bg-amber-950/20" : ""
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggleSelect(client.id)}
+                        className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                      />
+
+                      <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-extrabold text-slate-700 dark:text-slate-300 text-xs shrink-0">
+                        {client.name.split(" ").slice(0, 2).map(n => n[0]).join("").toUpperCase()}
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-extrabold text-sm text-slate-900 dark:text-white truncate">
+                            {client.name}
+                          </span>
+                          {ut === "admin" ? (
+                            <span className="bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 px-2 py-0.5 rounded-full text-[9px] font-black uppercase">
+                              ⚙️ Admin
+                            </span>
+                          ) : ut === "gestor" ? (
+                            <span className="bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800 px-2 py-0.5 rounded-full text-[9px] font-black uppercase">
+                              🛡️ Gestor
+                            </span>
+                          ) : ut === "gestor_servicos" ? (
+                            <span className="bg-cyan-50 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-400 border border-cyan-200 dark:border-cyan-800 px-2 py-0.5 rounded-full text-[9px] font-black uppercase">
+                              🔧 Gestor Serv
+                            </span>
+                          ) : (
+                            <span className="bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full text-[9px] font-black uppercase">
+                              👤 Requisitante
+                            </span>
+                          )}
+
+                          {client.status === "pendente_autorizacao" && (
+                            <span className="bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-400 border border-amber-300 dark:border-amber-700 px-2 py-0.5 rounded-full text-[9px] font-black uppercase animate-pulse">
+                              ⏳ Pendente
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5 flex-wrap">
+                          <span>CPF/Doc: {client.document || "N/A"}</span>
+                          <span>•</span>
+                          <span>{client.phone || "Sem tel"}</span>
+                          <span>•</span>
+                          <span className="truncate">{client.email || "Sem e-mail"}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                      <button
+                        onClick={() => setSelectedClient(client)}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer shadow-2xs"
+                      >
+                        Histórico ({history.length})
+                      </button>
+
+                      <button
+                        onClick={() => openForm(client)}
+                        className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer"
+                        title="Editar"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const profileName = ut === "admin" ? "administrador" : ut === "gestor" ? "gestor" : ut === "gestor_servicos" ? "gestor de serviços" : "requisitante";
+                          if(confirm(`Tem certeza que deseja remover este ${profileName}?`)) {
+                            onDeleteClient(client.id);
+                          }
+                        }}
+                        className="p-2 rounded-xl text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-all cursor-pointer"
+                        title="Deletar"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center">
+                <User className="w-12 h-12 text-slate-300 dark:text-slate-700 mb-2" />
+                <p className="font-bold text-slate-500 dark:text-slate-400">Nenhum requisitante cadastrado ou encontrado.</p>
+              </div>
+            )}
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* CLIENT HISTORY DRAWER/MODAL */}
       {selectedClient && (
