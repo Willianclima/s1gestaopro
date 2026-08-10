@@ -1087,6 +1087,8 @@ export default function RolePermissionsManager({
                               }}
                               className="p-1 text-rose-500 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded transition-all shrink-0"
                               title="Excluir Perfil Customizado"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -1214,7 +1216,7 @@ export default function RolePermissionsManager({
                             </button>
                           )}
                         </div>
-                      </div>
+                      </motion.div>
                     );
                   })}
                 </div>
