@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import AddressValidationWidget from "./AddressValidationWidget";
 import UserProposalEditalModal from "./UserProposalEditalModal";
 
-interface ClientsProps {
+interface UsuariosProps {
   clients: Client[];
   orders: ServiceOrder[];
   onAddClient: (client: Client) => void;
@@ -67,7 +67,7 @@ const ClientsSkeleton = () => (
   </div>
 );
 
-export default function Clients({ 
+export default function Usuarios({ 
   clients, 
   orders, 
   onAddClient, 
@@ -76,7 +76,7 @@ export default function Clients({
   almoxarifados = [],
   categories = [],
   globalSearchTerm
-}: ClientsProps) {
+}: UsuariosProps) {
   const [searchTerm, setSearchTerm] = useState("");
 
   const [viewMode, setViewMode] = useState<"cards" | "list">(() => {

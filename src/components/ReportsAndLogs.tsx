@@ -4,8 +4,9 @@ import { ServiceOrder, Client, Professional, SystemLog, LoginAttempt } from "../
 import { 
   BarChart3, FileText, Search, Clock, CheckCircle2, AlertTriangle, 
   X, HelpCircle, Users, Activity, SlidersHorizontal, Wrench, RefreshCw, Trash2,
-  Download, Lock, ShieldCheck, ShieldAlert, List, LayoutGrid
+  Download, Lock, ShieldCheck, ShieldAlert, List, LayoutGrid, Sparkles
 } from "lucide-react";
+import AiLogAnalysisModal from "./AiLogAnalysisModal";
 
 interface ReportsAndLogsProps {
   orders: ServiceOrder[];
@@ -21,6 +22,7 @@ export default function ReportsAndLogs({
   orders, clients, professionals, logs, onClearLogs, loginAttempts = [], onClearLoginAttempts
 }: ReportsAndLogsProps) {
   const [activeTab, setActiveTab] = useState<"charts" | "audit" | "access">("charts");
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [logsSearch, setLogsSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [logPeriodFilter, setLogPeriodFilter] = useState<string>("all");
@@ -612,32 +614,44 @@ export default function ReportsAndLogs({
 
           {/* Seletor de Modo de Exibição (Lista / Cards) para os Logs/Auditoria */}
           {(activeTab === "audit" || activeTab === "access") && (
-            <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => handleSetViewMode("list")}
-                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                  viewMode === "list"
-                    ? "bg-slate-900 text-white shadow-xs font-bold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-                title="Visão em Lista"
+                onClick={() => setIsAiModalOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider py-2 px-3.5 rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer border border-indigo-500/50"
+                title="Analisar anomalias e padrões atípicos com a IA Gemini"
               >
-                <List className="w-4 h-4" />
+                <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                <span className="hidden sm:inline">Análise com IA</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => handleSetViewMode("cards")}
-                className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                  viewMode === "cards"
-                    ? "bg-slate-900 text-white shadow-xs font-bold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-                title="Visão em Cards"
-              >
-                <LayoutGrid className="w-4 h-4" />
-              </button>
+              <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleSetViewMode("list")}
+                  className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                    viewMode === "list"
+                      ? "bg-slate-900 text-white shadow-xs font-bold"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                  title="Visão em Lista"
+                >
+                  <List className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSetViewMode("cards")}
+                  className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                    viewMode === "cards"
+                      ? "bg-slate-900 text-white shadow-xs font-bold"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                  title="Visão em Cards"
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
 
@@ -1566,6 +1580,15 @@ export default function ReportsAndLogs({
           </div>
         </div>
       )}
+
+      {/* Modal de Análise e Auditoria do SystemLog via IA */}
+      <AiLogAnalysisModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+        logs={logs}
+        loginAttempts={loginAttempts}
+        initialScope={activeTab === "access" ? "access" : "all"}
+      />
     </div>
   );
 }

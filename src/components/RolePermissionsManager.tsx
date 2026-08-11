@@ -1,13 +1,15 @@
-import React, { useState } from "react";
-import { AccessProfile, PermissionRoutine, CurrentUser } from "../types";
+import React, { useState, useMemo } from "react";
+import { AccessProfile, PermissionRoutine, CurrentUser, SystemLog, LoginAttempt } from "../types";
+import AiLogAnalysisModal from "./AiLogAnalysisModal";
 import { 
   ShieldCheck, Check, Plus, Trash2, RotateCcw, Save, Sparkles, 
   LayoutDashboard, FileText, BarChart3, Calendar, Users, Building2, 
   Bot, AlertTriangle, Layers, ChevronRight, Lock, CheckSquare, Square,
   LayoutGrid, List, Search, ToggleLeft, ToggleRight, X, SlidersHorizontal, Copy,
-  Download, FileJson, FileSpreadsheet, Upload, ArrowUpDown
+  Download, FileJson, FileSpreadsheet, Upload, ArrowUpDown, Zap
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { List as VirtualizedList, RowComponentProps } from "react-window";
 import { useToast } from "./ToastContext";
 
 // Definicao de todas as rotinas de Gestao de Servicos disponiveis no sistema
@@ -276,20 +278,155 @@ export const DEFAULT_ACCESS_PROFILES: AccessProfile[] = [
   }
 ];
 
+interface ProfileRowData {
+  profiles: AccessProfile[];
+  selectedProfileId: string;
+  batchSelectedIds: string[];
+  onSelect: (id: string) => void;
+  onToggleBatchSelect: (id: string, e: React.MouseEvent) => void;
+  onDuplicate: (p: AccessProfile) => void;
+  onDelete: (id: string) => void;
+}
+
+const VirtualizedProfileRow = ({
+  index,
+  style,
+  profiles,
+  selectedProfileId,
+  batchSelectedIds,
+  onSelect,
+  onToggleBatchSelect,
+  onDuplicate,
+  onDelete
+}: RowComponentProps<ProfileRowData>) => {
+  const p = profiles[index];
+  if (!p) return null;
+
+  const isSelected = p.id === selectedProfileId;
+  const isBatchSelected = batchSelectedIds.includes(p.id);
+  const totalActive = Object.values(p.permissions).filter(Boolean).length;
+  const totalRoutines = SYSTEM_PERMISSIONS_ROUTINES.length;
+  const pct = Math.round((totalActive / totalRoutines) * 100);
+
+  return (
+    <div style={style} className="px-1 py-1">
+      <div
+        onClick={() => onSelect(p.id)}
+        className={`h-full px-3.5 sm:px-4 py-2.5 rounded-xl border transition-all duration-150 cursor-pointer flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left ${
+          isBatchSelected
+            ? "bg-amber-500/15 dark:bg-amber-950/30 border-l-4 border-l-amber-500 border-amber-500/40 text-slate-900 dark:text-white font-medium shadow-2xs"
+            : isSelected
+            ? "bg-amber-50/80 dark:bg-amber-950/20 border-l-4 border-l-amber-500 border-amber-500/40 text-slate-900 dark:text-white font-medium shadow-2xs"
+            : "bg-white dark:bg-slate-950/80 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900/60 text-slate-700 dark:text-slate-300"
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={(e) => onToggleBatchSelect(p.id, e)}
+            className={`p-1 rounded-lg border transition-all cursor-pointer shrink-0 ${
+              isBatchSelected
+                ? "bg-amber-500 text-slate-950 border-amber-600 shadow-2xs"
+                : "bg-white dark:bg-slate-900 text-slate-400 hover:text-slate-700 dark:hover:text-white border-slate-200 dark:border-slate-700"
+            }`}
+            title={isBatchSelected ? "Deselecionar perfil" : "Selecionar para ação em lote"}
+          >
+            {isBatchSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+          </button>
+
+          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+            isSelected ? "border-amber-500 bg-amber-500 dark:border-amber-400 dark:bg-amber-400" : "border-slate-300 dark:border-slate-600"
+          }`}>
+            {isSelected && <div className="w-1.5 h-1.5 bg-white dark:bg-slate-950 rounded-full" />}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`font-extrabold text-sm ${isSelected ? "text-amber-800 dark:text-amber-400" : "text-slate-900 dark:text-white"}`}>
+                {p.name}
+              </span>
+              {p.isSystemDefault ? (
+                <span className="text-[9px] font-bold uppercase bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 rounded">
+                  Nativo
+                </span>
+              ) : (
+                <span className="text-[9px] font-bold uppercase bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-1.5 py-0.5 rounded">
+                  Customizado
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-xl mt-0.5">
+              {p.description}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200 dark:border-slate-800/60">
+          <div className="flex items-center gap-2">
+            <div className="w-20 bg-slate-100 dark:bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-200 dark:border-slate-800">
+              <div 
+                className="bg-amber-500 dark:bg-amber-400 h-full rounded-full transition-all duration-300"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className="text-[11px] font-mono font-bold text-amber-700 dark:text-amber-400 min-w-[50px] text-right">
+              {totalActive}/{totalRoutines}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDuplicate(p);
+            }}
+            className="px-2.5 py-1 text-[11px] font-extrabold text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+            title="Usar este perfil como template para um novo"
+          >
+            <Copy className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Duplicar</span>
+          </button>
+
+          {!p.isSystemDefault && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(p.id);
+              }}
+              className="p-1.5 text-rose-500 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded-lg transition-all cursor-pointer"
+              title="Excluir Perfil Customizado"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 interface RolePermissionsManagerProps {
   profiles: AccessProfile[];
   onSaveProfiles: (updatedProfiles: AccessProfile[]) => void;
   onResetToDefaults?: () => void;
   currentUser?: CurrentUser | null;
+  onAddSystemLog?: (action: string, details: string, category: "requisicao" | "requisitante" | "tecnico" | "sistema") => void;
+  logs?: SystemLog[];
+  loginAttempts?: LoginAttempt[];
 }
 
 export default function RolePermissionsManager({
   profiles = DEFAULT_ACCESS_PROFILES,
   onSaveProfiles,
   onResetToDefaults,
-  currentUser
+  currentUser,
+  onAddSystemLog,
+  logs = [],
+  loginAttempts = []
 }: RolePermissionsManagerProps) {
   const { success: toastSuccess, info: toastInfo } = useToast();
+  const [isAiAuditModalOpen, setIsAiAuditModalOpen] = useState(false);
   const [activeProfiles, setActiveProfiles] = useState<AccessProfile[]>(
     profiles.length > 0 ? profiles : DEFAULT_ACCESS_PROFILES
   );
@@ -312,6 +449,43 @@ export default function RolePermissionsManager({
       setViewMode(savedMode);
     }
   }, []);
+
+  // Helper central para registro automático de auditoria no SystemLog (Quem, Quando e O que foi modificado)
+  const logSystemChange = (
+    action: string,
+    changeSummary: string,
+    extraDetails?: string
+  ) => {
+    const userName = currentUser?.name ? `"${currentUser.name}"` : "Usuário Mestre";
+    const userRole = currentUser?.userType ? `(${currentUser.userType.toUpperCase()})` : "(ADMIN)";
+    const userDoc = currentUser?.document ? `[Doc: ${currentUser.document}]` : "";
+    
+    const who = `Executor: ${userName} ${userRole} ${userDoc}`.trim();
+    const when = `Data/Hora: ${new Date().toLocaleString("pt-BR")}`;
+    
+    const fullDetails = `${changeSummary} | ${who} | ${when}${extraDetails ? ` | ${extraDetails}` : ""}`;
+
+    if (onAddSystemLog) {
+      onAddSystemLog(action, fullDetails, "sistema");
+    }
+
+    // Direct localStorage backup sync for SystemLog persistence
+    try {
+      const cachedLogs = localStorage.getItem("service_mgt_logs2");
+      const existingLogs: SystemLog[] = cachedLogs ? JSON.parse(cachedLogs) : [];
+      const newLog: SystemLog = {
+        id: "log-" + Math.random().toString(36).substr(2, 9),
+        timestamp: new Date().toISOString(),
+        action,
+        details: fullDetails,
+        category: "sistema"
+      };
+      const updated = [newLog, ...existingLogs];
+      localStorage.setItem("service_mgt_logs2", JSON.stringify(updated));
+    } catch (err) {
+      console.warn("Erro ao sincronizar SystemLog em localStorage:", err);
+    }
+  };
 
   // Filtro de busca para perfis e rotinas
   const [profileSearchTerm, setProfileSearchTerm] = useState<string>("");
@@ -361,12 +535,20 @@ export default function RolePermissionsManager({
       onSaveProfiles(updated);
       setBatchSelectedIds([]);
       setSelectedProfileId(updated[0]?.id || "requisitante");
+
+      const customNames = customProfiles.map((p) => `"${p.name}"`).join(", ");
+      logSystemChange(
+        "Exclusão de Perfis em Lote",
+        `Excluído(s) ${customProfiles.length} perfil(is) customizado(s) em lote: [${customNames}].`
+      );
+
       toastInfo(`${customProfiles.length} perfil(is) excluído(s) em lote.`, "Exclusão em Lote");
     }
   };
 
   const handleBatchEnableAllPermissions = () => {
     if (batchSelectedIds.length === 0) return;
+    const selectedProfiles = activeProfiles.filter((p) => batchSelectedIds.includes(p.id));
     const updatedProfiles = activeProfiles.map((p) => {
       if (batchSelectedIds.includes(p.id)) {
         const allTruePerms = { ...p.permissions };
@@ -380,6 +562,13 @@ export default function RolePermissionsManager({
 
     setActiveProfiles(updatedProfiles);
     onSaveProfiles(updatedProfiles);
+
+    const profileNames = selectedProfiles.map((p) => `"${p.name}"`).join(", ");
+    logSystemChange(
+      "Liberação Total em Lote",
+      `Habilitadas todas as ${SYSTEM_PERMISSIONS_ROUTINES.length} rotinas operacionais em lote para ${selectedProfiles.length} perfil(is): [${profileNames}].`
+    );
+
     toastSuccess(
       `Todas as rotinas foram HABILITADAS em lote para ${batchSelectedIds.length} perfil(is).`,
       "Alteração em Lote"
@@ -388,6 +577,7 @@ export default function RolePermissionsManager({
 
   const handleBatchDisableAllPermissions = () => {
     if (batchSelectedIds.length === 0) return;
+    const selectedProfiles = activeProfiles.filter((p) => batchSelectedIds.includes(p.id));
     const updatedProfiles = activeProfiles.map((p) => {
       if (batchSelectedIds.includes(p.id)) {
         const allFalsePerms = { ...p.permissions };
@@ -401,6 +591,13 @@ export default function RolePermissionsManager({
 
     setActiveProfiles(updatedProfiles);
     onSaveProfiles(updatedProfiles);
+
+    const profileNames = selectedProfiles.map((p) => `"${p.name}"`).join(", ");
+    logSystemChange(
+      "Bloqueio Total em Lote",
+      `Desabilitadas todas as rotinas operacionais em lote para ${selectedProfiles.length} perfil(is): [${profileNames}].`
+    );
+
     toastSuccess(
       `Todas as rotinas foram DESABILITADAS em lote para ${batchSelectedIds.length} perfil(is).`,
       "Alteração em Lote"
@@ -423,72 +620,140 @@ export default function RolePermissionsManager({
     const updated = [...activeProfiles, ...newProfiles];
     setActiveProfiles(updated);
     onSaveProfiles(updated);
+
+    const profileNames = selectedProfiles.map((p) => `"${p.name}"`).join(", ");
+    logSystemChange(
+      "Duplicação de Perfis em Lote",
+      `Duplicados ${newProfiles.length} perfil(is) de acesso em lote a partir de: [${profileNames}].`
+    );
+
     toastSuccess(
       `${newProfiles.length} perfil(is) duplicado(s) em lote com sucesso!`,
       "Duplicação em Lote"
     );
   };
 
-  const handleExportBatchJSON = () => {
-    if (batchSelectedIds.length === 0) return;
-    const selectedProfiles = activeProfiles.filter((p) => batchSelectedIds.includes(p.id));
-    const dataStr = JSON.stringify(selectedProfiles, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
+  // Exportar Matriz de Perfis e Permissões em formato JSON (Backup & Auditoria)
+  const exportMatrixJSON = (
+    profilesToExport: AccessProfile[] = activeProfiles,
+    filenamePrefix = "matriz_perfis_permissoes"
+  ) => {
+    if (profilesToExport.length === 0) {
+      alert("Nenhum perfil disponível para exportação.");
+      return;
+    }
+
+    const payload = {
+      meta: {
+        title: "Matriz de Perfis e Permissões de Acesso - Gestão de Serviços",
+        exportedAt: new Date().toISOString(),
+        totalProfiles: profilesToExport.length,
+        totalRoutines: SYSTEM_PERMISSIONS_ROUTINES.length,
+      },
+      routines: SYSTEM_PERMISSIONS_ROUTINES.map((r) => ({
+        key: r.key,
+        label: r.label,
+        category: r.category,
+        description: r.description,
+      })),
+      profiles: profilesToExport,
+    };
+
+    const dataStr = JSON.stringify(payload, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `perfis_acesso_export_${Date.now()}.json`;
+    link.download = `${filenamePrefix}_${Date.now()}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    toastSuccess(
-      `${selectedProfiles.length} perfil(is) exportado(s) em JSON.`,
-      "Exportação Concluída"
+    logSystemChange(
+      "Exportação de Backup (JSON)",
+      `Exportado arquivo JSON com a matriz de ${profilesToExport.length} perfil(is) e ${SYSTEM_PERMISSIONS_ROUTINES.length} rotinas operacionais.`
     );
+
+    toastSuccess(
+      `Matriz de ${profilesToExport.length} perfil(is) e ${SYSTEM_PERMISSIONS_ROUTINES.length} rotinas exportada em JSON com sucesso!`,
+      "Exportação JSON Concluída"
+    );
+  };
+
+  // Exportar Matriz de Perfis e Permissões em formato CSV (Auditoria & Planilha)
+  const exportMatrixCSV = (
+    profilesToExport: AccessProfile[] = activeProfiles,
+    filenamePrefix = "matriz_perfis_permissoes"
+  ) => {
+    if (profilesToExport.length === 0) {
+      alert("Nenhum perfil disponível para exportação.");
+      return;
+    }
+
+    const routineKeys = SYSTEM_PERMISSIONS_ROUTINES.map((r) => r.key);
+    const routineHeaders = SYSTEM_PERMISSIONS_ROUTINES.map(
+      (r) => `"${r.label.replace(/"/g, '""')}"`
+    );
+
+    const headers = [
+      "ID do Perfil",
+      "Nome do Perfil",
+      "Descrição",
+      "Tipo de Perfil",
+      "Rotinas Ativas",
+      "Total Rotinas",
+      "Percentual Ativo (%)",
+      ...routineHeaders,
+    ].join(",");
+
+    const rows = profilesToExport.map((p) => {
+      const id = `"${p.id.replace(/"/g, '""')}"`;
+      const name = `"${p.name.replace(/"/g, '""')}"`;
+      const desc = `"${p.description.replace(/"/g, '""')}"`;
+      const type = p.isSystemDefault ? '"Nativo do Sistema"' : '"Customizado"';
+
+      const totalActive = Object.values(p.permissions).filter(Boolean).length;
+      const totalRoutines = SYSTEM_PERMISSIONS_ROUTINES.length;
+      const pct = Math.round((totalActive / totalRoutines) * 100);
+
+      const perms = routineKeys.map((key) => (p.permissions[key] ? '"SIM"' : '"NÃO"'));
+
+      return [id, name, desc, type, totalActive, totalRoutines, `"${pct}%"`, ...perms].join(",");
+    });
+
+    const csvContent = "\uFEFF" + [headers, ...rows].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${filenamePrefix}_${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    logSystemChange(
+      "Exportação de Relatório (CSV)",
+      `Exportado arquivo CSV contendo matriz de ${profilesToExport.length} perfil(is) e ${SYSTEM_PERMISSIONS_ROUTINES.length} rotinas operacionais.`
+    );
+
+    toastSuccess(
+      `Matriz de ${profilesToExport.length} perfil(is) e ${SYSTEM_PERMISSIONS_ROUTINES.length} rotinas exportada em CSV com sucesso!`,
+      "Exportação CSV Concluída"
+    );
+  };
+
+  const handleExportBatchJSON = () => {
+    if (batchSelectedIds.length === 0) return;
+    const selectedProfiles = activeProfiles.filter((p) => batchSelectedIds.includes(p.id));
+    exportMatrixJSON(selectedProfiles, "perfis_selecionados_export");
   };
 
   const handleExportBatchCSV = () => {
     if (batchSelectedIds.length === 0) return;
     const selectedProfiles = activeProfiles.filter((p) => batchSelectedIds.includes(p.id));
-
-    const routineKeys = SYSTEM_PERMISSIONS_ROUTINES.map((r) => r.key);
-    const routineLabels = SYSTEM_PERMISSIONS_ROUTINES.map((r) => `"${r.label.replace(/"/g, '""')}"`);
-
-    const headers = [
-      "ID",
-      "Nome",
-      "Descrição",
-      "Tipo",
-      ...routineLabels
-    ].join(",");
-
-    const rows = selectedProfiles.map((p) => {
-      const id = `"${p.id.replace(/"/g, '""')}"`;
-      const name = `"${p.name.replace(/"/g, '""')}"`;
-      const desc = `"${p.description.replace(/"/g, '""')}"`;
-      const type = p.isSystemDefault ? '"Nativo"' : '"Customizado"';
-      const perms = routineKeys.map((key) => (p.permissions[key] ? '"SIM"' : '"NÃO"'));
-
-      return [id, name, desc, type, ...perms].join(",");
-    });
-
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `perfis_acesso_export_${Date.now()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    toastSuccess(
-      `${selectedProfiles.length} perfil(is) exportado(s) em CSV.`,
-      "Exportação Concluída"
-    );
+    exportMatrixCSV(selectedProfiles, "perfis_selecionados_export");
   };
 
   const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -501,8 +766,13 @@ export default function RolePermissionsManager({
         const content = event.target?.result as string;
         const importedData = JSON.parse(content);
 
-        if (!Array.isArray(importedData)) {
-          alert("O arquivo JSON deve conter uma lista de perfis de acesso.");
+        let profilesList: any[] = [];
+        if (Array.isArray(importedData)) {
+          profilesList = importedData;
+        } else if (importedData && Array.isArray(importedData.profiles)) {
+          profilesList = importedData.profiles;
+        } else {
+          alert("O arquivo JSON deve conter uma lista de perfis de acesso ou um objeto de matriz exportada contendo a lista 'profiles'.");
           return;
         }
 
@@ -510,14 +780,14 @@ export default function RolePermissionsManager({
         let updatedCount = 0;
         const currentProfilesMap = new Map<string, AccessProfile>(activeProfiles.map((p) => [p.id, p]));
 
-        importedData.forEach((imp: any) => {
+        profilesList.forEach((imp: any) => {
           if (imp && imp.name && imp.permissions) {
             const profileId = imp.id || `perfil_imported_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
             const isNative = Boolean(imp.isSystemDefault);
             const newProfile: AccessProfile = {
               id: profileId,
               name: imp.name,
-              description: imp.description || "Perfil importado via JSON.",
+              description: imp.description || "Perfil importado via arquivo JSON.",
               color: imp.color || "indigo",
               isSystemDefault: isNative,
               permissions: { ...imp.permissions },
@@ -537,12 +807,18 @@ export default function RolePermissionsManager({
         const mergedList = Array.from(currentProfilesMap.values());
         setActiveProfiles(mergedList);
         onSaveProfiles(mergedList);
+
+        logSystemChange(
+          "Importação de Perfis via JSON",
+          `Importação realizada via arquivo JSON. Perfis processados: ${addedCount} novo(s) adicionados e ${updatedCount} existentes atualizados.`
+        );
+
         toastSuccess(
           `Importação concluída: ${addedCount} perfil(is) novo(s) e ${updatedCount} atualizado(s).`,
           "Importação de Perfis"
         );
       } catch (err) {
-        alert("Erro ao ler o arquivo JSON. Certifique-se de que é um JSON de perfis válido.");
+        alert("Erro ao ler o arquivo JSON. Certifique-se de que é um arquivo de perfis válido.");
       }
     };
     reader.readAsText(file);
@@ -562,13 +838,15 @@ export default function RolePermissionsManager({
     { id: "bi", label: "Métricas B.I. & Relatórios", icon: BarChart3 },
     { id: "scheduler", label: "Agendamento & Calendário", icon: Calendar },
     { id: "professionals", label: "Equipes Técnicas & Profissionais", icon: Users },
-    { id: "clients", label: "Aprovação de Usuários & Clientes", icon: Building2 },
+    { id: "clients", label: "Aprovação & Gestão de Usuários", icon: Building2 },
     { id: "system", label: "Segurança & Inteligência I.A.", icon: ShieldCheck },
   ];
 
   const handleTogglePermission = (routineKey: string) => {
     if (!currentProfile) return;
 
+    const routine = SYSTEM_PERMISSIONS_ROUTINES.find((r) => r.key === routineKey);
+    const routineLabel = routine ? `"${routine.label}"` : `[${routineKey}]`;
     const currentVal = !!currentProfile.permissions[routineKey];
     const updatedPermissions = {
       ...currentProfile.permissions,
@@ -587,6 +865,12 @@ export default function RolePermissionsManager({
 
     setActiveProfiles(updatedProfiles);
     onSaveProfiles(updatedProfiles);
+
+    logSystemChange(
+      "Alteração de Permissão Individual",
+      `Perfil: "${currentProfile.name}" (ID: ${currentProfile.id}). Rotina: ${routineLabel} (${routineKey}). Status modificado: ${!currentVal ? "HABILITADO (Sim)" : "DESABILITADO (Não)"} (Anteriormente: ${currentVal ? "Sim" : "Não"}).`
+    );
+
     toastSuccess(
       `Permissão "${routineKey}" ${!currentVal ? "HABILITADA" : "DESABILITADA"} para o perfil "${currentProfile.name}". Todos os usuários vinculados foram atualizados.`,
       "Matriz de Permissões Atualizada"
@@ -597,6 +881,8 @@ export default function RolePermissionsManager({
     if (!currentProfile) return;
 
     const categoryRoutines = SYSTEM_PERMISSIONS_ROUTINES.filter((r) => r.category === categoryId);
+    const catObj = categories.find((c) => c.id === categoryId);
+    const catLabel = catObj ? `"${catObj.label}"` : `[${categoryId}]`;
     const newPermissions = { ...currentProfile.permissions };
 
     categoryRoutines.forEach((r) => {
@@ -615,6 +901,12 @@ export default function RolePermissionsManager({
 
     setActiveProfiles(updatedProfiles);
     onSaveProfiles(updatedProfiles);
+
+    logSystemChange(
+      "Alteração de Categoria de Permissões",
+      `Perfil: "${currentProfile.name}" (ID: ${currentProfile.id}). Categoria: ${catLabel}. Ação: Todas as ${categoryRoutines.length} rotinas da categoria foram ${enableAll ? "HABILITADAS" : "DESABILITADAS"} em lote.`
+    );
+
     toastSuccess(
       `Todas as rotinas do grupo foram ${enableAll ? "HABILITADAS" : "DESABILITADAS"} para "${currentProfile.name}".`,
       "Acesso Atualizado em Lote"
@@ -663,6 +955,12 @@ export default function RolePermissionsManager({
     setIsCreatingProfile(false);
     setNewProfileName("");
     setNewProfileDesc("");
+
+    logSystemChange(
+      "Criação de Novo Perfil",
+      `Novo perfil de acesso "${newProfile.name}" (ID: ${newId}) criado com ${Object.values(newProfile.permissions).filter(Boolean).length} permissões ativas. Descrição: "${newProfile.description}".`
+    );
+
     toastSuccess(`Novo perfil "${newProfile.name}" criado com sucesso!`, "Perfil Adicionado");
   };
 
@@ -683,6 +981,12 @@ export default function RolePermissionsManager({
     setActiveProfiles(updated);
     onSaveProfiles(updated);
     setSelectedProfileId(newId);
+
+    logSystemChange(
+      "Duplicação de Perfil",
+      `Perfil de acesso "${newName}" (ID: ${newId}) criado como duplicata do perfil original "${sourceProfile.name}".`
+    );
+
     toastSuccess(
       `Novo perfil "${newName}" criado com base em "${sourceProfile.name}". Permissões clonadas com sucesso!`,
       "Perfil Duplicado / Template"
@@ -703,6 +1007,12 @@ export default function RolePermissionsManager({
       setActiveProfiles(updated);
       onSaveProfiles(updated);
       setSelectedProfileId(updated[0]?.id || "requisitante");
+
+      logSystemChange(
+        "Exclusão de Perfil",
+        `Perfil customizado "${profToDelete.name}" (ID: ${profileId}) foi excluído do cadastro de perfis.`
+      );
+
       toastInfo(`Perfil "${profToDelete.name}" removido do cadastro.`, "Perfil Excluído");
     }
   };
@@ -748,6 +1058,17 @@ export default function RolePermissionsManager({
     });
   }, [activeProfiles, profileSearchTerm, profileSortBy]);
 
+  // Memoized ItemData para o react-window (Virtualização da Lista de Perfis)
+  const profileRowItemData = useMemo<ProfileRowData>(() => ({
+    profiles: filteredProfiles,
+    selectedProfileId,
+    batchSelectedIds,
+    onSelect: setSelectedProfileId,
+    onToggleBatchSelect: handleToggleBatchSelect,
+    onDuplicate: handleDuplicateProfile,
+    onDelete: handleDeleteProfile,
+  }), [filteredProfiles, selectedProfileId, batchSelectedIds]);
+
   // Filtragem de rotinas
   const filteredRoutines = SYSTEM_PERMISSIONS_ROUTINES.filter((r) => {
     if (!searchTerm.trim()) return true;
@@ -772,10 +1093,40 @@ export default function RolePermissionsManager({
           </p>
         </div>
 
-        {/* Controles do Administrador: Criar Perfil & Importar */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        {/* Controles do Administrador: Criar Perfil, Importar e Exportar Matriz, Auditoria IA */}
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsAiAuditModalOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider py-3 px-3.5 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2 shrink-0 border border-indigo-500/50"
+            title="Analisar alterações de permissões e registros do SystemLog via IA Gemini"
+          >
+            <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+            <span className="hidden sm:inline">Auditoria com IA</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => exportMatrixJSON(activeProfiles, "matriz_perfis_permissoes")}
+            className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider py-3 px-3.5 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2 shrink-0 border border-slate-700/50"
+            title="Exportar backup completo de todos os perfis e permissões em formato JSON"
+          >
+            <FileJson className="w-4 h-4 text-sky-400" />
+            <span className="hidden sm:inline">Exportar JSON</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => exportMatrixCSV(activeProfiles, "matriz_perfis_permissoes")}
+            className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider py-3 px-3.5 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2 shrink-0 border border-slate-700/50"
+            title="Exportar planilha de auditoria completa em formato CSV com todas as rotinas"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+            <span className="hidden sm:inline">Exportar CSV</span>
+          </button>
+
           {currentUser?.userType === "admin" && (
-            <label className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2 shrink-0">
+            <label className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider py-3 px-3.5 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2 shrink-0 border border-slate-700/50">
               <Upload className="w-4 h-4 text-amber-400" />
               <span className="hidden sm:inline">Importar JSON</span>
               <input
@@ -790,7 +1141,7 @@ export default function RolePermissionsManager({
           <button
             type="button"
             onClick={() => setIsCreatingProfile(true)}
-            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase tracking-wider py-3 px-5 rounded-xl shadow-lg shadow-amber-500/20 active:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-lg shadow-amber-500/20 active:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
           >
             <Plus className="w-4 h-4 text-slate-950" />
             <span>Novo Perfil</span>
@@ -1099,7 +1450,7 @@ export default function RolePermissionsManager({
               )}
             </motion.div>
           ) : (
-            /* MODO LISTA COMPACTA PARA PERFIS */
+            /* MODO LISTA COMPACTA VIRTUALIZADA PARA PERFIS */
             <motion.div
               key="profile-list-view"
               initial={{ opacity: 0, y: 8 }}
@@ -1112,113 +1463,15 @@ export default function RolePermissionsManager({
                   Nenhum perfil encontrado com "{profileSearchTerm}".
                 </div>
               ) : (
-                <div className="bg-white dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-200 dark:divide-slate-800/80">
-                  {filteredProfiles.map((p, index) => {
-                    const isSelected = p.id === selectedProfileId;
-                    const isBatchSelected = batchSelectedIds.includes(p.id);
-                    const totalActive = Object.values(p.permissions).filter(Boolean).length;
-                    const totalRoutines = SYSTEM_PERMISSIONS_ROUTINES.length;
-                    const pct = Math.round((totalActive / totalRoutines) * 100);
-
-                    return (
-                      <motion.div
-                        key={p.id}
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.2, delay: Math.min(index * 0.03, 0.2), ease: "easeOut" }}
-                        onClick={() => setSelectedProfileId(p.id)}
-                        className={`p-3.5 sm:p-4 transition-all duration-200 hover:scale-[1.01] hover:shadow-md cursor-pointer flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left transform ${
-                          isBatchSelected
-                            ? "bg-amber-500/15 dark:bg-amber-950/30 border-l-4 border-l-amber-500 text-slate-900 dark:text-white font-medium"
-                            : isSelected
-                            ? "bg-amber-50/80 dark:bg-amber-950/20 border-l-4 border-l-amber-500 text-slate-900 dark:text-white font-medium"
-                            : "hover:bg-slate-50 dark:hover:bg-slate-900/60 text-slate-700 dark:text-slate-300"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <button
-                            type="button"
-                            onClick={(e) => handleToggleBatchSelect(p.id, e)}
-                            className={`p-1 rounded-lg border transition-all cursor-pointer shrink-0 ${
-                              isBatchSelected
-                                ? "bg-amber-500 text-slate-950 border-amber-600 shadow-2xs"
-                                : "bg-white dark:bg-slate-900 text-slate-400 hover:text-slate-700 dark:hover:text-white border-slate-200 dark:border-slate-700"
-                            }`}
-                            title={isBatchSelected ? "Deselecionar perfil" : "Selecionar para ação em lote"}
-                          >
-                            {isBatchSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                          </button>
-
-                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                            isSelected ? "border-amber-500 bg-amber-500 dark:border-amber-400 dark:bg-amber-400" : "border-slate-300 dark:border-slate-600"
-                          }`}>
-                            {isSelected && <div className="w-1.5 h-1.5 bg-white dark:bg-slate-950 rounded-full" />}
-                          </div>
-
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`font-extrabold text-sm ${isSelected ? "text-amber-800 dark:text-amber-400" : "text-slate-900 dark:text-white"}`}>
-                                {p.name}
-                              </span>
-                              {p.isSystemDefault ? (
-                                <span className="text-[9px] font-bold uppercase bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 rounded">
-                                  Nativo
-                                </span>
-                              ) : (
-                                <span className="text-[9px] font-bold uppercase bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-1.5 py-0.5 rounded">
-                                  Customizado
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-xl mt-0.5">
-                              {p.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200 dark:border-slate-800/60">
-                          <div className="flex items-center gap-2">
-                            <div className="w-20 bg-slate-100 dark:bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-200 dark:border-slate-800">
-                              <div 
-                                className="bg-amber-500 dark:bg-amber-400 h-full rounded-full transition-all duration-300"
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                            <span className="text-[11px] font-mono font-bold text-amber-700 dark:text-amber-400 min-w-[50px] text-right">
-                              {totalActive}/{totalRoutines}
-                            </span>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDuplicateProfile(p);
-                            }}
-                            className="px-2.5 py-1 text-[11px] font-extrabold text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
-                            title="Usar este perfil como template para um novo"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Duplicar</span>
-                          </button>
-
-                          {!p.isSystemDefault && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteProfile(p.id);
-                              }}
-                              className="p-1.5 text-rose-500 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded-lg transition-all"
-                              title="Excluir Perfil Customizado"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </motion.div>
-                    );
-                  })}
+                <div className="bg-white dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 overflow-hidden">
+                  <VirtualizedList
+                    rowCount={filteredProfiles.length}
+                    rowHeight={80}
+                    rowComponent={VirtualizedProfileRow}
+                    rowProps={profileRowItemData}
+                    style={{ height: Math.min(filteredProfiles.length * 80, 520) }}
+                    className="w-full"
+                  />
                 </div>
               )}
             </motion.div>
@@ -1244,25 +1497,47 @@ export default function RolePermissionsManager({
               </p>
             </div>
 
-            {/* Field de Busca de Permissões */}
-            <div className="w-full md:w-72 relative">
-              <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-3" />
-              <input
-                type="text"
-                placeholder="Filtrar rotinas / permissões..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl pl-9 pr-8 py-2.5 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm("")}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
+            {/* Field de Busca de Permissões & Controles de Exportação do Perfil */}
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+              <div className="w-full sm:w-60 relative">
+                <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  placeholder="Filtrar rotinas / permissões..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl pl-9 pr-8 py-2.5 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm("")}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => exportMatrixJSON([currentProfile], `perfil_${currentProfile.id}`)}
+                className="px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/40 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                title="Exportar este perfil em formato JSON"
+              >
+                <FileJson className="w-3.5 h-3.5 text-sky-500" />
+                <span className="hidden lg:inline">Exportar Perfil</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => exportMatrixCSV([currentProfile], `perfil_${currentProfile.id}`)}
+                className="px-3 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                title="Exportar este perfil em formato CSV"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500" />
+                <span className="hidden lg:inline">Exportar Perfil</span>
+              </button>
             </div>
           </div>
 
@@ -1494,6 +1769,16 @@ export default function RolePermissionsManager({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Modal de Auditoria e Análise de Anomalias com IA */}
+      <AiLogAnalysisModal
+        isOpen={isAiAuditModalOpen}
+        onClose={() => setIsAiAuditModalOpen(false)}
+        logs={logs}
+        loginAttempts={loginAttempts}
+        initialScope="permissions"
+        onAddSystemLog={onAddSystemLog}
+      />
     </div>
   );
 }

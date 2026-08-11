@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Client, ServiceOrder, ServiceCategory, Professional, SystemLog, CurrentUser, SmtpSettings, WhatsappSettings, Team, LoginAttempt, Almoxarifado, BlockedDate, AppNotification, AccessProfile } from "./types";
 import { 
-  INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_CLIENTS, INITIAL_ORDERS, INITIAL_ALMOXARIFADOS
+  INITIAL_CATEGORIES, INITIAL_PROFESSIONALS, INITIAL_USUARIOS, INITIAL_CLIENTS, INITIAL_ORDERS, INITIAL_ALMOXARIFADOS
 } from "./data/mockData";
 import Dashboard from "./components/Dashboard";
 import BiMetrics from "./components/BiMetrics";
-import Clients from "./components/Clients";
+import Usuarios from "./components/Usuarios";
 import ServiceOrders from "./components/ServiceOrders";
 import Scheduler from "./components/Scheduler";
 import Professionals from "./components/Professionals";
@@ -4708,8 +4708,8 @@ export default function App() {
               />
             )}
             
-            {activeTab === "clients" && hasTabPermission("clients") && (
-              <Clients 
+            {(activeTab === "clients" || activeTab === "usuarios") && (hasTabPermission("clients") || hasTabPermission("usuarios")) && (
+              <Usuarios 
                 clients={clients}
                 orders={visibleOrders}
                 onAddClient={handleAddClient}
@@ -4785,6 +4785,8 @@ export default function App() {
               <AiAssistant 
                 orders={visibleOrders}
                 clients={clients}
+                logs={logs}
+                loginAttempts={loginAttempts}
               />
             )}
 
@@ -4813,6 +4815,9 @@ export default function App() {
                 profiles={accessProfiles}
                 onSaveProfiles={handleSaveAccessProfiles}
                 currentUser={currentUser}
+                onAddSystemLog={addSystemLog}
+                logs={logs}
+                loginAttempts={loginAttempts}
               />
             )}
 

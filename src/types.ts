@@ -38,6 +38,8 @@ export interface Client {
   customPermissions?: Record<string, boolean>;
 }
 
+export type Usuario = Client;
+
 export interface Almoxarifado {
   id: string;
   name: string;
@@ -168,7 +170,7 @@ export interface PermissionRoutine {
   key: string;
   label: string;
   description: string;
-  category: "dashboard" | "orders" | "bi" | "scheduler" | "professionals" | "clients" | "system";
+  category: "dashboard" | "orders" | "bi" | "scheduler" | "professionals" | "clients" | "usuarios" | "system";
 }
 
 export interface AccessProfile {

@@ -1,18 +1,21 @@
 import React, { useState } from "react";
-import { ServiceOrder, Client } from "../types";
-import { Sparkles, Copy, Check, MessageSquare, Send, FileText, Loader2, ClipboardList } from "lucide-react";
+import { ServiceOrder, Client, SystemLog, LoginAttempt } from "../types";
+import { Sparkles, Copy, Check, MessageSquare, Send, FileText, Loader2, ClipboardList, ShieldAlert, Activity } from "lucide-react";
 import { getApiAuthHeaders } from "../services/apiAuth";
 
 interface AiAssistantProps {
   orders: ServiceOrder[];
   clients: Client[];
+  logs?: SystemLog[];
+  loginAttempts?: LoginAttempt[];
 }
 
-export default function AiAssistant({ orders, clients }: AiAssistantProps) {
-  const [activeTab, setActiveTab] = useState<"proposal" | "materials" | "whatsapp">("proposal");
+export default function AiAssistant({ orders, clients, logs = [], loginAttempts = [] }: AiAssistantProps) {
+  const [activeTab, setActiveTab] = useState<"proposal" | "materials" | "whatsapp" | "audit_logs">("proposal");
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("");
   const [selectedOSId, setSelectedOSId] = useState("");
+  const [auditScopeFilter, setAuditScopeFilter] = useState<"all" | "permissions" | "access">("all");
   
   // Custom states for WhatsApp generator
   const [whatsappClientName, setWhatsappClientName] = useState("");
@@ -71,7 +74,7 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
           return;
         }
         body = {
-          action: "suggest_materials", // Refactored to technical materials suggestion
+          action: "suggest_materials",
           title: title,
           category: category || "Geral"
         };
@@ -82,9 +85,43 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
           return;
         }
         body = {
-          action: "create_message", // Non-financial client summary message
+          action: "create_message",
           clientName: whatsappClientName,
           title: whatsappTitle
+        };
+      } else if (activeTab === "audit_logs") {
+        let filteredLogs = [...logs];
+        let filteredAccess = [...loginAttempts];
+
+        if (auditScopeFilter === "permissions") {
+          filteredLogs = filteredLogs.filter(l => 
+            l.category === "sistema" || 
+            l.action.toLowerCase().includes("perfil") || 
+            l.action.toLowerCase().includes("permiss") ||
+            l.action.toLowerCase().includes("matriz")
+          );
+          filteredAccess = [];
+        } else if (auditScopeFilter === "access") {
+          filteredLogs = [];
+        }
+
+        body = {
+          action: "analyze_system_logs",
+          logsList: filteredLogs.slice(0, 150).map(l => ({
+            timestamp: l.timestamp,
+            action: l.action,
+            details: l.details,
+            category: l.category
+          })),
+          accessLogsList: filteredAccess.slice(0, 100).map(a => ({
+            timestamp: a.timestamp,
+            username: a.username,
+            userId: a.userId,
+            status: a.status,
+            userType: a.userType,
+            details: a.details
+          })),
+          timeWindow: `Assistente de Auditoria IA | Filtro: ${auditScopeFilter}`
         };
       }
 
@@ -147,10 +184,10 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
 
       <div className="p-6">
         {/* Navigation Tabs */}
-        <div className="flex bg-slate-50 p-1.5 rounded-xl gap-1 mb-6 border border-slate-200/50">
+        <div className="flex flex-wrap bg-slate-50 p-1.5 rounded-xl gap-1 mb-6 border border-slate-200/50">
           <button
             onClick={() => { setActiveTab("proposal"); setResult(""); }}
-            className={`flex-1 py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+            className={`flex-1 min-w-[140px] py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === "proposal"
                 ? "bg-white text-slate-800 shadow-sm"
                 : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/50"
@@ -162,14 +199,26 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
           
           <button
             onClick={() => { setActiveTab("materials"); setResult(""); }}
-            className={`flex-1 py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+            className={`flex-1 min-w-[140px] py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === "materials"
                 ? "bg-white text-slate-800 shadow-sm"
                 : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/50"
             }`}
           >
             <ClipboardList className="w-4 h-4 text-indigo-500" />
-            Lista de Materiais & Passos
+            Lista de Materiais
+          </button>
+
+          <button
+            onClick={() => { setActiveTab("audit_logs"); setResult(""); }}
+            className={`flex-1 min-w-[140px] py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              activeTab === "audit_logs"
+                ? "bg-white text-indigo-700 font-extrabold shadow-sm"
+                : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/50"
+            }`}
+          >
+            <ShieldAlert className="w-4 h-4 text-amber-500" />
+            Auditoria SystemLog
           </button>
         </div>
 
@@ -283,6 +332,33 @@ export default function AiAssistant({ orders, clients }: AiAssistantProps) {
                     />
                   </div>
                 </>
+              )}
+
+              {activeTab === "audit_logs" && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5 font-bold">Filtro de Escopo da Trilha *</label>
+                    <select
+                      className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      value={auditScopeFilter}
+                      onChange={(e) => setAuditScopeFilter(e.target.value as any)}
+                    >
+                      <option value="all">Todos os Logs (SystemLog + Autenticações)</option>
+                      <option value="permissions">Apenas Perfis & Matriz de Permissões</option>
+                      <option value="access">Apenas Tentativas de Login / Autenticação</option>
+                    </select>
+                  </div>
+
+                  <div className="p-3.5 bg-indigo-50/60 border border-indigo-200/80 rounded-xl text-xs space-y-1 text-slate-700">
+                    <p className="font-extrabold text-indigo-950 flex items-center gap-1.5">
+                      <Activity className="w-4 h-4 text-indigo-600" />
+                      Registros Carregados no Sistema
+                    </p>
+                    <p className="text-[11px] text-slate-600 font-medium">
+                      O assistente irá escanear <strong>{logs.length}</strong> eventos do SystemLog e <strong>{loginAttempts.length}</strong> tentativas de login armazenadas.
+                    </p>
+                  </div>
+                </div>
               )}
             </div>
 

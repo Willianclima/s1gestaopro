@@ -5,6 +5,27 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { 
+  getAllUsuarios,
+  getUsuarioById,
+  upsertUsuario,
+  deleteUsuario,
+  getAllClients, 
+  upsertClient, 
+  getAllProfessionals,
+  upsertProfessional,
+  getAllServiceOrders, 
+  upsertServiceOrder, 
+  getAllServiceCategories,
+  upsertServiceCategory,
+  getAllSystemLogs, 
+  insertSystemLog, 
+  getAllLoginAttempts, 
+  insertLoginAttempt, 
+  getAllAccessProfiles, 
+  upsertAccessProfile 
+} from "./src/db/repository.ts";
+import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
 
 dotenv.config();
 
@@ -139,7 +160,7 @@ const CACHE_TTL_MS = 1000 * 60 * 15; // 15 minutos de TTL
 const MAX_CACHE_SIZE = 150;
 
 function generateCacheKey(body: any): string {
-  const { action, title, clientName, price, category, description, categoriesList, professionalsList, teamsList } = body;
+  const { action, title, clientName, price, category, description, categoriesList, professionalsList, teamsList, logsList, accessLogsList, timeWindow } = body;
   return JSON.stringify({
     action: action || "",
     title: title || "",
@@ -149,7 +170,10 @@ function generateCacheKey(body: any): string {
     description: description || "",
     categoriesList: categoriesList || [],
     professionalsList: professionalsList || [],
-    teamsList: teamsList || []
+    teamsList: teamsList || [],
+    logsCount: Array.isArray(logsList) ? logsList.length : 0,
+    accessLogsCount: Array.isArray(accessLogsList) ? accessLogsList.length : 0,
+    timeWindow: timeWindow || ""
   });
 }
 
@@ -310,11 +334,46 @@ app.post("/api/gemini/assist", requireApiAuth, async (req, res) => {
       
       Mantenha um tom profissional, extremamente técnico e prático, voltado para manutenção de campo e prestação de serviços no Brasil.`;
     }
+    else if (action === "analyze_system_logs") {
+      const { logsList, accessLogsList, timeWindow } = req.body;
+      prompt = `Aja como um auditor especialista em cibersegurança e conformidade de sistemas corporativos (LGPD / ISO 27001).
+      Sua missão é analisar minuciosamente os registros de auditoria ('SystemLog') e tentativas de acesso/autenticação do sistema fornecidos a seguir.
+      Identifique potenciais anomalias, padrões incomuns de acesso, escalada de privilégios não autorizada, picos de falhas de login, alterações em massa de matriz de permissões ou ações efetuadas fora de horário habitual.
+
+      REGISTROS DE AUDITORIA DO SISTEMA ('SystemLog'):
+      ${JSON.stringify(logsList || []).substring(0, 15000)}
+
+      REGISTROS DE TENTATIVAS DE LOGIN / AUTENTICAÇÃO:
+      ${JSON.stringify(accessLogsList || []).substring(0, 10000)}
+
+      JANELA / FILTRO DE ANÁLISE SOLICITADO: "${timeWindow || 'Todos os Registros Disponíveis'}"
+
+      Instruções de Resposta:
+      Forneça um relatório bem estruturado em Markdown com as seguintes seções claras:
+
+      ### 📊 1. Resumo Executivo da Auditoria
+      - Volume total de logs e acessos analisados.
+      - Período abrangido.
+      - Síntese da conformidade dos acessos.
+
+      ### 🚨 2. Anomalias e Padrões Incomuns Detectados
+      - Liste em tópicos detalhados cada anomalia ou padrão atípico encontrado (ex: múltiplas permissões alteradas para um mesmo perfil, logins com falha sequenciais, concessão de acessos administrativos, ações efetuadas por usuários específicos com carimbo de data/hora).
+      - Se nenhuma anomalia for encontrada, explicite claramente que a trilha de auditoria apresenta comportamento padrão dentro da conformidade.
+
+      ### 🛡️ 3. Avaliação do Nível de Risco Operacional
+      - Especifique claramente um dos níveis: **🟢 RISCO BAIXO**, **🟡 RISCO MÉDIO**, **🟠 RISCO ALTO** ou **🔴 RISCO CRÍTICO**.
+      - Justifique o nível atribuído em 2-3 linhas.
+
+      ### 📋 4. Plano de Ação & Sugestão de Auditoria Preventiva
+      - Dê recomendações práticas e imediatas para o gestor/administrador (ex: "Sugerida auditoria detalhada nos privilégios do perfil X", "Revogar acessos do usuário Y", "Bloquear tentativa recorrente de login", "Forçar redefinição de senhas").
+
+      Mantenha um tom profissional, técnico, preciso e objetivo. Responda em Português do Brasil impecável.`;
+    }
     else {
       return res.status(400).json({ error: "Ação desconhecida ou inválida." });
     }
 
-    const response = await generateContentWithRetry(ai, "gemini-2.5-flash", prompt);
+    const response = await generateContentWithRetry(ai, "gemini-3.6-flash", prompt);
 
     let resultText = response.text || "Erro ao gerar resposta com a IA. Tente novamente.";
     
@@ -428,6 +487,247 @@ app.post("/api/auth/verify-admin", (req, res) => {
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: "Erro ao processar autenticação do administrador." });
+  }
+});
+
+// ==========================================
+// API ROTAS POSTGRESQL (Drizzle ORM + Cloud SQL)
+// ==========================================
+
+// 1. READ ALL (GET /api/usuarios, /api/postgres/usuarios, /api/postgres/clients)
+app.get(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], requireApiAuth, async (req, res) => {
+  try {
+    const usuariosList = await getAllUsuarios();
+    res.json(usuariosList);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar usuários no PostgreSQL" });
+  }
+});
+
+// 2. READ BY ID (GET /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
+app.get(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const usuario = await getUsuarioById(id);
+    if (!usuario) {
+      return res.status(404).json({ error: "Usuário não encontrado" });
+    }
+    res.json(usuario);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar usuário por ID no PostgreSQL" });
+  }
+});
+
+// 3. CREATE (POST /api/usuarios, /api/postgres/usuarios, /api/postgres/clients)
+app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], requireApiAuth, async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== "object") {
+      return res.status(400).json({ error: "O corpo da requisição é obrigatório" });
+    }
+    if (!body.name) {
+      return res.status(400).json({ error: "O campo 'name' (nome do usuário) é obrigatório." });
+    }
+
+    const usuarioData = {
+      ...body,
+      id: body.id || `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    };
+
+    const usuario = await upsertUsuario(usuarioData);
+    res.status(201).json({ success: true, usuario, client: usuario });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao criar usuário no PostgreSQL" });
+  }
+});
+
+// 4. UPDATE (PUT /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
+app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const existing = await getUsuarioById(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Usuário não encontrado para atualização" });
+    }
+
+    const updatedData = {
+      ...existing,
+      ...body,
+      id, // Preserva o ID da URL
+    };
+
+    const usuario = await upsertUsuario(updatedData);
+    res.json({ success: true, usuario, client: usuario });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao atualizar usuário no PostgreSQL" });
+  }
+});
+
+// 5. UPDATE PARCIAL (PATCH /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
+app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const existing = await getUsuarioById(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Usuário não encontrado para atualização" });
+    }
+
+    const updatedData = {
+      ...existing,
+      ...body,
+      id, // Preserva o ID da URL
+    };
+
+    const usuario = await upsertUsuario(updatedData);
+    res.json({ success: true, usuario, client: usuario });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao atualizar usuário no PostgreSQL" });
+  }
+});
+
+// 6. DELETE (DELETE /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
+app.delete(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await deleteUsuario(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Usuário não encontrado ou já removido" });
+    }
+    res.json({ success: true, message: "Usuário removido com sucesso", id });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao remover usuário no PostgreSQL" });
+  }
+});
+
+// GET /api/postgres/service-orders
+app.get("/api/postgres/service-orders", requireApiAuth, async (req, res) => {
+  try {
+    const orders = await getAllServiceOrders();
+    res.json(orders);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar ordens de serviço no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/service-orders
+app.post("/api/postgres/service-orders", requireApiAuth, async (req, res) => {
+  try {
+    const order = await upsertServiceOrder(req.body);
+    res.json({ success: true, order });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao salvar ordem de serviço no PostgreSQL" });
+  }
+});
+
+// GET /api/postgres/system-logs
+app.get("/api/postgres/system-logs", requireApiAuth, async (req, res) => {
+  try {
+    const logs = await getAllSystemLogs();
+    res.json(logs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar logs no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/system-logs
+app.post("/api/postgres/system-logs", requireApiAuth, async (req, res) => {
+  try {
+    const log = await insertSystemLog(req.body);
+    res.json({ success: true, log });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao gravar log no PostgreSQL" });
+  }
+});
+
+// GET /api/postgres/login-attempts
+app.get("/api/postgres/login-attempts", requireApiAuth, async (req, res) => {
+  try {
+    const attempts = await getAllLoginAttempts();
+    res.json(attempts);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar tentativas de login no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/login-attempts
+app.post("/api/postgres/login-attempts", requireApiAuth, async (req, res) => {
+  try {
+    const attempt = await insertLoginAttempt(req.body);
+    res.json({ success: true, attempt });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao registrar tentativa de login no PostgreSQL" });
+  }
+});
+
+// GET /api/postgres/access-profiles
+app.get("/api/postgres/access-profiles", requireApiAuth, async (req, res) => {
+  try {
+    const profiles = await getAllAccessProfiles();
+    res.json(profiles);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar perfis no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/access-profiles
+app.post("/api/postgres/access-profiles", requireApiAuth, async (req, res) => {
+  try {
+    const profile = await upsertAccessProfile(req.body);
+    res.json({ success: true, profile });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao salvar perfil no PostgreSQL" });
+  }
+});
+
+// GET /api/postgres/professionals
+app.get("/api/postgres/professionals", requireApiAuth, async (req, res) => {
+  try {
+    const profs = await getAllProfessionals();
+    res.json(profs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar profissionais no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/professionals
+app.post("/api/postgres/professionals", requireApiAuth, async (req, res) => {
+  try {
+    const prof = await upsertProfessional(req.body);
+    res.json({ success: true, prof });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao salvar profissional no PostgreSQL" });
+  }
+});
+
+// GET /api/postgres/service-categories
+app.get("/api/postgres/service-categories", requireApiAuth, async (req, res) => {
+  try {
+    const cats = await getAllServiceCategories();
+    res.json(cats);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao buscar categorias no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/service-categories
+app.post("/api/postgres/service-categories", requireApiAuth, async (req, res) => {
+  try {
+    const cat = await upsertServiceCategory(req.body);
+    res.json({ success: true, cat });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao salvar categoria no PostgreSQL" });
+  }
+});
+
+// POST /api/postgres/migrate-from-firestore (Trigger ETL Migration)
+app.post("/api/postgres/migrate-from-firestore", requireApiAuth, async (req, res) => {
+  try {
+    const result = await runFirestoreToPostgresMigration();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Erro ao executar migração ETL do Firestore para o PostgreSQL" });
   }
 });
 

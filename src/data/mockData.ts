@@ -1,4 +1,4 @@
-import { Client, ServiceOrder, ServiceCategory, Professional, Almoxarifado } from "../types";
+import { Client, ServiceOrder, ServiceCategory, Professional, Almoxarifado, SystemLog } from "../types";
 
 export const INITIAL_ALMOXARIFADOS: Almoxarifado[] = [
   { id: "alm-1", name: "Almoxarifado Central Araçatuba", code: "ALM-CENTRAL", address: "Rua Marcílio Dias, 1500 - Araçatuba - SP" },
@@ -25,7 +25,7 @@ export const INITIAL_PROFESSIONALS: Professional[] = [
   { id: "prof-5", name: "Sérgio Pereira", document: "555.555.555-55", email: "sergio.pereira@gestao.com", role: "Eletricista Geral", specialty: "Serviços Gerais & Elétrica", specialties: ["Serviços Gerais & Elétrica"], userType: "profissional" }
 ];
 
-export const INITIAL_CLIENTS: Client[] = [
+export const INITIAL_USUARIOS: Client[] = [
   {
     id: "cli-1",
     name: "Ana Julia Silveira",
@@ -133,5 +133,45 @@ export const INITIAL_ORDERS: ServiceOrder[] = [
     images: ["https://images.unsplash.com/photo-1621905252507-b354bc25edac?auto=format&fit=crop&q=80&w=400"],
     hasMissingMaterial: true,
     missingMaterialDescription: "Mangueira cristal de 3/4 polegadas (3 metros) e Fita Isolante Térmica de Poliuretano"
+  }
+];
+
+export const INITIAL_CLIENTS = INITIAL_USUARIOS;
+
+export const INITIAL_SYSTEM_LOGS: SystemLog[] = [
+  {
+    id: "log-1001",
+    timestamp: "2026-06-10T10:15:00Z",
+    action: "Criação de OS",
+    details: "Ordem de serviço #req-1001 criada com sucesso.",
+    category: "requisicao"
+  },
+  {
+    id: "log-1002",
+    timestamp: "2026-06-11T14:00:00Z",
+    action: "Atribuição de Técnico",
+    details: "Técnico Roberto Silva vinculado à OS #req-1001.",
+    category: "tecnico"
+  },
+  {
+    id: "log-1003",
+    timestamp: "2026-06-12T16:00:00Z",
+    action: "Conclusão de OS",
+    details: "Ordem de serviço #req-1001 concluída pelo profissional.",
+    category: "requisicao"
+  },
+  {
+    id: "log-1004",
+    timestamp: "2026-06-13T09:00:00Z",
+    action: "Criação de OS Urgente",
+    details: "Ordem de serviço #req-1002 registrada com prioridade alta.",
+    category: "requisicao"
+  },
+  {
+    id: "log-1005",
+    timestamp: "2026-06-14T08:30:00Z",
+    action: "Sincronização de Banco",
+    details: "Carga inicial de dados e sincronização no PostgreSQL executada.",
+    category: "sistema"
   }
 ];
