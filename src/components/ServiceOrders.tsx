@@ -2087,7 +2087,17 @@ export default function ServiceOrders({
                               </div>
 
                               {/* Quick Status Move Menu */}
-                              <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                              <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setQrCodeModalOrder(os);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-md transition-colors cursor-pointer"
+                                    title="Gerar e Visualizar QR Code de Acesso Rápido"
+                                  >
+                                    <QrCode className="w-3.5 h-3.5" />
+                                  </button>
                                 <select
                                   value={os.status}
                                   onChange={(e) => {
