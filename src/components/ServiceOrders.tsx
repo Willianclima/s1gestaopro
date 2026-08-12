@@ -4,7 +4,7 @@ import { ServiceOrder, Client, OSStatus, OSHistoryLog, Professional, CurrentUser
 import { 
   FileText, Search, Plus, User, Calendar, Trash2, Edit2, Edit3, Play, Eye, X, 
   Check, AlertTriangle, Printer, Package, Settings, PlusCircle, Wrench, RefreshCw, Send, Sparkles, Image, Upload, Download,
-  Filter, QrCode, Tag, Kanban, List, GripVertical, Timer, BellRing
+  Filter, QrCode, Tag, Kanban, List, GripVertical, Timer, BellRing, Pencil
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
@@ -13,6 +13,8 @@ import { motion } from "motion/react";
 import { getApiAuthHeaders } from "../services/apiAuth";
 import { compressImageWithCanvas, cacheEvidencePhotosInSW } from "../utils/imageCompression";
 import { calculateOsSlaStatus, triggerManualSlaReminder } from "../utils/slaUtils";
+import { generateServiceOrderPDF, downloadServiceOrderPDF, getServiceOrderPDFBlobUrl } from "../utils/pdfExport";
+import ImageDrawingOverlayModal from "./ImageDrawingOverlayModal";
 
 interface ServiceOrdersProps {
   orders: ServiceOrder[];
@@ -521,6 +523,87 @@ export default function ServiceOrders({
   // Auxiliary image URL input
   const [imageUrlInput, setImageUrlInput] = useState("");
 
+  // Drawing Overlay Modal State for Technician Damage Marking
+  const [drawingModalState, setDrawingModalState] = useState<{
+    isOpen: boolean;
+    imageUrl: string;
+    imageTitle?: string;
+    targetType: 'preview' | 'completion' | 'selected_order_images' | 'selected_order_completed';
+    targetIndex: number;
+  }>({
+    isOpen: false,
+    imageUrl: "",
+    targetType: 'preview',
+    targetIndex: -1,
+  });
+
+  const handleOpenDrawingOverlay = (
+    imageUrl: string, 
+    targetType: 'preview' | 'completion' | 'selected_order_images' | 'selected_order_completed', 
+    targetIndex: number,
+    imageTitle?: string
+  ) => {
+    setDrawingModalState({
+      isOpen: true,
+      imageUrl,
+      imageTitle: imageTitle || "Anotação & Marcação de Danos na Foto",
+      targetType,
+      targetIndex
+    });
+  };
+
+  const handleSaveDrawingOverlay = (annotatedDataUrl: string) => {
+    const { targetType, targetIndex } = drawingModalState;
+
+    if (targetType === 'preview') {
+      setPreviewImages(prev => {
+        const copy = [...prev];
+        if (targetIndex >= 0 && targetIndex < copy.length) {
+          copy[targetIndex] = annotatedDataUrl;
+        }
+        return copy;
+      });
+      toastSuccess("Anotações salvas na foto de sintoma!", "Marcação Concluída");
+    } else if (targetType === 'completion') {
+      setCompletionImages(prev => {
+        const copy = [...prev];
+        if (targetIndex >= 0 && targetIndex < copy.length) {
+          copy[targetIndex] = annotatedDataUrl;
+        }
+        return copy;
+      });
+      toastSuccess("Anotações salvas na foto do serviço concluído!", "Marcação Concluída");
+    } else if (targetType === 'selected_order_images' && selectedOrder) {
+      const updatedImages = [...(selectedOrder.images || [])];
+      if (targetIndex >= 0 && targetIndex < updatedImages.length) {
+        updatedImages[targetIndex] = annotatedDataUrl;
+        const updatedOS: ServiceOrder = {
+          ...selectedOrder,
+          images: updatedImages,
+          updatedAt: new Date().toISOString()
+        };
+        setSelectedOrder(updatedOS);
+        onUpdateOrder(updatedOS);
+        toastSuccess("Anotações de dano salvas na foto da Ordem de Serviço com sucesso!", "OS Atualizada");
+      }
+    } else if (targetType === 'selected_order_completed' && selectedOrder) {
+      const updatedCompleted = [...(selectedOrder.completedImages || [])];
+      if (targetIndex >= 0 && targetIndex < updatedCompleted.length) {
+        updatedCompleted[targetIndex] = annotatedDataUrl;
+        const updatedOS: ServiceOrder = {
+          ...selectedOrder,
+          completedImages: updatedCompleted,
+          updatedAt: new Date().toISOString()
+        };
+        setSelectedOrder(updatedOS);
+        onUpdateOrder(updatedOS);
+        toastSuccess("Anotações de reparo salvas na foto de conclusão da OS!", "OS Atualizada");
+      }
+    }
+
+    setDrawingModalState(prev => ({ ...prev, isOpen: false }));
+  };
+
   // Status Log helpers in details modal (interactive responsiveness before and after initiation)
   const [newLogComment, setNewLogComment] = useState("");
   const [responderRole, setResponderRole] = useState<'atendente' | 'profissional'>('atendente');
@@ -585,279 +668,18 @@ export default function ServiceOrders({
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<"visual" | "pdf">("visual");
 
-  const asciiOnly = (str: string) => {
-    if (!str) return "";
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  };
-
-  const generateOrderPDF = (order: ServiceOrder, client: Client | undefined) => {
-    const doc = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4'
-    });
-
-    // 1. Header (Banner/Logo)
-    doc.setFillColor(15, 23, 42); // slate-900 background for top header
-    doc.rect(0, 0, 210, 38, 'F');
-
-    // App Logo text
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(22);
-    doc.text("REQUISICAOPRO", 15, 16);
-
-    doc.setFont("Helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(156, 163, 175); // light gray
-    doc.text("SISTEMA DE GESTAO TECNICA INTEGRADA", 15, 22);
-    doc.text("SUSTENTABILIDADE E EFICIENCIA OPERACIONAL", 15, 26);
-
-    // Badge containing OS ID
-    doc.setFillColor(79, 70, 229); // Indigo badge for order ID
-    doc.roundedRect(145, 10, 50, 14, 2, 2, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(10);
-    doc.text(`REQUISICAO`, 170, 15, { align: "center" });
-    doc.setFontSize(11);
-    doc.text(`#${order.id}`, 170, 21, { align: "center" });
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("Helvetica", "normal");
-    doc.setFontSize(8);
-    doc.text(`Gerado em: ${new Date().toLocaleDateString("pt-BR")} as ${new Date().toLocaleTimeString("pt-BR")}`, 145, 30);
-
-    // 2. Sections Setup
-    let currentY = 48;
-
-    // Title of the report
-    doc.setFillColor(241, 245, 249);
-    doc.rect(15, currentY, 180, 8, 'F');
-    doc.setDrawColor(203, 213, 225);
-    doc.rect(15, currentY, 180, 8, 'S');
-    doc.setTextColor(15, 23, 42);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(10);
-    doc.text("VIA DE ATENDIMENTO TECNICO / FICHA DE EXECUCAO", 105, currentY + 5.5, { align: "center" });
-
-    currentY += 14;
-
-    // Draw Two-Column Section for Client and Technical details
-    // Left: Requisitante Details
-    doc.setFillColor(248, 250, 252);
-    doc.rect(15, currentY, 87, 44, 'F');
-    doc.setDrawColor(226, 232, 240);
-    doc.rect(15, currentY, 87, 44, 'S');
-
-    // Title
-    doc.setFillColor(226, 232, 240);
-    doc.rect(15, currentY, 87, 6, 'F');
-    doc.setTextColor(51, 65, 85);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(8);
-    doc.text("DADOS DO REQUISITANTE / GESTOR", 18, currentY + 4);
-
-    // Content
-    doc.setTextColor(15, 23, 42);
-    doc.setFontSize(8);
-    let detailY = currentY + 11;
-    doc.text(`Nome: ${asciiOnly(client?.name || "Desconhecido")}`, 18, detailY);
-    detailY += 5;
-    doc.text(`Documento: ${asciiOnly(client?.document || "N/A")}`, 18, detailY);
-    detailY += 5;
-    doc.text(`Perfil: ${client?.userType === "gestor" ? "Gestor" : "Requisitante"}`, 18, detailY);
-    detailY += 5;
-    doc.text(`Telefone: ${asciiOnly(client?.phone || "Nao cadastrado")}`, 18, detailY);
-    detailY += 5;
-    const finalAddress = order.location || client?.address || "Nao cadastrado";
-    const addressText = doc.splitTextToSize(`End.: ${asciiOnly(finalAddress)}`, 81);
-    doc.text(addressText, 18, detailY);
-
-    // Right: Operation Details
-    doc.setFillColor(248, 250, 252);
-    doc.rect(108, currentY, 87, 44, 'F');
-    doc.setDrawColor(226, 232, 240);
-    doc.rect(108, currentY, 87, 44, 'S');
-
-    // Title
-    doc.setFillColor(226, 232, 240);
-    doc.rect(108, currentY, 87, 6, 'F');
-    doc.setTextColor(51, 65, 85);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(8);
-    doc.text("DADOS MESTRES DA OPERACAO", 111, currentY + 4);
-
-    // Content
-    doc.setTextColor(15, 23, 42);
-    detailY = currentY + 11;
-    doc.text(`Categoria: ${asciiOnly(order.category)}`, 111, detailY);
-    detailY += 5;
-    
-    // Status with a nice visual label
-    doc.setFont("Helvetica", "bold");
-    doc.text(`Status Atual:`, 111, detailY);
-    const statusU = order.status.toUpperCase();
-    if (order.status === "concluido") {
-      doc.setTextColor(16, 185, 129); // Emerald
-    } else if (order.status === "em_progresso") {
-      doc.setTextColor(59, 130, 246); // Blue
-    } else if (order.status === "aguardando") {
-      doc.setTextColor(245, 158, 11); // Amber
-    } else {
-      doc.setTextColor(100, 116, 139); // Slate
-    }
-    doc.text(`[ ${statusU} ]`, 130, detailY);
-    
-    doc.setTextColor(15, 23, 42);
-    doc.setFont("Helvetica", "normal");
-    detailY += 5;
-    doc.text(`Atribuido Para:`, 111, detailY);
-    doc.setFont("Helvetica", "bold");
-    doc.setTextColor(79, 70, 229); // Indigo
-    doc.text(`${asciiOnly(order.assignedTo || "Pendente de Alocacao")}`, 132, detailY);
-    
-    doc.setTextColor(15, 23, 42);
-    doc.setFont("Helvetica", "normal");
-    detailY += 5;
-    const blockMat = order.hasMissingMaterial ? "SIM (Falta Material)" : "NAO";
-    doc.text(`Bloqueado: ${blockMat}`, 111, detailY);
-    detailY += 5;
-    const dateFormatted = order.endDate ? new Date(order.endDate).toLocaleDateString("pt-BR") : "Nao agendado";
-    doc.text(`Previsao de Conclusao: ${dateFormatted}`, 111, detailY);
-
-    currentY += 49;
-
-    // 3. Service details (Title, symptom/problem)
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(226, 232, 240);
-    
-    // Estimate height of service description block
-    const descLines = doc.splitTextToSize(asciiOnly(order.description), 172);
-    const blockHeight = 16 + descLines.length * 4.5 + (order.notes ? 18 : 0);
-    
-    doc.rect(15, currentY, 180, Math.max(25, blockHeight), 'F');
-    doc.rect(15, currentY, 180, Math.max(25, blockHeight), 'S');
-
-    doc.setFillColor(226, 232, 240);
-    doc.rect(15, currentY, 180, 6, 'F');
-    doc.setTextColor(51, 65, 85);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(8);
-    doc.text("SINTOMA INFORMADO / ESCOPO DE SERVICO", 18, currentY + 4);
-
-    doc.setTextColor(15, 23, 42);
-    doc.setFontSize(9);
-    doc.setFont("Helvetica", "bold");
-    doc.text(`Titulo: ${asciiOnly(order.title)}`, 18, currentY + 11);
-
-    doc.setFont("Helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(51, 65, 85);
-    doc.text(descLines, 18, currentY + 16.5);
-
-    if (order.notes) {
-      const notesY = currentY + 16.5 + descLines.length * 4.5 + 2;
-      doc.setFillColor(255, 255, 255);
-      doc.rect(18, notesY, 174, 12, 'F');
-      doc.setDrawColor(241, 245, 249);
-      doc.rect(18, notesY, 174, 12, 'S');
-      doc.setTextColor(100, 116, 139);
-      doc.setFont("Helvetica", "bold");
-      doc.setFontSize(7.5);
-      doc.text("NOTAS ADICIONAIS DE CAMPO:", 21, notesY + 4);
-      doc.setFont("Helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(51, 65, 85);
-      const splitNotes = doc.splitTextToSize(asciiOnly(order.notes), 168);
-      doc.text(splitNotes, 21, notesY + 8);
-    }
-
-    currentY += Math.max(25, blockHeight) + 8;
-
-    // 4. History / Timeline Log
-    if (order.history && order.history.length > 0) {
-      if (currentY > 210) {
-        doc.addPage();
-        currentY = 20;
-      }
-
-      doc.setFillColor(248, 250, 252);
-      doc.setDrawColor(226, 232, 240);
-      
-      const historyHeight = 8 + order.history.length * 15;
-      
-      doc.rect(15, currentY, 180, historyHeight, 'F');
-      doc.rect(15, currentY, 180, historyHeight, 'S');
-
-      doc.setFillColor(226, 232, 240);
-      doc.rect(15, currentY, 180, 6, 'F');
-      doc.setTextColor(51, 65, 85);
-      doc.setFont("Helvetica", "bold");
-      doc.setFontSize(8);
-      doc.text("HISTORICO DE ALTERACOES & PARECERES TECNICOS", 18, currentY + 4);
-
-      let logY = currentY + 11;
-      order.history.forEach((h) => {
-        doc.setFont("Helvetica", "bold");
-        doc.setFontSize(8);
-        doc.setTextColor(15, 23, 42);
-        const dateH = new Date(h.date).toLocaleString("pt-BR");
-        doc.text(`[${dateH}] Profissional: ${asciiOnly(h.author)} (Status: ${h.status.toUpperCase()})`, 18, logY);
-        
-        doc.setFont("Helvetica", "normal");
-        doc.setFontSize(8);
-        doc.setTextColor(71, 85, 105);
-        const commentLines = doc.splitTextToSize(asciiOnly(h.comment), 172);
-        doc.text(commentLines, 18, logY + 4);
-        logY += 5 + commentLines.length * 4;
-      });
-
-      currentY += historyHeight + 8;
-    }
-
-    // 5. Signatures Footer
-    const pageHeight = doc.internal.pageSize.getHeight();
-    if (currentY > pageHeight - 45) {
-      doc.addPage();
-      currentY = 30;
-    }
-    
-    const signatureY = pageHeight - 35;
-    doc.setDrawColor(148, 163, 184); // Slate 400
-    doc.setLineDashPattern([2, 2], 0);
-
-    // Line left
-    doc.line(15, signatureY, 95, signatureY);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(8);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`${asciiOnly(order.assignedTo || "Tecnico Responsavel")}`, 55, signatureY + 4, { align: "center" });
-    doc.setFont("Helvetica", "normal");
-    doc.setTextColor(100, 116, 139);
-    doc.setFontSize(7.5);
-    doc.text("ASSINATURA DO PROFISSIONAL RESPONSAVEL", 55, signatureY + 8, { align: "center" });
-
-    // Line right
-    doc.line(115, signatureY, 195, signatureY);
-    doc.setFont("Helvetica", "bold");
-    doc.setFontSize(8);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`${asciiOnly(client?.name || "Representante do Solicitante")}`, 155, signatureY + 4, { align: "center" });
-    doc.setFont("Helvetica", "normal");
-    doc.setTextColor(100, 116, 139);
-    doc.setFontSize(7.5);
-    doc.text("AUTORIZACAO DO REQUISITANTE / GESTOR", 155, signatureY + 8, { align: "center" });
-
-    return doc;
+  const handleExportPDF = (order: ServiceOrder) => {
+    const client = getClientObj(order.clientId);
+    const professional = (professionalsList || []).find(p => p.name === order.assignedTo || p.id === order.assignedTo);
+    downloadServiceOrderPDF(order, client, professional);
+    toastSuccess(`PDF oficial da OS #${order.id} exportado com sucesso!`, "Exportação de Documento");
   };
 
   React.useEffect(() => {
     if (isPrintPreviewOpen && selectedOrder) {
       const client = getClientObj(selectedOrder.clientId);
-      const doc = generateOrderPDF(selectedOrder, client);
-      const pdfBlob = doc.output("blob");
-      const blobUrl = URL.createObjectURL(pdfBlob);
+      const professional = (professionalsList || []).find(p => p.name === selectedOrder.assignedTo || p.id === selectedOrder.assignedTo);
+      const blobUrl = getServiceOrderPDFBlobUrl(selectedOrder, client, professional);
       setPdfBlobUrl(blobUrl);
 
       return () => {
@@ -865,7 +687,7 @@ export default function ServiceOrders({
         setPdfBlobUrl(null);
       };
     }
-  }, [isPrintPreviewOpen, selectedOrder]);
+  }, [isPrintPreviewOpen, selectedOrder, professionalsList]);
 
   const filteredOrders = orders.filter(os => {
     const clientName = getClientName(os.clientId).toLowerCase();
@@ -2086,18 +1908,30 @@ export default function ServiceOrders({
                                 )}
                               </div>
 
-                              {/* Quick Status Move Menu */}
-                              <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setQrCodeModalOrder(os);
-                                    }}
-                                    className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-md transition-colors cursor-pointer"
-                                    title="Gerar e Visualizar QR Code de Acesso Rápido"
-                                  >
-                                    <QrCode className="w-3.5 h-3.5" />
-                                  </button>
+                              {/* Quick Status Move, QR Code & PDF Export Menu */}
+                              <div onClick={(e) => e.stopPropagation()} className="shrink-0 flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleExportPDF(os);
+                                  }}
+                                  className="p-1 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50 rounded-lg transition-all cursor-pointer"
+                                  title="Exportar PDF da Ordem de Serviço"
+                                >
+                                  <FileText className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setQrCodeModalOrder(os);
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-md transition-colors cursor-pointer"
+                                  title="Gerar e Visualizar QR Code de Acesso Rápido"
+                                >
+                                  <QrCode className="w-3.5 h-3.5" />
+                                </button>
                                 <select
                                   value={os.status}
                                   onChange={(e) => {
@@ -2325,6 +2159,17 @@ export default function ServiceOrders({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              handleExportPDF(os);
+                            }}
+                            className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition-colors flex items-center justify-center cursor-pointer hover:scale-105 duration-150"
+                            title="Exportar documento PDF oficial da OS"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setQrCodeModalOrder(os);
                             }}
                             className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition-colors flex items-center justify-center cursor-pointer hover:scale-105 duration-150"
@@ -2529,6 +2374,17 @@ export default function ServiceOrders({
                   >
                     <Printer className="w-3.5 h-3.5 text-slate-600" />
                     Visualizar e Imprimir
+                  </button>
+
+                  {/* Export Official PDF button */}
+                  <button
+                    type="button"
+                    onClick={() => handleExportPDF(selectedOrder)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition-all shadow-sm cursor-pointer shadow-indigo-200 hover:shadow-indigo-300"
+                    title="Exportar documento PDF oficial formatado da Ordem de Serviço"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-white" />
+                    Exportar PDF Oficial
                   </button>
                 </div>
               </div>
@@ -2756,18 +2612,29 @@ export default function ServiceOrders({
 
                   {/* Attached completed images list preview */}
                   {completionImages.length > 0 ? (
-                    <div className="grid grid-cols-4 gap-2 pt-2 bg-white p-2.5 rounded-xl border border-slate-200">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 bg-white p-2.5 rounded-xl border border-slate-200">
                       {completionImages.map((src, i) => (
                         <div key={i} className="relative rounded-xl border border-slate-100 aspect-video overflow-hidden bg-slate-50 group">
                           <img src={src} className="w-full h-full object-cover" alt="Completion Preview" referrerPolicy="no-referrer" />
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCompletionImageIndex(i)}
-                            className="absolute inset-0 bg-red-950/40 opacity-0 group-hover:opacity-100 text-white font-bold flex items-center justify-center transition-all rounded-xl"
-                            title="Remover"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="absolute inset-0 bg-slate-950/65 opacity-0 group-hover:opacity-100 transition-all rounded-xl p-1.5 flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDrawingOverlay(src, 'completion', i, "Marcar Reparado na Foto de Conclusão")}
+                              className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] rounded-lg flex items-center gap-1 shadow-xs transition-transform active:scale-95 cursor-pointer"
+                              title="Desenhar / Marcar Danos ou Reparo"
+                            >
+                              <Pencil className="w-3 h-3 text-indigo-200" />
+                              <span>Anotar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCompletionImageIndex(i)}
+                              className="p-1 bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] rounded-lg transition-transform active:scale-95 cursor-pointer"
+                              title="Remover Foto"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2957,6 +2824,17 @@ export default function ServiceOrders({
                           className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
                           referrerPolicy="no-referrer"
                         />
+                        <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition-all p-2 flex items-end justify-between bg-gradient-to-t from-slate-950/80 via-transparent to-transparent">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDrawingOverlay(imgUrl, 'selected_order_images', i, `Anotar Danos - Foto ${i + 1}`)}
+                            className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold rounded-lg flex items-center gap-1.5 shadow-md transition-transform active:scale-95 cursor-pointer"
+                            title="Desenhar / Marcar Danos nesta foto"
+                          >
+                            <Pencil className="w-3.5 h-3.5 text-indigo-200" />
+                            <span>Anotar / Marcar Danos</span>
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2980,6 +2858,17 @@ export default function ServiceOrders({
                           className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
                           referrerPolicy="no-referrer"
                         />
+                        <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition-all p-2 flex items-end justify-between bg-gradient-to-t from-slate-950/80 via-transparent to-transparent">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDrawingOverlay(imgUrl, 'selected_order_completed', i, `Anotar Conclusão - Foto ${i + 1}`)}
+                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-lg flex items-center gap-1.5 shadow-md transition-transform active:scale-95 cursor-pointer"
+                            title="Desenhar / Marcar Reparos nesta foto"
+                          >
+                            <Pencil className="w-3.5 h-3.5 text-emerald-200" />
+                            <span>Anotar / Marcar Reparado</span>
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -3521,18 +3410,29 @@ export default function ServiceOrders({
 
                   {/* Attached images preview list */}
                   {previewImages.length > 0 && (
-                    <div className="grid grid-cols-4 gap-2 pt-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2">
                       {previewImages.map((src, i) => (
                         <div key={i} className="relative rounded-xl border border-slate-200 aspect-video overflow-hidden bg-slate-50 group">
                           <img src={src} className="w-full h-full object-cover" alt="Preview" referrerPolicy="no-referrer" />
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveImageIndex(i)}
-                            className="absolute inset-0 bg-red-950/40 opacity-0 group-hover:opacity-100 text-white font-bold flex items-center justify-center transition-all rounded-xl"
-                            title="Remover"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
+                          <div className="absolute inset-0 bg-slate-950/65 opacity-0 group-hover:opacity-100 transition-all rounded-xl p-1.5 flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDrawingOverlay(src, 'preview', i, "Marcar Danos na Foto do Chamado")}
+                              className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] rounded-lg flex items-center gap-1 shadow-xs transition-transform active:scale-95 cursor-pointer"
+                              title="Desenhar / Marcar Danos na foto"
+                            >
+                              <Pencil className="w-3 h-3 text-indigo-200" />
+                              <span>Anotar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveImageIndex(i)}
+                              className="p-1 bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] rounded-lg transition-transform active:scale-95 cursor-pointer"
+                              title="Remover Foto"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -4412,6 +4312,15 @@ export default function ServiceOrders({
           </div>
         </div>
       )}
+
+      {/* Image Drawing Overlay Modal for Marking Damage Areas */}
+      <ImageDrawingOverlayModal
+        isOpen={drawingModalState.isOpen}
+        imageUrl={drawingModalState.imageUrl}
+        imageTitle={drawingModalState.imageTitle}
+        onClose={() => setDrawingModalState(prev => ({ ...prev, isOpen: false }))}
+        onSave={handleSaveDrawingOverlay}
+      />
     </div>
   );
 }

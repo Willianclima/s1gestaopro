@@ -15,15 +15,23 @@ import {
 } from "../data/mockData.ts";
 
 /**
- * Utilitário de povoamento (seed) do banco de dados PostgreSQL via Drizzle ORM.
- * Executa inserções batch nas tabelas: usuarios, professionals, service_orders e system_logs.
+ * ============================================================================
+ * UTILITÁRIO DE POVOAMENTO BATCH (SEED) DO BANCO DE DADOS POSTGRESQL
+ * ============================================================================
+ * Este script automatiza a carga inicial de dados mock nas tabelas relacionais do
+ * PostgreSQL utilizando a API de inserção em lote (batch insert) do Drizzle ORM.
+ *
+ * Principais Recursos:
+ * - Inserção Batch: db.insert(tabela).values(arrayDeObjetos)
+ * - Tratamento de Conflito: .onConflictDoNothing() evita duplicação ou falha se a chave primária já existir.
+ * - Mapeamento Seguro: Converte tipos e garante fallback para campos nulos.
  */
 export async function seedDatabaseBatch() {
   console.log("🌱 Iniciando inserção batch de dados mock no PostgreSQL via Drizzle ORM...");
   const stats = { usuarios: 0, professionals: 0, serviceOrders: 0, systemLogs: 0, categories: 0 };
 
   try {
-    // 1. Batch Insert em 'usuarios'
+    // 1. Batch Insert em 'usuarios' (Clientes e Requisitantes)
     if (INITIAL_USUARIOS.length > 0) {
       const usuariosValues = INITIAL_USUARIOS.map((u) => {
         const { id, name, document, phone, email, address, lat, lng, formattedAddress, isAddressValidated, notes, userType, status, ...extra } = u;
@@ -45,15 +53,16 @@ export async function seedDatabaseBatch() {
         };
       });
 
+      // Executa a instrução INSERT INTO usuarios (col1, col2...) VALUES (...), (...)
       await db.insert(usuarios)
         .values(usuariosValues)
-        .onConflictDoNothing();
+        .onConflictDoNothing(); // Cláusula ON CONFLICT (id) DO NOTHING do PostgreSQL
 
       stats.usuarios = usuariosValues.length;
       console.log(`✅ ${stats.usuarios} registros inseridos/garantidos em 'usuarios'.`);
     }
 
-    // 2. Batch Insert em 'professionals'
+    // 2. Batch Insert em 'professionals' (Técnicos e Prestadores)
     if (INITIAL_PROFESSIONALS.length > 0) {
       const profValues = INITIAL_PROFESSIONALS.map((p) => {
         const { id, name, document, email, role, specialty, specialties, userType, workLocation, googleUid, ...extra } = p;
@@ -82,7 +91,7 @@ export async function seedDatabaseBatch() {
       console.log(`✅ ${stats.professionals} registros inseridos/garantidos em 'professionals'.`);
     }
 
-    // 3. Batch Insert em 'service_categories'
+    // 3. Batch Insert em 'service_categories' (SLAs e Notificações)
     if (INITIAL_CATEGORIES.length > 0) {
       const catValues = INITIAL_CATEGORIES.map((c) => ({
         id: c.id,
@@ -103,7 +112,7 @@ export async function seedDatabaseBatch() {
       console.log(`✅ ${stats.categories} registros inseridos/garantidos em 'service_categories'.`);
     }
 
-    // 4. Batch Insert em 'service_orders'
+    // 4. Batch Insert em 'service_orders' (Ordens de Serviço)
     if (INITIAL_ORDERS.length > 0) {
       const orderValues = INITIAL_ORDERS.map((o) => ({
         id: o.id,
@@ -137,7 +146,7 @@ export async function seedDatabaseBatch() {
       console.log(`✅ ${stats.serviceOrders} registros inseridos/garantidos em 'service_orders'.`);
     }
 
-    // 5. Batch Insert em 'system_logs'
+    // 5. Batch Insert em 'system_logs' (Auditoria de Sistema)
     if (INITIAL_SYSTEM_LOGS.length > 0) {
       const logValues = INITIAL_SYSTEM_LOGS.map((l) => ({
         id: l.id,
@@ -162,6 +171,7 @@ export async function seedDatabaseBatch() {
     throw error;
   }
 }
+
 
 // Execução standalone
 const isMainModule = process.argv[1]?.replace(/\\/g, "/").endsWith("src/db/seed.ts");

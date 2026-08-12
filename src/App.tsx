@@ -23,6 +23,7 @@ import { broadcastNotification } from "./utils/broadcastNotification";
 import { checkAndTriggerSlaReminders } from "./utils/slaUtils";
 import { googleSignIn, logoutUser, subscribeToAuthChanges, saveUserProfile } from "./services/firebaseAuth";
 import { getApiAuthHeaders } from "./services/apiAuth";
+import { validateCPFAlgorithm, validateCPFWithGemini, CpfValidationResult } from "./utils/cpfValidator";
 
 import { 
   BarChart, Users, ClipboardList, Calendar, Sparkles, Wrench, Search,
@@ -405,6 +406,38 @@ export default function App() {
   const [isAddressFetching, setIsAddressFetching] = useState<boolean>(false);
   const [regWorkLocation, setRegWorkLocation] = useState("");
   const [regPassword, setRegPassword] = useState("");
+  const [isCpfValidating, setIsCpfValidating] = useState(false);
+  const [cpfValidationResult, setCpfValidationResult] = useState<CpfValidationResult | null>(null);
+
+  const handleValidateCpfWithGemini = async (cpfToValidate: string, nameToValidate?: string) => {
+    const clean = cpfToValidate.replace(/\D/g, "");
+    if (clean.length !== 11) {
+      toastError("Por favor, informe um CPF completo com 11 dígitos para validar.", "CPF Incompleto");
+      return null;
+    }
+    setIsCpfValidating(true);
+    try {
+      const result = await validateCPFWithGemini(clean, nameToValidate || regName);
+      setCpfValidationResult(result);
+      if (result.isValid && !result.municipalSecurityFlag) {
+        toastSuccess(
+          `CPF Aprovado pela IA Municipal! Score: ${result.score}% (${result.regionInfo || "Válido"})`,
+          "Segurança Municipal Gemini AI"
+        );
+      } else {
+        toastCritical(
+          `Inconsistência de CPF: ${result.reason}`,
+          "Alerta de Segurança Municipal"
+        );
+      }
+      return result;
+    } catch (err: any) {
+      toastError("Erro ao consultar serviço de validação de CPF via Gemini AI.", "Erro de Validação");
+      return null;
+    } finally {
+      setIsCpfValidating(false);
+    }
+  };
 
   const lastAutoCepRef = React.useRef<string | null>(null);
 
@@ -437,6 +470,23 @@ export default function App() {
 
   // User self-change password state
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
+    if (isProfileMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isProfileMenuOpen]);
+
   const [isNotificationDiagOpen, setIsNotificationDiagOpen] = useState(false);
   const [settingsSubTab, setSettingsSubTab] = useState<"smtp" | "whatsapp" | "backup" | "permissions" | "almoxarifados" | "push_diagnostic" | undefined>(undefined);
   const [profileWarehouseId, setProfileWarehouseId] = useState("");
@@ -2517,12 +2567,20 @@ export default function App() {
     }
   };
 
-  // Self-registration handler
-  const handleSelfRegister = (e: React.FormEvent) => {
+  // Self-registration handler with Gemini AI Municipal CPF Validation
+  const handleSelfRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanCPF = regCPF.replace(/\D/g, "");
     if (cleanCPF.length < 11) {
       setLoginError("Por favor, digite um CPF válido contendo ao menos 11 dígitos para o auto-cadastro.");
+      return;
+    }
+
+    // 1. Algorithmic Check First (Modulo 11)
+    const algoCheck = validateCPFAlgorithm(cleanCPF);
+    if (!algoCheck.isValid) {
+      setLoginError(`CPF Inválido: ${algoCheck.reason}`);
+      toastCritical(`CPF Rejeitado: ${algoCheck.reason}`, "Validação Módulo 11");
       return;
     }
 
@@ -2535,8 +2593,26 @@ export default function App() {
       return;
     }
 
+    // 2. Gemini AI Veracity & Municipal Security Verification
+    setIsCpfValidating(true);
+    let aiResult: CpfValidationResult | null = cpfValidationResult;
+    
+    // Check if we need to run or re-run the AI validation
+    if (!aiResult || !aiResult.isValid || aiResult.verdict === "INVALIDO") {
+      aiResult = await validateCPFWithGemini(cleanCPF, regName);
+      setCpfValidationResult(aiResult);
+    }
+    setIsCpfValidating(false);
+
+    if (!aiResult.isValid || aiResult.municipalSecurityFlag || aiResult.score < 40) {
+      setLoginError(`⚠️ Alerta de Segurança Municipal Gemini AI: ${aiResult.reason}`);
+      toastCritical(`Auto-cadastro recusado pela IA de Segurança Municipal: ${aiResult.reason}`, "Inconsistência de CPF");
+      return;
+    }
+
     const newId = `cli-${Date.now()}`;
     const isGoogleAuth = !!googleWorkspaceData;
+    const auditInfo = `[Auditado por Gemini AI: Score ${aiResult.score}% (${aiResult.verdict}) - ${aiResult.regionInfo || 'SP'}]`;
 
     const newClient: Client = {
       id: newId,
@@ -2551,10 +2627,10 @@ export default function App() {
       isAddressValidated: regIsAddressValidated,
       workLocation: regWorkLocation || undefined,
       notes: isGoogleAuth 
-        ? `Primeiro Acesso via Google Workspace (${googleWorkspaceData?.email}). Perfil autenticado automaticamente.`
+        ? `Primeiro Acesso via Google Workspace (${googleWorkspaceData?.email}). Perfil autenticado. ${auditInfo}`
         : regTrialRequested 
-        ? "Usuário registrado com solicitação de Teste de 15 Dias. Aguardando concessão de permissão pelo Administrador."
-        : "Usuário registrado por Auto-Cadastro. Aguardando autorização operacional.",
+        ? `Usuário registrado com solicitação de Teste de 15 Dias. ${auditInfo}`
+        : `Usuário registrado por Auto-Cadastro. ${auditInfo}`,
       createdAt: new Date().toISOString(),
       password: regPassword || "123",
       status: isGoogleAuth ? "ativo" : "pendente_autorizacao",
@@ -2570,10 +2646,10 @@ export default function App() {
     setClients(updated);
     localStorage.setItem("service_mgt_clients2", JSON.stringify(updated));
 
-    // System log
+    // System log with AI audit info
     addSystemLog(
       "Primeiro Acesso Concluído",
-      `Novo usuário "${regName}" efetuou primeiro acesso sob o CPF ${regCPF} (Integrado com Google Workspace: ${isGoogleAuth ? "SIM" : "NÃO"}).`,
+      `Novo usuário "${regName}" efetuou auto-cadastro sob CPF ${regCPF}. ${auditInfo}`,
       "requisitante"
     );
 
@@ -3273,20 +3349,76 @@ export default function App() {
                     />
                   </div>
 
-                  {/* CPF */}
-                  <div className="space-y-1.5 text-left">
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                      CPF <span className="text-indigo-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={regCPF}
-                      maxLength={14}
-                      onChange={(e) => setRegCPF(formatDoc(e.target.value))}
-                      className="w-full text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20 font-mono"
-                      placeholder="000.000.000-00"
-                    />
+                  {/* CPF with Gemini AI Verification UI */}
+                  <div className="space-y-1.5 text-left col-span-1 sm:col-span-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                        CPF <span className="text-indigo-400">*</span>
+                      </label>
+                      <span className="text-[10px] text-indigo-400 bg-indigo-950/60 border border-indigo-800/40 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                        <Sparkles className="w-2.5 h-2.5 text-indigo-400" /> Auditoria Gemini AI
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={regCPF}
+                        maxLength={14}
+                        onChange={(e) => {
+                          setRegCPF(formatDoc(e.target.value));
+                          setCpfValidationResult(null);
+                        }}
+                        className="flex-1 text-sm font-semibold border border-slate-800 rounded-xl px-4 py-3 bg-slate-950 text-white focus:outline-none focus:ring-2 focus:ring-indigo-600/20 font-mono"
+                        placeholder="000.000.000-00"
+                      />
+                      <button
+                        type="button"
+                        disabled={isCpfValidating || regCPF.replace(/\D/g, "").length !== 11}
+                        onClick={() => handleValidateCpfWithGemini(regCPF, regName)}
+                        className="px-3.5 py-2 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-700/50 text-indigo-200 text-xs font-bold rounded-xl flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer whitespace-nowrap"
+                        title="Verificar veracidade e integridade do CPF com inteligência artificial Gemini"
+                      >
+                        {isCpfValidating ? (
+                          <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        )}
+                        <span>{isCpfValidating ? "Auditando..." : "Validar via IA"}</span>
+                      </button>
+                    </div>
+
+                    {/* Gemini Audit Card Badge */}
+                    {cpfValidationResult && (
+                      <div className={`mt-2 p-3 rounded-xl border text-xs flex flex-col gap-1.5 transition-all ${
+                        cpfValidationResult.isValid && !cpfValidationResult.municipalSecurityFlag
+                          ? "bg-emerald-950/30 border-emerald-800/40 text-emerald-200"
+                          : "bg-rose-950/30 border-rose-800/40 text-rose-200"
+                      }`}>
+                        <div className="flex items-center justify-between font-bold">
+                          <div className="flex items-center gap-1.5">
+                            {cpfValidationResult.isValid && !cpfValidationResult.municipalSecurityFlag ? (
+                              <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                            ) : (
+                              <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                            )}
+                            <span>
+                              {cpfValidationResult.isValid && !cpfValidationResult.municipalSecurityFlag
+                                ? `CPF Aprovado pela IA (${cpfValidationResult.score}% Confiança)`
+                                : `Alerta de Inconsistência Municipal (${cpfValidationResult.score}% Confiança)`}
+                            </span>
+                          </div>
+                          {cpfValidationResult.regionInfo && (
+                            <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-900/60 border border-slate-700/40 text-indigo-300">
+                              {cpfValidationResult.regionInfo}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] opacity-90 leading-relaxed">
+                          {cpfValidationResult.reason}
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Phone */}
@@ -4065,11 +4197,12 @@ export default function App() {
             {hasTabPermission("dashboard") && (
               <button
                 onClick={() => { setActiveTab("dashboard"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "dashboard"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "dashboard"}
               >
                 <BarChart className="w-4.5 h-4.5 shrink-0" />
                 <span>Painel Geral</span>
@@ -4080,11 +4213,12 @@ export default function App() {
             {hasTabPermission("bi") && (
               <button
                 onClick={() => { setActiveTab("bi"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "bi"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "bi"}
               >
                 <TrendingUp className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
                 <span>Métricas & Estatísticas (B.I)</span>
@@ -4097,7 +4231,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setCadastrosOpen(!cadastrosOpen)}
-                  className="w-full flex items-center justify-between px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800/40 transition-all touch-manipulation active:scale-[0.98] cursor-pointer"
+                  className="w-full flex items-center justify-between px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold text-slate-400 hover:text-white transition-all touch-manipulation cursor-pointer sidebar-nav-item"
                 >
                   <div className="flex items-center gap-3.5">
                     <Folder className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
@@ -4117,11 +4251,12 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => { setActiveTab("clients"); setIsSidebarOpen(false); }}
-                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                           activeTab === "clients"
-                            ? "bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
-                            : "text-slate-400 hover:text-white hover:bg-slate-800/20"
+                            ? "active bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
+                            : "text-slate-400 hover:text-white"
                         }`}
+                        data-active={activeTab === "clients"}
                       >
                         <Users className="w-4 h-4 shrink-0" />
                         <span>Usuários</span>
@@ -4133,11 +4268,12 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => { setActiveTab("professionals"); setIsSidebarOpen(false); }}
-                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                           activeTab === "professionals"
-                            ? "bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
-                            : "text-slate-400 hover:text-white hover:bg-slate-800/20"
+                            ? "active bg-slate-850 text-indigo-400 font-extrabold shadow-sm"
+                            : "text-slate-400 hover:text-white"
                         }`}
+                        data-active={activeTab === "professionals"}
                       >
                         <Wrench className="w-4 h-4 shrink-0" />
                         <span>Técnico & Equipes</span>
@@ -4149,11 +4285,12 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => { setActiveTab("permissions"); setIsSidebarOpen(false); }}
-                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                        className={`w-full flex items-center gap-3 px-3.5 py-3 min-h-[44px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                           activeTab === "permissions"
-                            ? "bg-amber-950/60 text-amber-400 font-extrabold shadow-sm border border-amber-500/30"
-                            : "text-slate-400 hover:text-amber-300 hover:bg-slate-800/20"
+                            ? "active bg-amber-950/60 text-amber-400 font-extrabold shadow-sm border border-amber-500/30"
+                            : "text-slate-400 hover:text-amber-300"
                         }`}
+                        data-active={activeTab === "permissions"}
                       >
                         <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
                         <span>Gestão de Perfis</span>
@@ -4168,11 +4305,12 @@ export default function App() {
             {hasTabPermission("orders") && (
               <button
                 onClick={() => { setActiveTab("orders"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "orders"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "orders"}
               >
                 <ClipboardList className="w-4.5 h-4.5 shrink-0" />
                 <span>{currentUser.userType === "requisitante" ? "Minhas Requisições" : currentUser.userType === "profissional" ? "Atendimentos Designados" : "Requisições de Serviço"}</span>
@@ -4183,11 +4321,12 @@ export default function App() {
             {hasTabPermission("scheduler") && (
               <button
                 onClick={() => { setActiveTab("scheduler"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "scheduler"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "scheduler"}
               >
                 <Calendar className="w-4.5 h-4.5 shrink-0" />
                 <span>{currentUser.userType === "profissional" ? "Minha Agenda" : "Agenda / Calendário"}</span>
@@ -4198,11 +4337,12 @@ export default function App() {
             {hasTabPermission("reports") && (
               <button
                 onClick={() => { setActiveTab("reports"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "reports"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "reports"}
               >
                 <Activity className="w-4.5 h-4.5 shrink-0" />
                 <span>Relatórios & Logs</span>
@@ -4213,11 +4353,12 @@ export default function App() {
             {hasTabPermission("gmail") && (
               <button
                 onClick={() => { setActiveTab("gmail"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center justify-between px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "gmail"
-                    ? "bg-red-950/60 text-red-400 font-extrabold shadow-sm border border-red-500/30"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-red-950/60 text-red-400 font-extrabold shadow-sm border border-red-500/30"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "gmail"}
               >
                 <div className="flex items-center gap-3.5">
                   <Mail className="w-4.5 h-4.5 text-red-400 shrink-0" />
@@ -4237,11 +4378,12 @@ export default function App() {
                   setActiveTab("settings"); 
                   setIsSidebarOpen(false); 
                 }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "settings"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "settings"}
               >
                 <Settings className="w-4.5 h-4.5 shrink-0" />
                 <span>Configurações</span>
@@ -4254,11 +4396,12 @@ export default function App() {
             {hasTabPermission("assistant") && (
               <button
                 onClick={() => { setActiveTab("assistant"); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation active:scale-[0.98] cursor-pointer ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-bold transition-all touch-manipulation cursor-pointer sidebar-nav-item ${
                   activeTab === "assistant"
-                    ? "bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
-                    : "text-slate-400 hover:text-white hover:bg-slate-800/40"
+                    ? "active bg-slate-800 text-indigo-400 font-extrabold shadow-sm"
+                    : "text-slate-400 hover:text-white"
                 }`}
+                data-active={activeTab === "assistant"}
               >
                 <Sparkles className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
                 <span>Assistente IA Gemini</span>
@@ -4268,7 +4411,7 @@ export default function App() {
             {/* Sair da Conta */}
             <button
               onClick={handleLogout}
-              className="w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-extrabold text-rose-400 hover:text-white hover:bg-rose-950/40 transition-all border border-dashed border-rose-950/20 hover:border-rose-500/30 mt-6 cursor-pointer touch-manipulation active:scale-[0.98]"
+              className="w-full flex items-center gap-3.5 px-3.5 py-3.5 min-h-[48px] rounded-xl text-xs font-extrabold text-rose-400 hover:text-white transition-all border border-dashed border-rose-950/20 hover:border-rose-500/30 mt-6 cursor-pointer touch-manipulation sidebar-logout-item"
             >
               <LogOut className="w-4.5 h-4.5 shrink-0" />
               <span>Encerrar Sessão (Sair)</span>
@@ -4556,31 +4699,206 @@ export default function App() {
             />
 
             <div className="flex items-center gap-2">
-              {/* Clean Profile Button - Touch-Friendly Target */}
-              <button 
-                onClick={() => {
-                  setProfileWarehouseId(currentUser.warehouseId || "");
-                  setProfileWorkLocation(currentUser.workLocation || "");
-                  setIsChangePasswordOpen(true);
-                  setShowPasswordSection(false); // Reset password section view initially
-                }}
-                className="flex items-center gap-2 min-h-[44px] bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 p-1.5 px-3 rounded-xl transition-all border border-slate-200/60 dark:border-slate-700 cursor-pointer text-left shrink-0 shadow-xs touch-manipulation active:scale-95"
-                title="Meu Perfil e Preferências"
-              >
-                {currentUser.photoURL ? (
-                  <img src={currentUser.photoURL} alt={currentUser.name} className="w-7 h-7 rounded-full border border-indigo-400 shrink-0 object-cover shadow-xs" />
-                ) : (
-                  <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 shadow-xs text-white font-extrabold text-[11px] flex items-center justify-center uppercase shrink-0">
-                    {currentUser.name.charAt(0)}
+              {/* Profile Menu Dropdown Container */}
+              <div className="relative" ref={profileMenuRef}>
+                {/* Profile Button - Touch-Friendly Target */}
+                <button 
+                  onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                  className="flex items-center gap-2 min-h-[44px] bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 p-1.5 px-3 rounded-xl transition-all border border-slate-200/60 dark:border-slate-700 cursor-pointer text-left shrink-0 shadow-xs touch-manipulation active:scale-95"
+                  title="Menu do Perfil e Preferências de Tema"
+                  aria-expanded={isProfileMenuOpen}
+                >
+                  {currentUser.photoURL ? (
+                    <img src={currentUser.photoURL} alt={currentUser.name} className="w-7 h-7 rounded-full border border-indigo-400 shrink-0 object-cover shadow-xs" />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 shadow-xs text-white font-extrabold text-[11px] flex items-center justify-center uppercase shrink-0">
+                      {currentUser.name.charAt(0)}
+                    </div>
+                  )}
+                  <div className="text-left hidden sm:block">
+                    <span className="text-slate-800 dark:text-slate-200 font-extrabold text-xs block leading-none max-w-[120px] truncate">{currentUser.name}</span>
+                    <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
+                      {currentUser.userType === "admin" ? "⚡ Administrador" : currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "gestor_servicos" ? "📋 Gestor de Serviços" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
+                    </span>
+                  </div>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 dark:text-slate-500 transition-transform duration-200 ${isProfileMenuOpen ? "rotate-180 text-indigo-600 dark:text-indigo-400" : ""}`} />
+                </button>
+
+                {/* Profile Menu Popover Dropdown */}
+                {isProfileMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-slate-950 rounded-2xl shadow-2xl border border-slate-200/90 dark:border-slate-800 p-3.5 z-50 animate-fade-in text-slate-800 dark:text-slate-200 space-y-3">
+                    {/* User Identity Banner */}
+                    <div className="p-2.5 bg-slate-50 dark:bg-slate-900/80 rounded-xl border border-slate-100 dark:border-slate-800 flex items-center gap-2.5">
+                      {currentUser.photoURL ? (
+                        <img src={currentUser.photoURL} alt={currentUser.name} className="w-9 h-9 rounded-full border border-indigo-500 shrink-0 object-cover shadow-xs" />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-slate-900 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-white font-black text-xs flex items-center justify-center uppercase shrink-0">
+                          {currentUser.name.charAt(0)}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-extrabold text-xs text-slate-900 dark:text-slate-100 truncate">{currentUser.name}</h4>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold truncate">{currentUser.email || currentUser.id}</p>
+                        <span className="inline-flex items-center gap-1 text-[9px] font-extrabold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mt-0.5">
+                          {currentUser.userType === "admin" ? "⚡ Administrador" : currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "gestor_servicos" ? "📋 Gestor de Serviços" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Dark Mode Override Toggle Block */}
+                    <div className="p-3 bg-slate-50/80 dark:bg-slate-900/60 rounded-xl border border-slate-200/80 dark:border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          {activeTheme === "dark" ? (
+                            <Moon className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+                          ) : (
+                            <Sun className="w-4 h-4 text-amber-500" />
+                          )}
+                          <div>
+                            <span className="text-[11px] font-extrabold text-slate-800 dark:text-slate-200 block leading-none">Modo Escuro</span>
+                            <span className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">Sobrepor preferência</span>
+                          </div>
+                        </div>
+
+                        {/* Direct Dark Mode Switch */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextPref = activeTheme === "dark" ? "light" : "dark";
+                            setThemePreference(nextPref);
+                            toastSuccess(
+                              `Modo ${nextPref === "dark" ? "Escuro" : "Claro"} ativado! (Sobrepondo sistema)`,
+                              "Tema Visual"
+                            );
+                          }}
+                          className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            activeTheme === "dark" ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"
+                          }`}
+                          title="Alternar entre Modo Escuro e Claro (Forçar Tema)"
+                          role="switch"
+                          aria-checked={activeTheme === "dark"}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                              activeTheme === "dark" ? "translate-x-5" : "translate-x-0"
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Theme Mode Selector Tabs */}
+                      <div className="grid grid-cols-3 gap-1 bg-white dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setThemePreference("light");
+                            toastSuccess("Modo Claro forçado! (Ignorando tema do sistema)", "Tema Visual");
+                          }}
+                          className={`p-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                            themePreference === "light"
+                              ? "bg-slate-900 text-white dark:bg-indigo-600 dark:text-white shadow-xs font-black"
+                              : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                          }`}
+                          title="Forçar Modo Claro"
+                        >
+                          <Sun className="w-3 h-3 text-amber-400" />
+                          <span>Claro</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setThemePreference("dark");
+                            toastSuccess("Modo Escuro forçado! (Ignorando tema do sistema)", "Tema Visual");
+                          }}
+                          className={`p-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                            themePreference === "dark"
+                              ? "bg-slate-900 text-white dark:bg-indigo-600 dark:text-white shadow-xs font-black"
+                              : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                          }`}
+                          title="Forçar Modo Escuro"
+                        >
+                          <Moon className="w-3 h-3 text-indigo-400" />
+                          <span>Escuro</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setThemePreference("system");
+                            toastInfo("Modo Automático reativado! (Sincronizado c/ Sistema)", "Tema Visual");
+                          }}
+                          className={`p-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                            themePreference === "system"
+                              ? "bg-slate-900 text-white dark:bg-indigo-600 dark:text-white shadow-xs font-black"
+                              : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                          }`}
+                          title="Sincronizar com preferências do sistema operacional"
+                        >
+                          <Monitor className="w-3 h-3 text-sky-400" />
+                          <span>Auto</span>
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[9px] font-semibold text-slate-400 dark:text-slate-500 px-0.5">
+                        <span>Estado Atual:</span>
+                        <span className="font-extrabold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                          {themePreference === "system"
+                            ? `Auto (${activeTheme === "dark" ? "Escuro" : "Claro"})`
+                            : themePreference === "dark"
+                            ? "⚡ Escuro Forçado"
+                            : "☀️ Claro Forçado"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Menu Navigation Items */}
+                    <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsProfileMenuOpen(false);
+                          setProfileWarehouseId(currentUser.warehouseId || "");
+                          setProfileWorkLocation(currentUser.workLocation || "");
+                          setIsChangePasswordOpen(true);
+                          setShowPasswordSection(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer text-left"
+                      >
+                        <User className="w-4 h-4 text-indigo-500" />
+                        <span>Meu Perfil & Configurações</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsProfileMenuOpen(false);
+                          setProfileWarehouseId(currentUser.warehouseId || "");
+                          setProfileWorkLocation(currentUser.workLocation || "");
+                          setIsChangePasswordOpen(true);
+                          setShowPasswordSection(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer text-left"
+                      >
+                        <Lock className="w-4 h-4 text-amber-500" />
+                        <span>Alterar Senha</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsProfileMenuOpen(false);
+                          handleLogout();
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer text-left"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>Sair / Encerrar Sessão</span>
+                      </button>
+                    </div>
                   </div>
                 )}
-                <div className="text-left hidden sm:block">
-                  <span className="text-slate-800 dark:text-slate-200 font-extrabold text-xs block leading-none max-w-[120px] truncate">{currentUser.name}</span>
-                  <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
-                    {currentUser.userType === "admin" ? "⚡ Administrador" : currentUser.userType === "gestor" ? "🛡️ Gestor" : currentUser.userType === "gestor_servicos" ? "📋 Gestor de Serviços" : currentUser.userType === "profissional" ? "🔧 Técnico" : "👤 Requisitante"}
-                  </span>
-                </div>
-              </button>
+              </div>
 
               {/* Logout Button - Touch-Friendly Target */}
               <button 
@@ -4901,51 +5219,97 @@ export default function App() {
 
                     {/* Preferências de Tema Visual */}
                     <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
-                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block border-b border-slate-200 dark:border-slate-850 pb-1 flex items-center gap-1.5">
-                        <Sun className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                        Tema Visual do Sistema
-                      </span>
+                      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-850 pb-1.5">
+                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                          <Sun className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                          Tema Visual do Sistema (Modo Escuro)
+                        </span>
+                        <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60">
+                          {themePreference === "system" ? "Sincronizado c/ Sistema" : themePreference === "dark" ? "Modo Escuro Forçado" : "Modo Claro Forçado"}
+                        </span>
+                      </div>
+
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight">
+                        Escolha como prefere visualizar o painel. Você pode forçar o modo claro ou escuro permanentemente, sobrepondo a detecção do sistema operacional.
+                      </p>
+
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                        <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight">Escolha como prefere visualizar as cores do painel administrativo.</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextPref = activeTheme === "dark" ? "light" : "dark";
+                              setThemePreference(nextPref);
+                              toastSuccess(
+                                `Modo ${nextPref === "dark" ? "Escuro" : "Claro"} ativado! (Sobrepondo sistema)`,
+                                "Tema Visual"
+                              );
+                            }}
+                            className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                              activeTheme === "dark" ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"
+                            }`}
+                            title="Alternar Modo Escuro / Claro"
+                            role="switch"
+                            aria-checked={activeTheme === "dark"}
+                          >
+                            <span
+                              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                                activeTheme === "dark" ? "translate-x-5" : "translate-x-0"
+                              }`}
+                            />
+                          </button>
+                          <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                            Modo Escuro: <strong className="text-indigo-600 dark:text-indigo-400">{activeTheme === "dark" ? "Ativado" : "Desativado"}</strong>
+                          </span>
+                        </div>
                         
                         <div className="flex items-center gap-0.5 bg-white dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800/80 shadow-xs shrink-0 self-start sm:self-center">
                           <button
                             type="button"
-                            onClick={() => setThemePreference("light")}
+                            onClick={() => {
+                              setThemePreference("light");
+                              toastSuccess("Modo Claro forçado permanentemente!", "Tema Visual");
+                            }}
                             className={`p-1.5 px-2.5 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1 ${
                               themePreference === "light"
-                                ? "bg-slate-900 text-white shadow-xs dark:bg-slate-850 dark:text-indigo-400"
+                                ? "bg-slate-900 text-white shadow-xs dark:bg-indigo-600 dark:text-white font-black"
                                 : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                             }`}
-                            title="Modo Claro"
+                            title="Forçar Modo Claro"
                           >
-                            <Sun className="w-3.5 h-3.5" />
+                            <Sun className="w-3.5 h-3.5 text-amber-400" />
                             <span>Claro</span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => setThemePreference("dark")}
+                            onClick={() => {
+                              setThemePreference("dark");
+                              toastSuccess("Modo Escuro forçado permanentemente!", "Tema Visual");
+                            }}
                             className={`p-1.5 px-2.5 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1 ${
                               themePreference === "dark"
-                                ? "bg-slate-900 text-white shadow-xs dark:bg-slate-850 dark:text-indigo-400"
+                                ? "bg-slate-900 text-white shadow-xs dark:bg-indigo-600 dark:text-white font-black"
                                 : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                             }`}
-                            title="Modo Escuro"
+                            title="Forçar Modo Escuro"
                           >
-                            <Moon className="w-3.5 h-3.5" />
+                            <Moon className="w-3.5 h-3.5 text-indigo-400" />
                             <span>Escuro</span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => setThemePreference("system")}
+                            onClick={() => {
+                              setThemePreference("system");
+                              toastInfo("Modo Automático reativado!", "Tema Visual");
+                            }}
                             className={`p-1.5 px-2.5 rounded-lg text-[10px] font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1 ${
                               themePreference === "system"
-                                ? "bg-slate-900 text-white shadow-xs dark:bg-slate-850 dark:text-indigo-400"
+                                ? "bg-slate-900 text-white shadow-xs dark:bg-indigo-600 dark:text-white font-black"
                                 : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                             }`}
-                            title="Tema Automático"
+                            title="Usar preferência do Sistema"
                           >
-                            <Monitor className="w-3.5 h-3.5" />
+                            <Monitor className="w-3.5 h-3.5 text-sky-400" />
                             <span>Auto</span>
                           </button>
                         </div>

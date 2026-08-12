@@ -3,32 +3,120 @@ import { users, usuarios, clients, professionals, serviceOrders, serviceCategori
 import { eq, desc } from "drizzle-orm";
 import type { Client, Professional, ServiceOrder, ServiceCategory, SystemLog, LoginAttempt, AccessProfile } from "../types.ts";
 
+/**
+ * ============================================================================
+ * PADRÃO REPOSITORY DA CAMADA DE DADOS (src/db/repository.ts)
+ * ============================================================================
+ * Este arquivo encapsula todas as operações de persistência e consulta (CRUD)
+ * no banco PostgreSQL utilizando o Drizzle ORM.
+ *
+ * Conceitos Aplicados:
+ * - Abstração: A aplicação interage com funções simples de domínio (`getAllUsuarios`, `upsertServiceOrder`).
+ * - Idiomas SQL do Drizzle:
+ *   * db.select().from(tabela).where(eq(coluna, valor)): Consulta SQL SELECT com WHERE
+ *   * db.insert(tabela).values(...).onConflictDoUpdate(...): UPSERT (Insert or Update)
+ *   * db.delete(tabela).where(...): Remoção segura DELETE
+ *   * .orderBy(desc(coluna)): Ordenação decrescente
+ */
+
 // Helper: Users
-export async function getOrCreateUser(uid: string, email: string, name?: string, document?: string, userType?: string) {
+
+export async function getUserByUid(uid: string) {
   try {
+    const rows = await db.select().from(users).where(eq(users.uid, uid));
+    if (rows.length === 0) return null;
+    const u = rows[0];
+    const extraData = (u.data as Record<string, any>) || {};
+    return {
+      uid: u.uid,
+      email: u.email,
+      name: u.name || "",
+      document: u.document || "",
+      userType: (u.userType || "requisitante") as any,
+      status: u.status || "ativo",
+      warehouseId: u.warehouseId || undefined,
+      workLocation: u.workLocation || undefined,
+      googleUid: u.googleUid || undefined,
+      photoURL: extraData.photoURL || undefined,
+      createdAt: u.createdAt ? new Date(u.createdAt).toISOString() : new Date().toISOString(),
+      ...extraData,
+    };
+  } catch (error) {
+    console.error("Database error in getUserByUid:", error);
+    return null;
+  }
+}
+
+export async function upsertUser(userData: {
+  uid: string;
+  email: string;
+  name?: string;
+  document?: string;
+  userType?: string;
+  status?: string;
+  warehouseId?: string;
+  workLocation?: string;
+  googleUid?: string;
+  photoURL?: string;
+  [key: string]: any;
+}) {
+  try {
+    const { uid, email, name, document, userType, status, warehouseId, workLocation, googleUid, photoURL, ...extra } = userData;
+    const dataJson = { ...(photoURL ? { photoURL } : {}), ...extra };
+
     const result = await db.insert(users)
       .values({
         uid,
-        email,
+        email: email || "",
         name: name || "",
         document: document || "",
         userType: userType || "requisitante",
+        status: status || "ativo",
+        warehouseId: warehouseId || null,
+        workLocation: workLocation || null,
+        googleUid: googleUid || null,
+        data: dataJson,
       })
       .onConflictDoUpdate({
         target: users.uid,
         set: {
-          email,
-          ...(name ? { name } : {}),
-          ...(document ? { document } : {}),
-          ...(userType ? { userType } : {}),
+          email: email || "",
+          ...(name !== undefined ? { name } : {}),
+          ...(document !== undefined ? { document } : {}),
+          ...(userType !== undefined ? { userType } : {}),
+          ...(status !== undefined ? { status } : {}),
+          ...(warehouseId !== undefined ? { warehouseId } : {}),
+          ...(workLocation !== undefined ? { workLocation } : {}),
+          ...(googleUid !== undefined ? { googleUid } : {}),
+          data: dataJson,
         },
       })
       .returning();
-    return result[0];
+
+    const u = result[0];
+    const extraData = (u.data as Record<string, any>) || {};
+    return {
+      uid: u.uid,
+      email: u.email,
+      name: u.name || "",
+      document: u.document || "",
+      userType: u.userType as any,
+      status: u.status || "ativo",
+      warehouseId: u.warehouseId || undefined,
+      workLocation: u.workLocation || undefined,
+      googleUid: u.googleUid || undefined,
+      photoURL: extraData.photoURL || undefined,
+      createdAt: u.createdAt ? new Date(u.createdAt).toISOString() : new Date().toISOString(),
+      ...extraData,
+    };
   } catch (error) {
-    console.error("Database error in getOrCreateUser:", error);
-    throw new Error("Erro ao registrar/sincronizar usuário no banco de dados.", { cause: error });
+    console.error("Database error in upsertUser:", error);
+    throw new Error("Erro ao salvar usuário no PostgreSQL.", { cause: error });
   }
+}
+
+export async function getOrCreateUser(uid: string, email: string, name?: string, document?: string, userType?: string) {
+  return upsertUser({ uid, email, name, document, userType });
 }
 
 // Helper: Usuarios (Antigo Clients)
