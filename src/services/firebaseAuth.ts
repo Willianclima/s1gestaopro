@@ -1,4 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
 import { 
   getAuth, 
   signInWithPopup, 
@@ -11,90 +12,22 @@ import {
   setPersistence,
   browserLocalPersistence
 } from 'firebase/auth';
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc,
-  getDocFromServer
-} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 // Ensure persistent session in browser storage via Firebase Auth
 setPersistence(auth, browserLocalPersistence).catch(err => {
   console.warn("Could not enable browserLocalPersistence in Firebase Auth:", err);
 });
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/gmail.send');
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
-
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  };
-}
-
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-export async function testFirestoreConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    console.log('[Firebase] Connection to Firestore verified successfully.');
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("[Firebase] Client appears offline. Check Firebase configuration.");
-    }
-  }
-}
-
-testFirestoreConnection();
 
 export interface UserProfileData {
   uid: string;
@@ -108,32 +41,50 @@ export interface UserProfileData {
   createdAt?: string;
 }
 
+/**
+ * Consulta e retorna o perfil estendido do usuário armazenado na tabela 'users' do PostgreSQL.
+ *
+ * @param uid - Identificador único (UID) do usuário no Firebase Auth.
+ * @returns Promessa com o objeto `UserProfileData` se encontrado, ou `null`.
+ */
 export const getUserProfile = async (uid: string): Promise<UserProfileData | null> => {
   try {
-    const userDocRef = doc(db, 'users', uid);
-    const snap = await getDoc(userDocRef);
-    if (snap.exists()) {
-      return snap.data() as UserProfileData;
+    const res = await fetch(`/api/postgres/users/${encodeURIComponent(uid)}`);
+    if (res.ok) {
+      const data = await res.json();
+      return data as UserProfileData;
     }
     return null;
   } catch (err) {
-    console.warn("[Firebase] Could not fetch user profile from Firestore:", err);
+    console.warn("[PostgreSQL] Erro ao buscar perfil de usuário:", err);
     return null;
   }
 };
 
+/**
+ * Grava ou atualiza os dados do perfil estendido do usuário no PostgreSQL (tabela 'users').
+ *
+ * @param profile - Dados do perfil do usuário incluindo UID, nome, e-mail e papel.
+ */
 export const saveUserProfile = async (profile: UserProfileData): Promise<void> => {
   try {
-    const userDocRef = doc(db, 'users', profile.uid);
-    await setDoc(userDocRef, {
-      ...profile,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+    await fetch('/api/postgres/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile)
+    });
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `users/${profile.uid}`);
+    console.error("[PostgreSQL] Erro ao salvar perfil de usuário:", err);
   }
 };
 
+/**
+ * Inscreve um ouvinte (listener) para monitorar alterações no estado de autenticação do Firebase.
+ * Ao identificar um usuário logado, recupera ou cria automaticamente o perfil estendido no Firestore.
+ *
+ * @param onUserChanged - Callback acionado quando o estado de autenticação muda, recebendo o usuário Firebase `User` e o `UserProfileData`.
+ * @returns Função de cancelamento de inscrição (`unsubscribe`).
+ */
 export const subscribeToAuthChanges = (
   onUserChanged: (user: User | null, profile: UserProfileData | null) => void
 ) => {
@@ -161,6 +112,13 @@ export const subscribeToAuthChanges = (
   });
 };
 
+/**
+ * Inicializa a escuta do estado de autenticação e injeta o ID Token JWT atualizado ou o token em cache.
+ *
+ * @param onAuthSuccess - Callback executado quando o usuário está autenticado com sucesso.
+ * @param onAuthFailure - Callback executado quando não há usuário logado.
+ * @returns Função de cancelamento da inscrição (`unsubscribe`).
+ */
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
@@ -177,6 +135,13 @@ export const initAuth = (
   });
 };
 
+/**
+ * Realiza a autenticação social via Google OAuth utilizando popup.
+ * Captura o token de acesso OAuth, garante a existência do perfil no Firestore e retorna o objeto de usuário.
+ *
+ * @returns Objeto contendo as credenciais do usuário (`user`), token de acesso (`accessToken`) e o perfil estendido (`profile`).
+ * @throws Lança erro caso a janela popup seja fechada ou ocorra falha no provedor de autenticação.
+ */
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string; profile: UserProfileData } | null> => {
   try {
     isSigningIn = true;
@@ -209,6 +174,13 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string;
   }
 };
 
+/**
+ * Realiza o login utilizando credenciais tradicionais de e-mail e senha.
+ *
+ * @param email - Endereço de e-mail cadastrado do usuário.
+ * @param pass - Senha correspondente.
+ * @returns Objeto com o usuário do Firebase Auth (`user`) e seu perfil do Firestore (`profile`).
+ */
 export const emailPasswordSignIn = async (email: string, pass: string) => {
   const userCredential = await signInWithEmailAndPassword(auth, email, pass);
   const user = userCredential.user;
@@ -216,6 +188,14 @@ export const emailPasswordSignIn = async (email: string, pass: string) => {
   return { user, profile };
 };
 
+/**
+ * Cria um novo usuário com e-mail e senha e registra as informações do perfil estendido no Firestore.
+ *
+ * @param email - Endereço de e-mail para a nova conta.
+ * @param pass - Senha da conta.
+ * @param profileData - Dados adicionais do perfil (nome, tipo de usuário, documento, etc.).
+ * @returns Objeto com o usuário recém-criado e o perfil salvo.
+ */
 export const emailPasswordSignUp = async (email: string, pass: string, profileData: Omit<UserProfileData, 'uid'>) => {
   const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
   const user = userCredential.user;
@@ -227,6 +207,11 @@ export const emailPasswordSignUp = async (email: string, pass: string, profileDa
   return { user, profile };
 };
 
+/**
+ * Recupera o ID Token JWT atualizado do usuário ativo ou o token retornado pelo provedor OAuth.
+ *
+ * @returns Promessa com o token de acesso como string, ou `null` se não houver usuário autenticado.
+ */
 export const getAccessToken = async (): Promise<string | null> => {
   if (auth.currentUser) {
     try {
@@ -238,9 +223,15 @@ export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
 };
 
+/**
+ * Realiza o logout (desconexão) do usuário no Firebase Auth e limpa os tokens em memória.
+ */
 export const logoutUser = async () => {
   await signOut(auth);
   cachedAccessToken = null;
 };
 
+/**
+ * Alias para a função de encerramento de sessão `logoutUser`.
+ */
 export const logoutGoogle = logoutUser;

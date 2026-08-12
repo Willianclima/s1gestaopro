@@ -367,5 +367,115 @@
   box-shadow: 0 14px 28px -6px rgba(0, 0, 0, 0.5), 0 6px 16px -2px rgba(245, 158, 11, 0.1) !important;
 }
 
+/* ==========================================
+   SIDEBAR NAV TRANSITIONS & ANIMATED HOVER
+   ========================================== */
+.sidebar-nav-item {
+  position: relative;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  overflow: hidden;
+  will-change: transform, background-color;
+}
+
+/* Subtle accent glow bar on left edge */
+.sidebar-nav-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 3.5px;
+  background-color: #2d749a;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  opacity: 0;
+  transform: scaleY(0.2);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease, background-color 0.2s ease;
+}
+
+.sidebar-nav-item:hover::before {
+  opacity: 0.7;
+  transform: scaleY(0.7);
+}
+
+.sidebar-nav-item.active::before,
+.sidebar-nav-item[data-active="true"]::before {
+  opacity: 1 !important;
+  transform: scaleY(1) !important;
+  top: 15% !important;
+  bottom: 15% !important;
+  width: 4px !important;
+  background-color: #4b8eb9 !important;
+  box-shadow: 0 0 12px rgba(75, 142, 185, 0.6) !important;
+}
+
+/* Hover icon movement & highlight */
+.sidebar-nav-item svg {
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), color 0.2s ease, filter 0.2s ease;
+}
+
+.sidebar-nav-item:hover svg {
+  transform: translateX(3px) scale(1.1);
+  filter: drop-shadow(0 2px 4px rgba(45, 116, 154, 0.3));
+}
+
+.sidebar-nav-item.active svg,
+.sidebar-nav-item[data-active="true"] svg {
+  transform: scale(1.08);
+}
+
+/* Text slide effect on hover */
+.sidebar-nav-item span {
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), color 0.2s ease;
+}
+
+.sidebar-nav-item:hover span {
+  transform: translateX(3px);
+  color: #ffffff;
+}
+
+/* Hover container elevation and glow */
+.sidebar-nav-item:hover {
+  background-color: rgba(30, 41, 59, 0.85) !important;
+  box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+  transform: translateX(3px) !important;
+}
+
+.sidebar-nav-item:active {
+  transform: translateX(1px) scale(0.98) !important;
+  transition-duration: 0.1s !important;
+}
+
+/* Active sidebar tab container styling */
+.sidebar-nav-item.active,
+.sidebar-nav-item[data-active="true"] {
+  background-color: rgba(30, 41, 59, 0.95) !important;
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Logout button specific hover behavior */
+.sidebar-logout-item {
+  position: relative;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.sidebar-logout-item:hover {
+  background-color: rgba(136, 19, 55, 0.35) !important;
+  transform: translateX(3px) !important;
+  border-color: rgba(244, 63, 94, 0.4) !important;
+  box-shadow: 0 4px 14px -2px rgba(225, 29, 72, 0.25) !important;
+}
+
+.sidebar-logout-item:hover svg {
+  transform: translateX(-2px) rotate(-12deg) scale(1.1) !important;
+  color: #fecdd3 !important;
+}
+
+.sidebar-logout-item:hover span {
+  transform: translateX(3px) !important;
+  color: #ffffff !important;
+}
+
+
 
 
