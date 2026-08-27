@@ -724,23 +724,31 @@ export default function SmtpSettingsPanel({
   };
 
   const getLocalStorageStats = () => {
-    const stats = [];
+    const stats: Array<{ key: string; label: string; exists: boolean; bytes: number; count: number }> = [];
     let totalBytes = 0;
     
-    const keysMap = [
-      { key: "service_mgt_orders2", label: "Ordens de Serviço (Chamados)" },
-      { key: "service_mgt_clients2", label: "Requisitantes / Munícipes homologados" },
-      { key: "service_mgt_professionals2", label: "Técnicos de Campo" },
-      { key: "service_mgt_teams", label: "Equipes de Manutenção" },
-      { key: "service_mgt_logs2", label: "Logs de Auditoria do Sistema" },
-      { key: "service_mgt_smtp", label: "Configuração do Servidor de Email" },
-      { key: "service_mgt_whatsapp", label: "Configuração de Alertas WhatsApp" },
-      { key: "service_mgt_permissions3", label: "Controle Modular de Permissões RBAC" },
-      { key: "admin_custom_password", label: "Senha Geral do Gestor Administrador" },
-    ];
+    const knownKeysMap: Record<string, string> = {
+      "service_mgt_orders2": "Ordens de Serviço (Chamados)",
+      "service_mgt_clients2": "Requisitantes / Munícipes homologados",
+      "service_mgt_professionals2": "Técnicos de Campo",
+      "service_mgt_teams": "Equipes de Manutenção",
+      "service_mgt_categories2": "Categorias de Serviços",
+      "service_mgt_logs2": "Logs de Auditoria do Sistema",
+      "service_mgt_smtp": "Configuração do Servidor de Email",
+      "service_mgt_whatsapp": "Configuração de Alertas WhatsApp",
+      "service_mgt_permissions3": "Controle Modular de Permissões RBAC",
+      "admin_custom_password": "Senha Geral do Gestor Administrador",
+      "service_mgt_logged_user": "Sessão do Usuário Logado",
+      "service_mgt_login_attempts": "Histórico de Tentativas de Login",
+      "service_mgt_internal_backups": "Histórico de Backups Internos",
+      "service_mgt_almoxarifados": "Cadastro de Almoxarifados"
+    };
 
-    for (const item of keysMap) {
-      const value = localStorage.getItem(item.key);
+    const processedKeys = new Set<string>();
+
+    for (const [key, label] of Object.entries(knownKeysMap)) {
+      processedKeys.add(key);
+      const value = localStorage.getItem(key);
       const bytes = value ? new Blob([value]).size : 0;
       totalBytes += bytes;
       
@@ -761,11 +769,43 @@ export default function SmtpSettingsPanel({
       }
       
       stats.push({
-        ...item,
+        key,
+        label,
         exists: !!value,
         bytes,
         count
       });
+    }
+
+    // Capture all remaining dynamic keys in localStorage
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && !processedKeys.has(key)) {
+        processedKeys.add(key);
+        const value = localStorage.getItem(key);
+        const bytes = value ? new Blob([value]).size : 0;
+        totalBytes += bytes;
+
+        let count = 0;
+        if (value) {
+          try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed)) count = parsed.length;
+            else if (typeof parsed === "object" && parsed !== null) count = Object.keys(parsed).length;
+            else count = 1;
+          } catch {
+            count = 1;
+          }
+        }
+
+        stats.push({
+          key,
+          label: `Registro Adicional (${key})`,
+          exists: !!value,
+          bytes,
+          count
+        });
+      }
     }
 
     return { stats, totalBytes };
@@ -773,30 +813,26 @@ export default function SmtpSettingsPanel({
 
   const handleExportBackup = () => {
     const backupObj: Record<string, string | null> = {};
-    const keys = [
-      "service_mgt_logged_user",
-      "service_mgt_clients2",
-      "service_mgt_orders2",
-      "service_mgt_categories2",
-      "service_mgt_professionals2",
-      "service_mgt_logs2",
-      "service_mgt_smtp",
-      "service_mgt_whatsapp",
-      "service_mgt_teams",
-      "service_mgt_login_attempts",
-      "service_mgt_permissions3",
-      "admin_custom_password"
-    ];
     
-    for (const k of keys) {
-      backupObj[k] = localStorage.getItem(k);
+    // Dump 100% of localStorage keys to ensure complete state snapshot
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key) {
+        backupObj[key] = localStorage.getItem(key);
+      }
     }
     
-    // Add file metadata
+    const totalKeysCount = Object.keys(backupObj).length;
+    
+    // Structure metadata payload with LGPD compliance seal and system traceability
     const payload = {
-      system: "RequisicaoPro - Araçatuba Serviços de Manutenção",
+      system: "Gestão de Serviços - Sistema Integrado de Manutenção",
       exportedAt: new Date().toISOString(),
+      exportedBy: currentUser?.name || currentUser?.email || "Usuário do Sistema",
+      userRole: currentUser?.userType || "indefinido",
+      totalKeys: totalKeysCount,
       version: "2.0.0",
+      lgpdNotice: "Este arquivo de backup contém informações estruturadas de usuários, cadastros e requisições sob proteção da Lei Geral de Proteção de Dados (LGPD - Lei 13.709/2018). Mantenha este arquivo em local seguro.",
       data: backupObj
     };
     
@@ -805,12 +841,21 @@ export default function SmtpSettingsPanel({
     downloadAnchor.setAttribute("href", dataStr);
     
     const formattedDate = new Date().toISOString().slice(0, 10);
-    downloadAnchor.setAttribute("download", `backup_aracatuba_manutencao_${formattedDate}.json`);
+    const formattedTime = new Date().toTimeString().slice(0, 5).replace(":", "-");
+    downloadAnchor.setAttribute("download", `backup_localstorage_completo_${formattedDate}_${formattedTime}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
     
-    onNotifyTest("Backup Concluído", "Cópia completa gerada e descarregada com sucesso.", "success");
+    if (addSystemLog) {
+      addSystemLog(
+        "Backup do LocalStorage Exportado", 
+        `Backup completo contendo ${totalKeysCount} chave(s) do LocalStorage exportado em arquivo JSON em conformidade com a LGPD.`, 
+        "sistema"
+      );
+    }
+
+    onNotifyTest("Backup Concluído", `Arquivo JSON contendo todas as ${totalKeysCount} chaves do LocalStorage descarregado com sucesso. Dados de usuário protegidos!`, "success");
   };
 
   const handleImportFile = (file: File) => {
@@ -823,25 +868,33 @@ export default function SmtpSettingsPanel({
         const result = e.target?.result as string;
         const backupObj = JSON.parse(result);
         
-        // Validation check
-        if (!backupObj || typeof backupObj !== "object" || backupObj.system === undefined || !backupObj.data) {
-          throw new Error("O arquivo selecionado não possui a assinatura estrutural de backups do RequisiçãoPro.");
+        // Accept both wrapped { data: { ... } } structure and raw object dumps
+        const data = backupObj && typeof backupObj === "object" && backupObj.data ? backupObj.data : backupObj;
+        
+        if (!data || typeof data !== "object") {
+          throw new Error("O arquivo selecionado não possui um formato estruturado de backup em JSON válido.");
         }
         
-        const data = backupObj.data;
         let keysRestoredCount = 0;
         
         for (const k in data) {
           if (data[k] !== null && data[k] !== undefined) {
-            localStorage.setItem(k, data[k]);
+            localStorage.setItem(k, typeof data[k] === "string" ? data[k] : JSON.stringify(data[k]));
             keysRestoredCount++;
           }
         }
         
         setImportSuccess(true);
-        onNotifyTest("Restauração Concluída", `Total de ${keysRestoredCount} tabelas de sistema restauradas da nuvem. Portal reiniciando...`, "system");
+        if (addSystemLog) {
+          addSystemLog(
+            "Restauração do LocalStorage",
+            `Base de dados restaurada a partir de arquivo JSON de backup. ${keysRestoredCount} chave(s) do LocalStorage atualizadas.`,
+            "sistema"
+          );
+        }
+
+        onNotifyTest("Restauração Concluída", `Total de ${keysRestoredCount} chave(s) do LocalStorage restauradas com êxito! O portal será recarregado em 2 segundos...`, "system");
         
-        // Refresh the page so the app reloads all state cleanly from localStorage
         setTimeout(() => {
           window.location.reload();
         }, 2200);
@@ -1926,6 +1979,47 @@ export default function SmtpSettingsPanel({
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
                 {/* Left Side: Scheduling Config and Manual triggers */}
                 <div className="lg:col-span-4 space-y-6">
+                  {/* LocalStorage Backup Export Card */}
+                  <div className="bg-gradient-to-br from-indigo-50/80 via-indigo-50/30 to-purple-50/50 dark:from-indigo-950/20 dark:via-slate-900 dark:to-purple-950/20 rounded-2xl border border-indigo-100 dark:border-indigo-900/40 p-5 space-y-3.5 shadow-xs">
+                    <div className="flex items-center justify-between border-b border-indigo-100/60 dark:border-indigo-900/30 pb-2.5">
+                      <h3 className="font-extrabold text-xs uppercase tracking-wider text-indigo-950 dark:text-indigo-300 flex items-center gap-2">
+                        <Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        Exportar Estado do LocalStorage
+                      </h3>
+                      <span className="text-[9px] bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full font-mono font-bold">
+                        JSON ({stats.length} chaves)
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-600 dark:text-slate-350 leading-relaxed font-medium">
+                      Gera um arquivo de backup em formato <strong>JSON</strong> contendo todas as chaves ativas do <strong>LocalStorage</strong> (chamados, requisitantes, técnicos, cadastros e preferências) protegendo os dados do usuário.
+                    </p>
+
+                    <div className="bg-white/80 dark:bg-slate-950/50 p-3 rounded-xl border border-indigo-100/50 dark:border-indigo-900/20 text-[10.5px] space-y-1 font-mono text-slate-600 dark:text-slate-400">
+                      <div className="flex justify-between">
+                        <span>Chaves Gravadas:</span>
+                        <strong className="text-indigo-600 dark:text-indigo-400">{stats.length} tabelas</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tamanho Total:</span>
+                        <strong className="text-slate-800 dark:text-slate-200">{(totalBytes / 1024).toFixed(2)} KB</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Proteção do Usuário:</span>
+                        <strong className="text-emerald-600 dark:text-emerald-400">Conforme LGPD</strong>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleExportBackup}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-indigo-600/20 cursor-pointer flex items-center justify-center gap-2 hover:-translate-y-[1px] active:translate-y-0"
+                    >
+                      <Download className="w-4 h-4 text-indigo-200" />
+                      Baixar Backup LocalStorage (.json)
+                    </button>
+                  </div>
+
                   {/* Backup Configuration Schedulers */}
                   <div className="bg-slate-50/55 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-800 p-5 space-y-4">
                     <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-350 flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2.5">

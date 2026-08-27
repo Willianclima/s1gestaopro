@@ -621,7 +621,7 @@ export default function Professionals({
                 return (
                   <div key={prof.id} className={`bg-white dark:bg-slate-900 rounded-2xl border ${
                     isSelected ? "border-amber-500 ring-2 ring-amber-500/20 shadow-md" : "border-slate-100 dark:border-slate-800 shadow-sm hover:border-slate-300 dark:hover:border-slate-700"
-                  } p-5 space-y-4 flex flex-col justify-between transition-all duration-200 hover:scale-[1.015] hover:shadow-md transform`}>
+                  } p-5 space-y-4 flex flex-col justify-between transition-all duration-300 hover:scale-105 hover:shadow-md transform`}>
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
@@ -708,7 +708,7 @@ export default function Professionals({
             filteredTeams.map(team => {
               const leaderName = getProfessionalName(team.leaderId);
               return (
-                <div key={team.id} className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-4 flex flex-col justify-between hover:shadow-lg hover:scale-[1.02] transition-all duration-300 relative overflow-hidden group">
+                <div key={team.id} className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-4 flex flex-col justify-between hover:shadow-lg hover:scale-105 transition-all duration-300 relative overflow-hidden group">
                   <div className="space-y-3.5">
                     {/* Team Title */}
                     <div className="flex items-start justify-between select-none">

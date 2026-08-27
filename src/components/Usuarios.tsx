@@ -532,7 +532,7 @@ export default function Usuarios({
                   transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
                   className={`bg-white rounded-2xl border ${
                     isSelected ? "border-amber-500 ring-2 ring-amber-500/20 shadow-md" : "border-slate-100 shadow-sm hover:border-slate-300"
-                  } p-5 transition-all duration-200 hover:scale-[1.015] hover:shadow-md flex flex-col justify-between group transform`}
+                  } p-5 transition-all duration-300 hover:scale-105 hover:shadow-md flex flex-col justify-between group transform`}
                 >
                   <div>
                     <div className="flex items-start justify-between mb-4">

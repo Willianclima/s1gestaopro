@@ -5,7 +5,7 @@ import { ServiceOrder, Client, CurrentUser, Professional, SystemLog, Almoxarifad
 import { playNotificationSound } from "../utils/notificationSound";
 import { 
   Briefcase, Users, Clock, AlertTriangle, CheckCircle, ArrowRight, ClipboardList, PenTool, ExternalLink, Sparkles, Tag, ShieldCheck, AlertCircle, UserCheck, UserX, Unlock, ShieldAlert,
-  TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, Printer, Download, Database, Server, Shield, Check, Calendar, Bell, BellOff
+  TrendingUp, X, Search, MapPin, User, Activity, Wrench, FileText, ChevronDown, ChevronUp, ChevronRight, Printer, Download, Database, Server, Shield, Check, Calendar, Bell, BellOff
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from "recharts";
 import ServiceOrdersMap from "./ServiceOrdersMap";
@@ -589,53 +589,119 @@ export default function Dashboard({
             </motion.div>
           )}
 
-          {/* Notificação de Cadastros Pendentes de Aprovação */}
+          {/* Notificação e Painel Geral de Cadastros Pendentes de Aprovação */}
           {pendingClients.length > 0 && (
             <motion.div 
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-amber-600/10 border-2 border-amber-500/40 rounded-3xl p-5 sm:p-6 text-slate-900 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-5 text-left"
+              className="bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-amber-600/10 border-2 border-amber-500/40 rounded-3xl p-5 sm:p-6 text-slate-900 shadow-md space-y-4 text-left"
             >
-              <div className="flex items-start gap-4">
-                <div className="p-3 bg-amber-500 text-white rounded-2xl shrink-0 shadow-md animate-pulse">
-                  <UserCheck className="w-6 h-6" />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="bg-amber-200 text-amber-900 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
-                      Notificação do Administrador
-                    </span>
-                    <span className="text-xs font-black text-amber-900 font-mono bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-300/50">
-                      {pendingClients.length} {pendingClients.length === 1 ? 'usuário aguardando autorização' : 'usuários aguardando autorização'}
-                    </span>
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                <div className="flex items-start gap-4">
+                  <div className="p-3 bg-amber-500 text-white rounded-2xl shrink-0 shadow-md animate-pulse">
+                    <UserCheck className="w-6 h-6" />
                   </div>
-                  <h3 className="font-extrabold text-slate-900 text-base">
-                    Existem novos cadastros de requisitantes e solicitações de teste de 15 dias pendentes de aprovação.
-                  </h3>
-                  <p className="text-slate-700 text-xs leading-relaxed max-w-3xl font-medium">
-                    Os usuários cadastrados por auto-serviço estão organizados na aba de <strong>Usuários</strong>. O Administrador do sistema deve analisar e conceder formalmente a permissão de acesso para que o login seja liberado.
-                  </p>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="bg-amber-200 text-amber-900 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
+                        Notificação do Administrador
+                      </span>
+                      <span className="text-xs font-black text-amber-900 font-mono bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-300/50">
+                        {pendingClients.length} {pendingClients.length === 1 ? 'usuário aguardando autorização' : 'usuários aguardando autorização'}
+                      </span>
+                    </div>
+                    <h3 className="font-extrabold text-slate-900 text-base">
+                      Existem novos cadastros de requisitantes e solicitações de teste de 15 dias pendentes de aprovação.
+                    </h3>
+                    <p className="text-slate-700 text-xs leading-relaxed max-w-3xl font-medium">
+                      Todos os usuários que realizaram auto-cadastro estão listados abaixo para análise imediata ou na aba de <strong>Usuários</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap w-full md:w-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setApprovalModalClient(pendingClients[0])}
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg hover:shadow-xl active:translate-y-[1px] transition-all flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    Aprovação de Conta ({pendingClients.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onNavigate("clients")}
+                    className="bg-slate-900 hover:bg-slate-800 text-slate-100 font-bold text-xs uppercase tracking-wider py-3.5 px-4 rounded-2xl border border-amber-500/30 flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
+                  >
+                    Ver Lista
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap w-full md:w-auto shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setApprovalModalClient(pendingClients[0])}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-5 rounded-2xl shadow-lg hover:shadow-xl active:translate-y-[1px] transition-all flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
-                >
-                  <UserCheck className="w-4 h-4" />
-                  Aprovação de Conta ({pendingClients.length})
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => onNavigate("clients")}
-                  className="bg-slate-900 hover:bg-slate-800 text-slate-100 font-bold text-xs uppercase tracking-wider py-3.5 px-4 rounded-2xl border border-amber-500/30 flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center"
-                >
-                  Ver Lista
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+              {/* Lista Detalhada de Todos os Usuários Pendentes no Painel Geral */}
+              <div className="pt-3 border-t border-amber-500/20">
+                <p className="text-[11px] font-black text-amber-950 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-amber-700" />
+                  Fila de Auto-Cadastros para Liberação ({pendingClients.length}):
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {pendingClients.map((client) => (
+                    <div 
+                      key={client.id}
+                      className="bg-white/90 border border-amber-300 rounded-2xl p-3.5 flex flex-col justify-between gap-3 shadow-xs hover:shadow-md transition-all"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-extrabold text-xs text-slate-900 truncate">
+                            {client.name}
+                          </span>
+                          {client.isTrialRequested ? (
+                            <span className="bg-purple-100 text-purple-900 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border border-purple-200 shrink-0">
+                              15 Dias
+                            </span>
+                          ) : (
+                            <span className="bg-amber-100 text-amber-900 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border border-amber-200 shrink-0">
+                              Pendente
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-600 font-mono">
+                          CPF: <strong>{client.document}</strong>
+                        </p>
+                        {client.email && (
+                          <p className="text-[10px] text-slate-500 truncate">
+                            {client.email}
+                          </p>
+                        )}
+                        {client.phone && (
+                          <p className="text-[10px] text-slate-500">
+                            Tel: {client.phone}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setApprovalModalClient(client)}
+                          className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-black text-[11px] uppercase tracking-wider py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <UserCheck className="w-3.5 h-3.5" />
+                          Autorizar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onNavigate("clients")}
+                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer text-[11px] font-bold"
+                          title="Ver detalhes na aba Usuários"
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </motion.div>
           )}

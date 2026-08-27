@@ -15,6 +15,7 @@ import { compressImageWithCanvas, cacheEvidencePhotosInSW } from "../utils/image
 import { calculateOsSlaStatus, triggerManualSlaReminder } from "../utils/slaUtils";
 import { generateServiceOrderPDF, downloadServiceOrderPDF, getServiceOrderPDFBlobUrl } from "../utils/pdfExport";
 import ImageDrawingOverlayModal from "./ImageDrawingOverlayModal";
+import TechnicianCompletionModal, { TechnicianCompletionData } from "./TechnicianCompletionModal";
 
 interface ServiceOrdersProps {
   orders: ServiceOrder[];
@@ -37,6 +38,30 @@ interface ServiceOrdersProps {
   onClearInitialSelectedOrderId?: () => void;
   globalSearchTerm?: string;
 }
+
+const cardContainerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.04,
+      delayChildren: 0.02,
+    },
+  },
+};
+
+const cardItemVariants = {
+  hidden: { opacity: 0, y: 14, scale: 0.98 },
+  show: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: {
+      duration: 0.28,
+      ease: [0.25, 0.1, 0.25, 1.0],
+    },
+  },
+};
 
 export function getPriorityBadge(priority?: 'low' | 'medium' | 'high' | 'urgent') {
   const prio = priority || 'medium';
@@ -138,6 +163,8 @@ export default function ServiceOrders({
   const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
   const [activeDropColumn, setActiveDropColumn] = useState<OSStatus | null>(null);
 
+  const activeFilterKey = `${statusFilter}-${dateFilterType}-${startDateFilter}-${endDateFilter}-${technicianFilter}-${priorityFilter}-${categoryFilter}-${searchTerm}-${globalSearchTerm || ''}-${viewMode}`;
+
   const KANBAN_COLUMNS: { id: OSStatus; title: string; badgeBg: string; borderTop: string; icon: string }[] = [
     { 
       id: "aberto", 
@@ -196,8 +223,73 @@ export default function ServiceOrders({
     }
   };
 
+  // Dedicated State for Technician Completion Confirmation Modal
+  const [orderToValidateCompletion, setOrderToValidateCompletion] = useState<ServiceOrder | null>(null);
+
+  const handleRequestCompletionValidation = (order: ServiceOrder) => {
+    setOrderToValidateCompletion(order);
+  };
+
+  const handleConfirmTechnicianValidation = (data: TechnicianCompletionData) => {
+    if (!orderToValidateCompletion) return;
+
+    const checklistItems = [
+      data.checklist.serviceExecuted ? "Execução técnica integral confirmada" : "",
+      data.checklist.testedAndOperational ? "Testes operacionais aprovados" : "",
+      data.checklist.areaCleanAndSafe ? "Ambiente limpo e desobstruído" : "",
+      data.checklist.clientOriented ? "Cliente/Requisitante orientado" : ""
+    ].filter(Boolean);
+
+    const checklistText = checklistItems.length > 0 ? ` [Checklist: ${checklistItems.join("; ")}]` : "";
+    const notesText = data.technicalNotes ? ` Parecer Técnico: "${data.technicalNotes}".` : "";
+    const imagesText = data.completedImages && data.completedImages.length > 0 
+      ? ` (${data.completedImages.length} foto(s) de evidência técnica anexadas)` 
+      : " (Nenhuma foto anexada)";
+
+    const newLog: OSHistoryLog = {
+      id: "h-" + Math.random().toString(36).substr(2, 9),
+      status: "concluido",
+      comment: `ATENDIMENTO CONCLUÍDO COM VALIDAÇÃO TÉCNICA (${data.technicianName}).${checklistText}${notesText}${imagesText}`,
+      date: new Date().toISOString(),
+      author: "profissional"
+    };
+
+    const updatedOrder: ServiceOrder = {
+      ...orderToValidateCompletion,
+      status: "concluido",
+      endDate: new Date().toISOString().split("T")[0],
+      assignedTo: data.technicianName || orderToValidateCompletion.assignedTo,
+      completedImages: data.completedImages && data.completedImages.length > 0 ? data.completedImages : orderToValidateCompletion.completedImages,
+      history: [...(orderToValidateCompletion.history || []), newLog]
+    };
+
+    onUpdateOrder(updatedOrder);
+
+    if (data.completedImages && data.completedImages.length > 0) {
+      cacheEvidencePhotosInSW(data.completedImages, orderToValidateCompletion.id);
+    }
+
+    if (selectedOrder && selectedOrder.id === orderToValidateCompletion.id) {
+      setSelectedOrder(updatedOrder);
+      setIsCompletingService(false);
+      setCompletionImages([]);
+    }
+
+    toastSuccess(
+      `Ordem de Serviço #${orderToValidateCompletion.id} finalizada com validação técnica de ${data.technicianName}!`,
+      "OS Concluída com Êxito"
+    );
+
+    setOrderToValidateCompletion(null);
+  };
+
   const handleMoveOrderStatusDirectly = (order: ServiceOrder, targetStatus: OSStatus) => {
     if (order.status === targetStatus) return;
+
+    if (targetStatus === "concluido") {
+      handleRequestCompletionValidation(order);
+      return;
+    }
 
     const statusLabels: Record<OSStatus, string> = {
       aberto: "Aberto / Pendente",
@@ -218,7 +310,7 @@ export default function ServiceOrders({
     const updatedOrder: ServiceOrder = {
       ...order,
       status: targetStatus,
-      endDate: targetStatus === "concluido" ? new Date().toISOString().split("T")[0] : order.endDate,
+      endDate: order.endDate,
       history: [...(order.history || []), newLog]
     };
 
@@ -448,6 +540,20 @@ export default function ServiceOrders({
   const handleBatchStatusUpdate = (newStatus: 'aberto' | 'em_progresso' | 'aguardando' | 'concluido' | 'cancelado') => {
     if (selectedOrderIds.length === 0) return;
 
+    if (newStatus === "concluido") {
+      const firstTarget = orders.find(o => o.id === selectedOrderIds[0]) || globalOrders?.find(o => o.id === selectedOrderIds[0]);
+      if (firstTarget) {
+        handleRequestCompletionValidation(firstTarget);
+        if (selectedOrderIds.length > 1) {
+          toastInfo(
+            `A conclusão de OS exige validação técnica e preenchimento de checklist individual. Validando OS #${firstTarget.id}.`,
+            "Validação Técnica Exigida"
+          );
+        }
+      }
+      return;
+    }
+
     let successCount = 0;
     selectedOrderIds.forEach(id => {
       const os = orders.find(o => o.id === id);
@@ -455,14 +561,13 @@ export default function ServiceOrders({
         const updatedOrder: ServiceOrder = {
           ...os,
           status: newStatus,
-          endDate: newStatus === "concluido" ? new Date().toISOString().split("T")[0] : os.endDate,
+          endDate: os.endDate,
           history: [
             ...os.history,
             {
               id: "h-" + Math.random().toString(36).substr(2, 9),
               status: newStatus,
               comment: `ATUALIZAÇÃO EM LOTE (BATCH): Status alterado em lote para "${
-                newStatus === "concluido" ? "Concluído" :
                 newStatus === "em_progresso" ? "Em Execução" :
                 newStatus === "aguardando" ? "Aguardando Material" :
                 newStatus === "aberto" ? "Aberto / Pendente" : "Cancelado"
@@ -478,7 +583,6 @@ export default function ServiceOrders({
     });
 
     toastSuccess(`${successCount} ordens de serviço foram atualizadas para "${
-      newStatus === "concluido" ? "Concluído" :
       newStatus === "em_progresso" ? "Em Execução" :
       newStatus === "aguardando" ? "Aguardando Material" :
       newStatus === "aberto" ? "Aberto / Pendente" : "Cancelado"
@@ -752,6 +856,45 @@ export default function ServiceOrders({
 
     return matchesSearch && matchesStatus && matchesDate && matchesTechnician && matchesPriority && matchesCategory;
   });
+
+  const statusCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {
+      todos: orders.length,
+      aberto: 0,
+      em_progresso: 0,
+      aguardando: 0,
+      concluido: 0,
+      cancelado: 0
+    };
+    orders.forEach(o => {
+      if (counts[o.status] !== undefined) {
+        counts[o.status]++;
+      }
+    });
+    return counts;
+  }, [orders]);
+
+  const activeFiltersCount = React.useMemo(() => {
+    let count = 0;
+    if (searchTerm.trim()) count++;
+    if (statusFilter !== "todos") count++;
+    if (dateFilterType !== "todos") count++;
+    if (technicianFilter !== "todos") count++;
+    if (priorityFilter !== "todos") count++;
+    if (categoryFilter !== "todos") count++;
+    return count;
+  }, [searchTerm, statusFilter, dateFilterType, technicianFilter, priorityFilter, categoryFilter]);
+
+  const handleResetAllFilters = () => {
+    setSearchTerm("");
+    setStatusFilter("todos");
+    setDateFilterType("todos");
+    setStartDateFilter("");
+    setEndDateFilter("");
+    setTechnicianFilter("todos");
+    setPriorityFilter("todos");
+    setCategoryFilter("todos");
+  };
 
   const handleLocationSearch = async (query: string) => {
     if (!query || query.trim().length < 3) {
@@ -1368,9 +1511,7 @@ export default function ServiceOrders({
 
   const handleMarkAsCompleted = () => {
     if (!selectedOrder) return;
-    // Open the photo attachment completion sub-section
-    setIsCompletingService(true);
-    setCompletionImages([]); // clean previous
+    handleRequestCompletionValidation(selectedOrder);
   };
 
   const handleCompletionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1535,215 +1676,271 @@ export default function ServiceOrders({
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs flex flex-col gap-4">
-        <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center">
-          {/* Search */}
-          <div className="flex-1 relative">
-            <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+      {/* Filter and Search Bar - Modern, Streamlined & Enxuto */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs p-3.5 sm:p-4 flex flex-col gap-3.5">
+        {/* Top Row: Search Input + Status Segmented Pills */}
+        <div className="flex flex-col xl:flex-row gap-3 items-stretch xl:items-center justify-between">
+          {/* Main Search Input */}
+          <div className="relative flex-1 min-w-[280px]">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
-              className="w-full text-xs border border-slate-200 rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white transition-all font-medium text-slate-700"
-              placeholder="Buscar por código, chamados técnicos, diagnóstico ou requisitante..."
+              className="w-full text-xs font-medium bg-slate-50/80 dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-800 focus:bg-white dark:focus:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl pl-9 pr-9 py-2.5 outline-none focus:ring-2 focus:ring-slate-900/10 dark:focus:ring-slate-400/10 focus:border-slate-800 dark:focus:border-slate-600 transition-all text-slate-800 dark:text-slate-100 placeholder:text-slate-400"
+              placeholder="Buscar por código, chamados, diagnóstico ou cliente..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-full hover:bg-slate-200/60 dark:hover:bg-slate-700 transition-colors"
+                title="Limpar busca"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          {/* Status filters */}
-          <div className="flex bg-slate-50 p-1 rounded-xl border border-slate-100 gap-1 overflow-x-auto self-start lg:self-auto max-w-full">
+          {/* Status Quick Filter Pills */}
+          <div className="flex items-center bg-slate-100 dark:bg-slate-800/90 p-1 rounded-xl border border-slate-200/70 dark:border-slate-700/80 gap-1 overflow-x-auto no-scrollbar shrink-0">
             {[
-              { id: "todos", label: "Todos os Status" },
-              { id: "aberto", label: "Abertos" },
-              { id: "em_progresso", label: "Em Execução" },
-              { id: "aguardando", label: "Aguardando Material" },
-              { id: "concluido", label: "Concluídos" },
-              { id: "cancelado", label: "Cancelados" }
-            ].map(st => (
-              <button
-                key={st.id}
-                onClick={() => setStatusFilter(st.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                  statusFilter === st.id
-                    ? "bg-white text-slate-800 shadow-xs"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                {st.label}
-              </button>
-            ))}
+              { id: "todos", label: "Todas", count: statusCounts.todos, dot: "bg-slate-400" },
+              { id: "aberto", label: "Abertas", count: statusCounts.aberto, dot: "bg-amber-500" },
+              { id: "em_progresso", label: "Em Execução", count: statusCounts.em_progresso, dot: "bg-blue-500" },
+              { id: "aguardando", label: "Aguardando", count: statusCounts.aguardando, dot: "bg-orange-500" },
+              { id: "concluido", label: "Concluídas", count: statusCounts.concluido, dot: "bg-emerald-500" },
+              { id: "cancelado", label: "Canceladas", count: statusCounts.cancelado, dot: "bg-rose-500" }
+            ].map(st => {
+              const isActive = statusFilter === st.id;
+              return (
+                <button
+                  key={st.id}
+                  onClick={() => setStatusFilter(st.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    isActive
+                      ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-700/50"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${st.dot} shrink-0`} />
+                  <span>{st.label}</span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
+                    isActive 
+                      ? "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200" 
+                      : "bg-slate-200/60 dark:bg-slate-700 text-slate-500 dark:text-slate-400"
+                  }`}>
+                    {st.count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Date Filters row */}
-        <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center border-t border-slate-50 pt-4">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-bold whitespace-nowrap">
-            <Calendar className="w-4 h-4 text-slate-400" />
-            <span>Filtro por Data de Abertura:</span>
-          </div>
-
-          {/* Date presets */}
-          <div className="flex bg-slate-50 p-1 rounded-xl border border-slate-100 gap-1 overflow-x-auto max-w-full">
-            {[
-              { id: "todos", label: "Qualquer data" },
-              { id: "hoje", label: "Hoje" },
-              { id: "7dias", label: "Últimos 7 dias" },
-              { id: "30dias", label: "Últimos 30 dias" },
-              { id: "personalizado", label: "Intervalo Personalizado" }
-            ].map(dt => (
-              <button
-                key={dt.id}
-                onClick={() => {
-                  setDateFilterType(dt.id);
-                  if (dt.id !== "personalizado") {
+        {/* Bottom Row: Modular Filters (Data, Técnico, Prioridade, Categoria) + Results Count */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Filter: Data de Abertura */}
+            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/90 rounded-xl px-2.5 py-1.5 hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+              <Calendar className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Data:</span>
+              <select
+                value={dateFilterType}
+                onChange={(e) => {
+                  setDateFilterType(e.target.value);
+                  if (e.target.value !== "personalizado") {
                     setStartDateFilter("");
                     setEndDateFilter("");
                   }
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                  dateFilterType === dt.id
-                    ? "bg-white text-slate-800 shadow-xs"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
+                className="text-xs font-bold bg-transparent text-slate-700 dark:text-slate-200 outline-none cursor-pointer pr-1"
               >
-                {dt.label}
-              </button>
-            ))}
-          </div>
+                <option value="todos">Qualquer data</option>
+                <option value="hoje">Hoje</option>
+                <option value="7dias">Últimos 7 dias</option>
+                <option value="30dias">Últimos 30 dias</option>
+                <option value="personalizado">Personalizado...</option>
+              </select>
+            </div>
 
-          {/* Custom Date selection fields */}
-          {dateFilterType === "personalizado" && (
-            <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">De:</span>
+            {/* Custom Date Inputs if 'personalizado' */}
+            {dateFilterType === "personalizado" && (
+              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/90 rounded-xl px-2 py-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">De</span>
                 <input
                   type="date"
                   value={startDateFilter}
                   onChange={(e) => setStartDateFilter(e.target.value)}
-                  className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-1 focus:ring-slate-500 bg-white font-semibold text-slate-700"
+                  className="text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 outline-none text-slate-700 dark:text-slate-200"
                 />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Até:</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Até</span>
                 <input
                   type="date"
                   value={endDateFilter}
                   onChange={(e) => setEndDateFilter(e.target.value)}
-                  className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-1 focus:ring-slate-500 bg-white font-semibold text-slate-700"
+                  className="text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 outline-none text-slate-700 dark:text-slate-200"
                 />
+                {(startDateFilter || endDateFilter) && (
+                  <button
+                    onClick={() => {
+                      setStartDateFilter("");
+                      setEndDateFilter("");
+                    }}
+                    className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-md transition-colors"
+                    title="Limpar datas"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
-              {(startDateFilter || endDateFilter) && (
+            )}
+
+            {/* Filter: Técnico */}
+            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/90 rounded-xl px-2.5 py-1.5 hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+              <User className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Técnico:</span>
+              <select
+                value={technicianFilter}
+                onChange={(e) => setTechnicianFilter(e.target.value)}
+                className="text-xs font-bold bg-transparent text-slate-700 dark:text-slate-200 outline-none cursor-pointer pr-1 max-w-[160px]"
+              >
+                <option value="todos">Todos</option>
+                <option value="unassigned">Sem Técnico</option>
+                {professionalsList
+                  .filter(p => !p.userType || p.userType === "profissional")
+                  .map(p => (
+                    <option key={p.id} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            {/* Filter: Prioridade */}
+            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/90 rounded-xl px-2.5 py-1.5 hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+              <AlertTriangle className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Prioridade:</span>
+              <select
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value)}
+                className="text-xs font-bold bg-transparent text-slate-700 dark:text-slate-200 outline-none cursor-pointer pr-1"
+              >
+                <option value="todos">Todas</option>
+                <option value="urgent">🔴 Urgente</option>
+                <option value="high">🟠 Alta</option>
+                <option value="medium">🟡 Média</option>
+                <option value="low">🟢 Baixa</option>
+              </select>
+            </div>
+
+            {/* Filter: Categoria */}
+            <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/90 rounded-xl pl-2.5 pr-1 py-1 hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+              <Tag className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Categoria:</span>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                className="text-xs font-bold bg-transparent text-slate-700 dark:text-slate-200 outline-none cursor-pointer pr-1 max-w-[150px]"
+              >
+                <option value="todos">Todas</option>
+                {categories && categories.length > 0 ? (
+                  categories.map((cat: any) => {
+                    const catName = typeof cat === 'string' ? cat : (cat.name || String(cat));
+                    const catKey = typeof cat === 'string' ? cat : (cat.id || cat.name || String(cat));
+                    return (
+                      <option key={catKey} value={catName}>
+                        {catName}
+                      </option>
+                    );
+                  })
+                ) : (
+                  Array.from(new Set(orders.map(o => o.category || "Geral"))).map(catName => (
+                    <option key={catName} value={catName}>
+                      {catName}
+                    </option>
+                  ))
+                )}
+              </select>
+              {isAdminUser && (
                 <button
-                  onClick={() => {
-                    setStartDateFilter("");
-                    setEndDateFilter("");
-                  }}
-                  className="text-xs font-bold text-red-650 hover:text-red-750 p-1.5 hover:bg-red-50 rounded-lg transition-all"
-                  title="Limpar Datas"
+                  type="button"
+                  onClick={() => setIsCategoryManagerOpen(true)}
+                  title="Gerenciar Categorias (Criar / Editar / Excluir)"
+                  className="p-1 hover:bg-slate-200/70 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg transition-all cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  <Settings className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
-          )}
-          
-          {/* Técnico / Profissional Filter */}
-          <div className="flex items-center gap-2 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0">
-            <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="text-slate-500 text-xs font-bold whitespace-nowrap">Técnico:</span>
-            <select
-              value={technicianFilter}
-              onChange={(e) => setTechnicianFilter(e.target.value)}
-              className="text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white text-slate-700 cursor-pointer min-w-[160px] max-w-full"
-            >
-              <option value="todos">Todos os Técnicos</option>
-              <option value="unassigned font-semibold">Sem Técnico (Pendente)</option>
-              {professionalsList
-                .filter(p => !p.userType || p.userType === "profissional")
-                .map(p => (
-                  <option key={p.id} value={p.name}>
-                    {p.name}
-                  </option>
-                ))}
-            </select>
           </div>
 
-          {/* Prioridade Filter */}
-          <div className="flex items-center gap-2 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0">
-            <AlertTriangle className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="text-slate-500 text-xs font-bold whitespace-nowrap">Prioridade:</span>
-            <select
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
-              className="text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white text-slate-700 cursor-pointer min-w-[140px] max-w-full"
-            >
-              <option value="todos">Todas</option>
-              <option value="urgent">🔴 Urgentes</option>
-              <option value="high">🟠 Altas</option>
-              <option value="medium">🟡 Médias</option>
-              <option value="low">🟢 Baixas</option>
-            </select>
-          </div>
+          {/* Right Side: Counter and Reset Button */}
+          <div className="flex items-center gap-2.5 ml-auto">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
+              <strong className="font-bold text-slate-800 dark:text-slate-200">{filteredOrders.length}</strong> de {orders.length} {orders.length === 1 ? 'requisição' : 'requisições'}
+            </span>
 
-          {/* Categoria Filter */}
-          <div className="flex items-center gap-2 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0">
-            <Tag className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="text-slate-500 text-xs font-bold whitespace-nowrap">Categoria:</span>
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-white text-slate-700 cursor-pointer min-w-[150px] max-w-full"
-            >
-              <option value="todos">Todas as Categorias</option>
-              {categories && categories.length > 0 ? (
-                categories.map((cat: any) => {
-                  const catName = typeof cat === 'string' ? cat : (cat.name || String(cat));
-                  const catKey = typeof cat === 'string' ? cat : (cat.id || cat.name || String(cat));
-                  return (
-                    <option key={catKey} value={catName}>
-                      {catName}
-                    </option>
-                  );
-                })
-              ) : (
-                Array.from(new Set(orders.map(o => o.category || "Geral"))).map(catName => (
-                  <option key={catName} value={catName}>
-                    {catName}
-                  </option>
-                ))
-              )}
-            </select>
-            {isAdminUser && (
+            {activeFiltersCount > 0 && (
               <button
-                type="button"
-                onClick={() => setIsCategoryManagerOpen(true)}
-                title="Gerenciar Categorias (Inserir / Editar)"
-                className="p-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg border border-purple-200 transition-all cursor-pointer shrink-0"
+                onClick={handleResetAllFilters}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200/80 dark:border-rose-800/60 transition-all cursor-pointer shrink-0"
+                title="Limpar todos os filtros ativos"
               >
-                <Tag className="w-3.5 h-3.5" />
+                <X className="w-3.5 h-3.5" />
+                <span>Limpar ({activeFiltersCount})</span>
               </button>
             )}
           </div>
-          
-          {/* Active filter summary indicators */}
-          {(searchTerm || statusFilter !== "todos" || dateFilterType !== "todos" || technicianFilter !== "todos" || priorityFilter !== "todos" || categoryFilter !== "todos") && (
-            <button
-              onClick={() => {
-                setSearchTerm("");
-                setStatusFilter("todos");
-                setDateFilterType("todos");
-                setStartDateFilter("");
-                setEndDateFilter("");
-                setTechnicianFilter("todos");
-                setPriorityFilter("todos");
-                setCategoryFilter("todos");
-              }}
-              className="text-xs font-extrabold text-slate-500 hover:text-slate-800 px-3 py-1.5 rounded-lg border border-slate-250 bg-slate-50 hover:bg-slate-100 shrink-0 transition-all md:ml-auto cursor-pointer"
-            >
-              Resetar Filtros
-            </button>
-          )}
         </div>
+
+        {/* Active Filters Summary Chips (Rendered only when specific secondary filters are active) */}
+        {activeFiltersCount > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100/80 dark:border-slate-800/80 text-[11px]">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">Filtros Ativos:</span>
+            
+            {statusFilter !== "todos" && (
+              <span className="inline-flex items-center gap-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-bold px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
+                Status: {statusFilter === "aberto" ? "Abertas" : statusFilter === "em_progresso" ? "Em Execução" : statusFilter === "aguardando" ? "Aguardando Material" : statusFilter === "concluido" ? "Concluídas" : "Canceladas"}
+                <button onClick={() => setStatusFilter("todos")} className="hover:text-indigo-900 cursor-pointer"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+
+            {dateFilterType !== "todos" && (
+              <span className="inline-flex items-center gap-1 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-bold px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-800">
+                Data: {dateFilterType === "hoje" ? "Hoje" : dateFilterType === "7dias" ? "Últimos 7 dias" : dateFilterType === "30dias" ? "Últimos 30 dias" : "Personalizado"}
+                <button onClick={() => { setDateFilterType("todos"); setStartDateFilter(""); setEndDateFilter(""); }} className="hover:text-blue-900 cursor-pointer"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+
+            {technicianFilter !== "todos" && (
+              <span className="inline-flex items-center gap-1 bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 font-bold px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                Técnico: {technicianFilter === "unassigned" ? "Sem Técnico" : technicianFilter}
+                <button onClick={() => setTechnicianFilter("todos")} className="hover:text-amber-900 cursor-pointer"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+
+            {priorityFilter !== "todos" && (
+              <span className="inline-flex items-center gap-1 bg-orange-50 dark:bg-orange-950/50 text-orange-800 dark:text-orange-300 font-bold px-2 py-0.5 rounded-md border border-orange-200 dark:border-orange-800">
+                Prioridade: {priorityFilter === "urgent" ? "Urgente" : priorityFilter === "high" ? "Alta" : priorityFilter === "medium" ? "Média" : "Baixa"}
+                <button onClick={() => setPriorityFilter("todos")} className="hover:text-orange-900 cursor-pointer"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+
+            {categoryFilter !== "todos" && (
+              <span className="inline-flex items-center gap-1 bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 font-bold px-2 py-0.5 rounded-md border border-purple-200 dark:border-purple-800">
+                Categoria: {categoryFilter}
+                <button onClick={() => setCategoryFilter("todos")} className="hover:text-purple-900 cursor-pointer"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+
+            {searchTerm && (
+              <span className="inline-flex items-center gap-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold px-2 py-0.5 rounded-md border border-slate-300 dark:border-slate-700">
+                Busca: "{searchTerm}"
+                <button onClick={() => setSearchTerm("")} className="hover:text-slate-900 cursor-pointer"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Grid List or Kanban Board */}
@@ -1800,7 +1997,13 @@ export default function ServiceOrders({
                   </div>
 
                   {/* Column Body / Cards List */}
-                  <div className="p-3 flex-1 overflow-y-auto space-y-3 custom-scrollbar">
+                  <motion.div 
+                    key={`${col.id}-${activeFilterKey}`}
+                    variants={cardContainerVariants}
+                    initial="hidden"
+                    animate="show"
+                    className="p-3 flex-1 overflow-y-auto space-y-3 custom-scrollbar"
+                  >
                     {isLoading ? (
                       <div className="space-y-3">
                         <div className="h-28 bg-slate-200/60 dark:bg-slate-800 animate-pulse rounded-2xl"></div>
@@ -1830,6 +2033,7 @@ export default function ServiceOrders({
                         return (
                           <motion.div
                             key={os.id}
+                            variants={cardItemVariants}
                             layout
                             draggable={true}
                             onDragStart={(e) => handleKanbanDragStart(e, os.id)}
@@ -1955,7 +2159,7 @@ export default function ServiceOrders({
                         );
                       })
                     )}
-                  </div>
+                  </motion.div>
                 </div>
               );
             })}
@@ -2048,7 +2252,13 @@ export default function ServiceOrders({
                 <th className="px-6 py-4 text-center">Atendimento</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+            <motion.tbody 
+              key={activeFilterKey}
+              variants={cardContainerVariants}
+              initial="hidden"
+              animate="show"
+              className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
               {isLoading ? (
                 <OrdersSkeleton />
               ) : filteredOrders.length > 0 ? (
@@ -2063,10 +2273,8 @@ export default function ServiceOrders({
                   return (
                     <motion.tr 
                       key={os.id} 
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.25) }}
-                      className="hover:bg-slate-50/50 transition-colors"
+                      variants={cardItemVariants}
+                      className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors"
                     >
                       <td className="px-6 py-4 w-12 text-center" onClick={(e) => e.stopPropagation()}>
                         <input 
@@ -2213,7 +2421,7 @@ export default function ServiceOrders({
                   </td>
                 </tr>
               )}
-            </tbody>
+                    </motion.tbody>
           </table>
         </div>
       </div>
@@ -4320,6 +4528,20 @@ export default function ServiceOrders({
         imageTitle={drawingModalState.imageTitle}
         onClose={() => setDrawingModalState(prev => ({ ...prev, isOpen: false }))}
         onSave={handleSaveDrawingOverlay}
+      />
+
+      {/* Technician Completion Validation & Confirmation Modal */}
+      <TechnicianCompletionModal
+        isOpen={!!orderToValidateCompletion}
+        order={orderToValidateCompletion}
+        clientName={orderToValidateCompletion ? getClientName(orderToValidateCompletion.clientId) : ""}
+        professionalsList={professionalsList}
+        currentUser={currentUser}
+        onClose={() => setOrderToValidateCompletion(null)}
+        onConfirm={handleConfirmTechnicianValidation}
+        onOpenDrawingOverlay={(imgUrl, index) => {
+          handleOpenDrawingOverlay(imgUrl, 'completion', index, "Marcar Anotação na Foto de Conclusão");
+        }}
       />
     </div>
   );

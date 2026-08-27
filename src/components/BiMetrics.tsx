@@ -8,6 +8,10 @@ import {
 import { getPriorityBadge } from "./Dashboard";
 import ServiceOrdersTrendChart from "./ServiceOrdersTrendChart";
 import ServiceOrdersStatusDoughnutChart from "./ServiceOrdersStatusDoughnutChart";
+import D3CategoryBubbleChart from "./d3/D3CategoryBubbleChart";
+import D3TechnicianPerformanceChart from "./d3/D3TechnicianPerformanceChart";
+import D3SlaResolutionRadialChart from "./d3/D3SlaResolutionRadialChart";
+import D3WeeklyActivityHeatmap from "./d3/D3WeeklyActivityHeatmap";
 
 interface BiMetricsProps {
   orders: ServiceOrder[];
@@ -497,258 +501,50 @@ export default function BiMetrics({
             </div>
           </div>
 
-          {/* SECTION: Activity Heatmap for Scheduling Optimization */}
+          {/* D3 Multi-Ring Radial SLA Gauge */}
+          <D3SlaResolutionRadialChart
+            orders={orders}
+            onOpenMetricModal={(data) => setMetricModal({
+              title: data.title,
+              description: data.description,
+              ordersList: data.ordersList
+            })}
+          />
+
+          {/* D3 Dynamic Category Bubble Pack Chart */}
+          <D3CategoryBubbleChart
+            orders={orders}
+            onSelectCategory={(cat, ords) => setMetricModal({
+              title: `Demandas da Categoria: ${cat}`,
+              description: `Lista das ${ords.length} ordens de serviço cadastradas na categoria ${cat}.`,
+              ordersList: ords
+            })}
+            onSelectOrder={onSelectOrder}
+          />
+
+          {/* D3 Technician Performance Stacked Bar Chart */}
+          <D3TechnicianPerformanceChart
+            orders={orders}
+            professionals={professionals}
+            onSelectTechnician={(name, ords) => setMetricModal({
+              title: `Desempenho do Técnico: ${name}`,
+              description: `Lista das ${ords.length} ordens de serviço atribuídas ao técnico ${name}.`,
+              ordersList: ords
+            })}
+            onSelectOrder={onSelectOrder}
+          />
+
+          {/* D3 Dynamic SVG Weekly Activity Heatmap */}
           {isGestorLike && (
-            <div id="activity-heatmap" className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-5 h-5 text-indigo-650" />
-                    <h3 className="font-extrabold text-sm uppercase tracking-wider text-slate-800 animate-none">
-                      Mapa de Calor de Atividades (Weekly Heatmap)
-                    </h3>
-                  </div>
-                  <p className="text-[11px] text-slate-500 font-medium leading-normal max-w-2xl text-left">
-                    Frequência de abertura de chamados técnicos por dia da semana e período. Auxilia no planejamento e escalonamento ideal de equipes técnicas.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <div className="flex flex-col gap-1 text-left">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest font-mono">Setor / Especialidade</span>
-                    <select
-                      value={heatmapCategoryFilter}
-                      onChange={(e) => {
-                        setHeatmapCategoryFilter(e.target.value);
-                        setSelectedHeatCell(null);
-                      }}
-                      className="bg-slate-50 border border-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl outline-none focus:border-indigo-500 font-semibold cursor-pointer"
-                    >
-                      <option value="all">📁 Todos os Setores</option>
-                      {uniqueCategories.map(cat => (
-                        <option key={cat} value={cat}>🔧 {cat}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex flex-col gap-1 text-left">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest font-mono">Fase Operacional</span>
-                    <select
-                      value={heatmapStatusFilter}
-                      onChange={(e) => {
-                        setHeatmapStatusFilter(e.target.value);
-                        setSelectedHeatCell(null);
-                      }}
-                      className="bg-slate-50 border border-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl outline-none focus:border-indigo-500 font-semibold cursor-pointer"
-                    >
-                      <option value="all">📊 Todos os Status</option>
-                      <option value="active">⏳ Abertos / Em Execução</option>
-                      <option value="concluido">✅ Apenas Concluídos</option>
-                    </select>
-                  </div>
-
-                  {(heatmapCategoryFilter !== "all" || heatmapStatusFilter !== "all") && (
-                    <button
-                      onClick={() => {
-                        setHeatmapCategoryFilter("all");
-                        setHeatmapStatusFilter("all");
-                        setSelectedHeatCell(null);
-                      }}
-                      className="mt-4 px-2.5 py-1.5 text-[10px] uppercase tracking-wider font-extrabold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg shrink-0 transition cursor-pointer"
-                    >
-                      Limpar
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-                {/* Left: Graphic Heatmap Grid */}
-                <div className="xl:col-span-8 space-y-4">
-                  <div className="grid grid-cols-5 gap-1.5 text-center text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">
-                    <div className="text-left font-sans pl-1 flex items-center">Dia da Semana</div>
-                    {TIME_PERIODS.map(period => (
-                      <div key={period.id} className="bg-slate-50 border border-slate-100 py-1.5 rounded-lg flex flex-col items-center justify-center">
-                        <span className="text-slate-700">{period.rangeName}</span>
-                        <span className="text-[8px] text-slate-400 font-normal">{period.hours}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="space-y-1.5">
-                    {DAYS_OF_WEEK.map((day) => (
-                      <div key={day.id} className="grid grid-cols-5 gap-1.5 items-center">
-                        <div className="bg-slate-50/70 border border-slate-200/40 py-2.5 pl-3 rounded-lg text-xs font-black text-slate-800 text-left truncate flex items-center justify-between">
-                          <span>{day.name}</span>
-                          <span className="bg-slate-200/50 font-mono text-[9px] font-extrabold px-1.5 py-0.5 rounded mr-2 text-slate-550">
-                            {TIME_PERIODS.reduce((acc, p) => acc + (heatmapMatrix[`${day.id}-${p.id}`] || []).length, 0)}
-                          </span>
-                        </div>
-
-                        {TIME_PERIODS.map((period) => {
-                          const cellOrders = heatmapMatrix[`${day.id}-${period.id}`] || [];
-                          const count = cellOrders.length;
-                          const isSelected = selectedHeatCell?.dayId === day.id && selectedHeatCell?.periodId === period.id;
-
-                          let bgDensityClr = "bg-slate-50 border-slate-200/40 text-slate-400";
-                          let hoverDensityClr = "hover:bg-slate-105 hover:border-slate-300";
-                          if (count > 0 && count <= 1) {
-                            bgDensityClr = "bg-indigo-50/50 border-indigo-100 text-indigo-700";
-                            hoverDensityClr = "hover:bg-indigo-100 border-indigo-200";
-                          } else if (count > 1 && count <= 3) {
-                            bgDensityClr = "bg-indigo-100/60 border-indigo-150 text-indigo-800 font-extrabold";
-                            hoverDensityClr = "hover:bg-indigo-200 hover:border-indigo-250";
-                          } else if (count > 3 && count <= 5) {
-                            bgDensityClr = "bg-indigo-400 border-indigo-500 text-white font-extrabold";
-                            hoverDensityClr = "hover:bg-indigo-500 hover:border-indigo-600";
-                          } else if (count > 5) {
-                            bgDensityClr = "bg-indigo-700 border-indigo-800 text-white font-black";
-                            hoverDensityClr = "hover:bg-indigo-850 hover:border-indigo-900";
-                          }
-
-                          if (isSelected) {
-                            bgDensityClr += " ring-2 ring-indigo-500 ring-offset-1 scale-[1.02] shadow-sm";
-                          }
-
-                          return (
-                            <div
-                              key={period.id}
-                              onClick={() => setSelectedHeatCell({ dayId: day.id, periodId: period.id })}
-                              className={`p-3 min-h-[50px] border rounded-xl flex flex-col justify-between cursor-pointer transition-all ${bgDensityClr} ${hoverDensityClr}`}
-                            >
-                              <span className="text-right font-mono text-[11px] font-extrabold">{count}</span>
-                              <div className="flex justify-between items-center text-[7.5px] uppercase font-bold tracking-wider pt-1.5 opacity-85">
-                                <span>Chamados</span>
-                                {count > 0 && <span className="w-1.5 h-1.5 rounded-full bg-current" />}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Color Legend */}
-                  <div className="flex items-center gap-4 text-[9px] font-bold text-slate-500 uppercase tracking-widest pt-2 pl-1 font-mono flex-wrap">
-                    <span>INTENSIDADE:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3.5 h-3.5 bg-slate-50 border border-slate-200 rounded-md" />
-                      <span>Nenhum</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3.5 h-3.5 bg-indigo-50/50 border border-indigo-100 rounded-md" />
-                      <span>Baixa (1)</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3.5 h-3.5 bg-indigo-100/60 border border-indigo-150 rounded-md" />
-                      <span>Média (2-3)</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3.5 h-3.5 bg-indigo-400 border border-indigo-500 rounded-md" />
-                      <span>Alta (4-5)</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3.5 h-3.5 bg-indigo-700 border border-indigo-800 rounded-md" />
-                      <span>Crítica (6+)</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right: Recommendation & Drill-down */}
-                <div className="xl:col-span-4 bg-slate-50 rounded-2xl border border-slate-200/60 p-4 space-y-4">
-                  <h4 className="font-extrabold text-slate-800 text-[11px] uppercase tracking-wider flex items-center gap-2 text-left">
-                    <TrendingUp className="w-4 h-4 text-indigo-650" />
-                    Análise Preditiva de Escalas
-                  </h4>
-
-                  {peakCell ? (
-                    <div className="p-3.5 bg-indigo-500/5 border border-indigo-500/10 rounded-xl space-y-1.5 text-xs text-left">
-                      <span className="text-[9px] font-black text-indigo-700 uppercase tracking-widest block">💡 Insight do Sistema</span>
-                      <p className="text-[11px] font-medium text-slate-750 leading-relaxed">
-                        Pico histórico identificado às <strong className="text-indigo-850 font-extrabold">{peakCell.dayName}s</strong> no período da <strong className="text-indigo-850 font-extrabold">{peakCell.periodLabel}</strong> com <strong className="text-indigo-650 font-extrabold">{peakCell.count} chamados</strong> registrados.
-                      </p>
-                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                        Recomendamos reforçar as escalas de técnicos em campo neste período específico para manter os tempos de triagem baixos.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="p-3 bg-white border border-slate-200 rounded-xl text-xs text-slate-400 text-center">
-                      Nenhum chamado nos filtros atuais.
-                    </div>
-                  )}
-
-                  <div className="space-y-3 pt-2">
-                    <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                      <span className="text-[10px] font-extrabold text-slate-700 uppercase tracking-widest font-mono">
-                        {selectedHeatCell ? "Registros na Célula" : "Selecione uma célula"}
-                      </span>
-                      {selectedHeatCell && (
-                        <button
-                          onClick={() => setSelectedHeatCell(null)}
-                          className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800 font-mono transition cursor-pointer"
-                        >
-                          Limpar [X]
-                        </button>
-                      )}
-                    </div>
-
-                    {selectedHeatCell ? (() => {
-                      const day = DAYS_OF_WEEK.find(d => d.id === selectedHeatCell.dayId);
-                      const period = TIME_PERIODS.find(p => p.id === selectedHeatCell.periodId);
-                      const cellOrdersList = heatmapMatrix[`${selectedHeatCell.dayId}-${selectedHeatCell.periodId}`] || [];
-
-                      return (
-                        <div className="space-y-3 text-left">
-                          <div className="flex justify-between items-center text-xs font-bold text-slate-500">
-                            <span className="text-slate-700">{day?.name}</span>
-                            <span className="bg-indigo-50 border border-indigo-150 text-indigo-700 font-mono text-[10px] px-2 py-0.5 rounded-md">
-                              {period?.rangeName} ({cellOrdersList.length})
-                            </span>
-                          </div>
-
-                          <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
-                            {cellOrdersList.length > 0 ? (
-                              cellOrdersList.map(os => {
-                                const prio = os.priority || 'medium';
-                                const priorityStripeColor = 
-                                  prio === 'low' ? 'border-l-emerald-500' :
-                                  prio === 'high' ? 'border-l-amber-500' :
-                                  prio === 'urgent' ? 'border-l-red-500' :
-                                  'border-l-blue-500'; // medium
-                                return (
-                                  <div
-                                    key={os.id}
-                                    onClick={() => onSelectOrder(os)}
-                                    className={`p-2.5 pl-2 bg-white border border-l-4 ${priorityStripeColor} border-slate-200 hover:border-indigo-400 rounded-xl transition duration-150 cursor-pointer text-[11px]`}
-                                  >
-                                    <div className="flex justify-between items-center gap-1 mb-1">
-                                      <span className="font-mono text-[9px] font-bold text-indigo-500 bg-indigo-50 border px-1 rounded">
-                                        #{os.id}
-                                      </span>
-                                      {getPriorityBadge(os.priority)}
-                                    </div>
-                                    <h5 className="font-extrabold text-slate-800 truncate">{os.title}</h5>
-                                    <p className="text-[9.5px] text-slate-500 truncate">Técnico: {os.assignedTo || "Triação Pendente"}</p>
-                                  </div>
-                                );
-                              })
-                            ) : (
-                              <div className="py-6 text-center text-slate-400 bg-white border border-dashed rounded-xl text-[10px]">
-                                Nenhum chamado correspondente.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })() : (
-                      <div className="py-10 text-center text-slate-400 border border-dashed border-slate-200 bg-white rounded-xl text-[10px]">
-                        Selecione um bloco colorido do mapa ao lado para listar e planejar atendimentos para aquele período.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <D3WeeklyActivityHeatmap
+              orders={orders}
+              onSelectOrder={onSelectOrder}
+              onOpenMetricModal={(data) => setMetricModal({
+                title: data.title,
+                description: data.description,
+                ordersList: data.ordersList
+              })}
+            />
           )}
 
           {/* SECTION: SYSTEM HEALTH & SECURITY AUDITS */}

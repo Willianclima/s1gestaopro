@@ -100,8 +100,163 @@
 }
 
 /* ==========================================
-   DYNAMIC ACCESSIBLE DARK MODE SYSTEM
+   DYNAMIC ACCESSIBLE THEME SYSTEM (LIGHT & DARK)
    ========================================== */
+
+/* 1. LIGHT MODE DEFAULT SYSTEM */
+:root, html:not(.dark) {
+  color-scheme: light;
+}
+
+/* Light Mode Base Inputs & Form Fields */
+html:not(.dark) input[type="text"],
+html:not(.dark) input[type="password"],
+html:not(.dark) input[type="date"],
+html:not(.dark) input[type="time"],
+html:not(.dark) input[type="email"],
+html:not(.dark) input[type="tel"],
+html:not(.dark) select,
+html:not(.dark) textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #64748b !important;
+}
+
+html:not(.dark) input:focus,
+html:not(.dark) select:focus,
+html:not(.dark) textarea:focus {
+  border-color: #2d749a !important;
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(45, 116, 154, 0.25) !important;
+}
+
+/* Light Mode High-Contrast Table System */
+html:not(.dark) table {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 0.875rem !important;
+  overflow: hidden !important;
+}
+
+html:not(.dark) table th,
+html:not(.dark) th {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  border-bottom: 2px solid #2d749a !important; /* Signature Municipal Blue Accent */
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  font-size: 0.725rem !important;
+  padding: 0.875rem 1.25rem !important;
+}
+
+html:not(.dark) table td,
+html:not(.dark) td {
+  color: #1e293b !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  padding: 0.875rem 1.25rem !important;
+  font-size: 0.825rem !important;
+}
+
+html:not(.dark) tr:nth-child(even) {
+  background-color: #f8fafc !important;
+}
+
+html:not(.dark) tr:nth-child(odd) {
+  background-color: #ffffff !important;
+}
+
+html:not(.dark) tr:hover td {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  transition: background-color 0.15s ease !important;
+}
+
+/* Light Mode High-Contrast Modal System */
+html:not(.dark) .fixed.inset-0.bg-slate-900\/40,
+html:not(.dark) .fixed.inset-0.bg-slate-900\/60,
+html:not(.dark) .fixed.inset-0.bg-black\/50,
+html:not(.dark) .modal-backdrop {
+  background-color: rgba(15, 23, 42, 0.65) !important;
+  backdrop-filter: blur(6px) !important;
+}
+
+html:not(.dark) .fixed.inset-0 .bg-white,
+html:not(.dark) [role="dialog"],
+html:not(.dark) [role="dialog"] .bg-white,
+html:not(.dark) .modal-container,
+html:not(.dark) .modal-card {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25),
+              0 0 0 1px rgba(15, 23, 42, 0.05) !important;
+  border-radius: 1.25rem !important;
+}
+
+html:not(.dark) [role="dialog"] h2,
+html:not(.dark) [role="dialog"] h3,
+html:not(.dark) .fixed.inset-0 h2,
+html:not(.dark) .fixed.inset-0 h3,
+html:not(.dark) .modal-header {
+  color: #0f172a !important;
+  font-weight: 800 !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  padding-bottom: 1rem !important;
+  letter-spacing: -0.02em !important;
+}
+
+html:not(.dark) .fixed.inset-0 .flex.justify-end,
+html:not(.dark) [role="dialog"] .flex.justify-end,
+html:not(.dark) .modal-footer {
+  border-top: 1px solid #e2e8f0 !important;
+  padding-top: 1rem !important;
+  margin-top: 1.25rem !important;
+  background-color: #f8fafc !important;
+  border-bottom-left-radius: 1.25rem !important;
+  border-bottom-right-radius: 1.25rem !important;
+}
+
+/* Light Mode Status Pills & Badges Contrast */
+html:not(.dark) .bg-emerald-50 {
+  background-color: #ecfdf5 !important;
+  color: #047857 !important;
+  border: 1px solid #a7f3d0 !important;
+}
+
+html:not(.dark) .bg-blue-50 {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border: 1px solid #bfdbfe !important;
+}
+
+html:not(.dark) .bg-amber-50 {
+  background-color: #fffbeb !important;
+  color: #b45309 !important;
+  border: 1px solid #fde68a !important;
+}
+
+html:not(.dark) .bg-red-50 {
+  background-color: #fef2f2 !important;
+  color: #b91c1c !important;
+  border: 1px solid #fecaca !important;
+}
+
+html:not(.dark) .bg-purple-50 {
+  background-color: #faf5ff !important;
+  color: #6b21a8 !important;
+  border: 1px solid #e9d5ff !important;
+}
+
+
+/* 2. DARK MODE SYSTEM */
 .dark {
   color-scheme: dark;
 }
@@ -183,6 +338,7 @@
 .dark input[type="text"],
 .dark input[type="password"],
 .dark input[type="date"],
+.dark input[type="time"],
 .dark input[type="email"],
 .dark input[type="tel"],
 .dark select,
@@ -222,11 +378,35 @@
   background-color: #1e2c47 !important;
 }
 
-/* Blue/Teal/Indigo secondary soft states (e.g., active elements) */
-.dark .bg-indigo-50,
+/* Dark Mode Status Pills & Badges Contrast */
+.dark .bg-emerald-50 {
+  background-color: #022c22 !important;
+  color: #6ee7b7 !important;
+  border: 1px solid #065f46 !important;
+}
+
 .dark .bg-blue-50 {
-  background-color: #0e274c !important;
-  color: #7dd3fc !important;
+  background-color: #172554 !important;
+  color: #93c5fd !important;
+  border: 1px solid #1e40af !important;
+}
+
+.dark .bg-amber-50 {
+  background-color: #451a03 !important;
+  color: #fde047 !important;
+  border: 1px solid #854d0e !important;
+}
+
+.dark .bg-red-50 {
+  background-color: #450a0a !important;
+  color: #fca5a5 !important;
+  border: 1px solid #991b1b !important;
+}
+
+.dark .bg-purple-50 {
+  background-color: #3b0764 !important;
+  color: #e9d5ff !important;
+  border: 1px solid #7e22ce !important;
 }
 
 .dark .border-indigo-100,
@@ -248,8 +428,12 @@
 }
 
 /* Form sections and modal overlays */
-.dark .bg-slate-900\/40 {
-  background-color: rgba(3, 7, 18, 0.75) !important; /* Darker backdrop to make modals pop */
+.dark .bg-slate-900\/40,
+.dark .bg-slate-900\/60,
+.dark .bg-black\/50,
+.dark .modal-backdrop {
+  background-color: rgba(3, 7, 18, 0.85) !important; /* Darker backdrop to make modals pop */
+  backdrop-filter: blur(8px) !important;
 }
 
 /* Ensure scheduler time cell divisions are visible in dark theme */
@@ -257,88 +441,91 @@
   border-color: #27354f !important;
 }
 
-/* ==========================================
-   HIGH ACCESSIBILITY MOUNTED STYLES (TABLES & MODALS)
-   ========================================== */
-
-/* 1. Precise Table Enhancements in Dark Mode */
+/* Dark Mode Table Enhancements */
 .dark table {
   border-collapse: separate !important;
   border-spacing: 0 !important;
-  background-color: #111a2e !important;
-  border: 1px solid #27354f !important;
-  border-radius: 1rem !important;
+  background-color: #0d1526 !important;
+  border: 1px solid #233454 !important;
+  border-radius: 0.875rem !important;
   overflow: hidden !important;
 }
 
 .dark table th,
 .dark th {
-  background-color: #0d1627 !important; /* Deepest blue/black for table headers */
+  background-color: #070c18 !important; /* Deepest blue/black for table headers */
   color: #ffffff !important;
   border-bottom: 2px solid #2d749a !important; /* Municipality Signature Accent line */
   font-weight: 800 !important;
   text-transform: uppercase !important;
   letter-spacing: 0.05em !important;
-  font-size: 0.7rem !important;
-  padding: 1rem 1.25rem !important;
+  font-size: 0.725rem !important;
+  padding: 0.875rem 1.25rem !important;
 }
 
 .dark table td,
 .dark td {
-  color: #f1f5f9 !important;
-  border-bottom: 1px solid #1e2a44 !important;
+  color: #f8fafc !important;
+  border-bottom: 1px solid #1a2742 !important;
   padding: 0.875rem 1.25rem !important;
-  font-size: 0.8rem !important;
+  font-size: 0.825rem !important;
 }
 
 /* Zebra striping for ultra legibility in long tables */
 .dark tr:nth-child(even) {
-  background-color: #152037 !important; /* Slightly lighter shade of dark slate */
+  background-color: #121d33 !important;
 }
 
 .dark tr:nth-child(odd) {
-  background-color: #0e1626 !important;
+  background-color: #0b1220 !important;
 }
 
-/* Bright hover feedback with left highlight bar on row hover */
+/* Bright hover feedback on row hover */
 .dark tr:hover td {
-  background-color: #1e2c4a !important;
+  background-color: #1c2b4a !important;
   color: #ffffff !important;
+  transition: background-color 0.15s ease !important;
 }
 
-/* 2. Premium Modal Enhancements in Dark Mode */
+/* Dark Mode Modal Enhancements */
 .dark .fixed.inset-0 .bg-white,
 .dark .fixed.inset-0 .bg-slate-900,
 .dark [role="dialog"],
 .dark [role="dialog"] .bg-white,
 .dark [role="dialog"] .bg-slate-900,
-.dark .modal-container {
+.dark .modal-container,
+.dark .modal-card {
   background-color: #0a0f1d !important; /* Solid high-contrast deep municipal backdrop */
   color: #ffffff !important;
-  border: 2px solid #2d749a !important; /* Solid, thick frame in municipality's official brand blue */
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85), 
-              0 0 40px rgba(45, 116, 154, 0.3) !important; /* High contrast drop-shadow glow */
-  border-radius: 1.5rem !important;
+  border: 2px solid #2d749a !important; /* Solid frame in municipality's official brand blue */
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.95), 
+              0 0 40px rgba(45, 116, 154, 0.35) !important; /* High contrast drop-shadow glow */
+  border-radius: 1.25rem !important;
 }
 
-/* Modal Headers */
+/* Dark Mode Modal Headers */
 .dark [role="dialog"] h2,
 .dark [role="dialog"] h3,
 .dark .fixed.inset-0 h2,
-.dark .fixed.inset-0 h3 {
+.dark .fixed.inset-0 h3,
+.dark .modal-header {
   color: #ffffff !important;
   font-weight: 800 !important;
-  border-bottom: 1px solid #27354f !important;
+  border-bottom: 1px solid #233454 !important;
   padding-bottom: 1rem !important;
   letter-spacing: -0.02em !important;
 }
 
-/* Modal Footers */
+/* Dark Mode Modal Footers */
 .dark .fixed.inset-0 .flex.justify-end,
-.dark [role="dialog"] .flex.justify-end {
-  border-top: 1px solid #27354f !important;
+.dark [role="dialog"] .flex.justify-end,
+.dark .modal-footer {
+  border-top: 1px solid #233454 !important;
   padding-top: 1rem !important;
-  margin-top: 1.5rem !important;
+  margin-top: 1.25rem !important;
+  background-color: #070c18 !important;
+  border-bottom-left-radius: 1.25rem !important;
+  border-bottom-right-radius: 1.25rem !important;
 }
 
 /* Scrollbar styling in dark mode */

@@ -42,10 +42,29 @@ export default function Scheduler({
   onAddSystemLog
 }: SchedulerProps) {
   const { toastSuccess, toastInfo, toastWarn } = useToast();
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 5, 15)); // Default to June 15, 2026 (matching current time year-month)
-  const [selectedDateStr, setSelectedDateStr] = useState("2026-06-15");
 
-  const [newBlockDate, setNewBlockDate] = useState("2026-06-15");
+  // Helper functions for local computer date
+  const getLocalTodayDate = () => new Date();
+  const getLocalTodayDateStr = () => {
+    const now = new Date();
+    const yr = now.getFullYear();
+    const mo = String(now.getMonth() + 1).padStart(2, "0");
+    const dy = String(now.getDate()).padStart(2, "0");
+    return `${yr}-${mo}-${dy}`;
+  };
+
+  // Always open on the current computer date (month, year and day)
+  const [currentDate, setCurrentDate] = useState<Date>(() => getLocalTodayDate());
+  const [selectedDateStr, setSelectedDateStr] = useState<string>(() => getLocalTodayDateStr());
+
+  // Ensure every time the component opens or mounts, it synchronizes strictly with the computer's current month and day
+  useEffect(() => {
+    const today = new Date();
+    setCurrentDate(today);
+    setSelectedDateStr(getLocalTodayDateStr());
+  }, []);
+
+  const [newBlockDate, setNewBlockDate] = useState<string>(() => getLocalTodayDateStr());
   const [newBlockDescription, setNewBlockDescription] = useState("");
   const [newBlockType, setNewBlockType] = useState<"holiday" | "day_off">("holiday");
   const [newBlockProfId, setNewBlockProfId] = useState("all");
@@ -106,6 +125,7 @@ export default function Scheduler({
         }
       }
     }
+    const todayStr = getLocalTodayDateStr();
     return [
       {
         id: "rem-101",
@@ -116,9 +136,9 @@ export default function Scheduler({
         leadTimeMinutes: 10,
         transportMode: "car",
         notes: "Passar no Almoxarifado Central para retirar cabos e peças antes do deslocamento.",
-        scheduledDate: "2026-06-15",
+        scheduledDate: todayStr,
         scheduledTime: "14:00",
-        calculatedDepartureTime: "2026-06-15 13:20",
+        calculatedDepartureTime: `${todayStr} 13:20`,
         notifyBrowser: true,
         notifyInApp: true,
         status: "active",
@@ -137,7 +157,7 @@ export default function Scheduler({
   const [reminderTravelMins, setReminderTravelMins] = useState<number>(30);
   const [reminderLeadMins, setReminderLeadMins] = useState<number>(10);
   const [reminderTransportMode, setReminderTransportMode] = useState<"car" | "motorcycle" | "transit" | "walking">("car");
-  const [reminderScheduledDate, setReminderScheduledDate] = useState<string>("2026-06-15");
+  const [reminderScheduledDate, setReminderScheduledDate] = useState<string>(() => getLocalTodayDateStr());
   const [reminderScheduledTime, setReminderScheduledTime] = useState<string>("14:00");
   const [reminderNotes, setReminderNotes] = useState<string>("");
   const [reminderNotifyBrowser, setReminderNotifyBrowser] = useState<boolean>(true);
@@ -385,11 +405,17 @@ export default function Scheduler({
   const calendarGrid = [...blanks, ...days];
 
   const handlePrevMonth = () => {
-    setCurrentDate(new Date(year, month - 1, 15));
+    setCurrentDate(new Date(year, month - 1, 1));
   };
 
   const handleNextMonth = () => {
-    setCurrentDate(new Date(year, month + 1, 15));
+    setCurrentDate(new Date(year, month + 1, 1));
+  };
+
+  const handleGoToToday = () => {
+    const today = getLocalTodayDate();
+    setCurrentDate(today);
+    setSelectedDateStr(getLocalTodayDateStr());
   };
 
   // Convert day number to string date YYYY-MM-DD
@@ -1497,6 +1523,16 @@ export default function Scheduler({
             </span>
             
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleGoToToday}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                title="Voltar para a data de hoje"
+              >
+                <CalendarIcon className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span>Hoje</span>
+              </button>
+
               <div className="flex bg-slate-50 border border-slate-200/55 rounded-xl p-1 gap-0.5">
                 <button
                   onClick={handlePrevMonth}
@@ -1615,8 +1651,8 @@ export default function Scheduler({
               const dayOrders = getOrdersForDate(fullDateStr);
               const isSelected = selectedDateStr === fullDateStr;
               
-              // Highlight today if matching current mock time (June 15, 2026)
-              const isToday = fullDateStr === "2026-06-15";
+              // Highlight today if matching current local computer date
+              const isToday = fullDateStr === getLocalTodayDateStr();
 
               // Find active blocks on this date
               const dayBlocks = blockedDates.filter(b => b.date === fullDateStr);

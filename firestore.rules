@@ -15,12 +15,28 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function isUserType(type) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().userType == type;
+    }
+
     function isAdminOrGestor() {
       return isSignedIn() && (
         request.auth.token.email == "willianclima@gmail.com" ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         (getUserData().userType == "admin" || getUserData().userType == "gestor" || getUserData().userType == "gestor_servicos"))
+         (getUserData().userType == "admin" ||
+          getUserData().userType == "gestor" ||
+          getUserData().userType == "gestor_servicos"))
       );
+    }
+
+    function isProfissional() {
+      return isUserType("profissional");
+    }
+
+    function isRequisitante() {
+      return isUserType("requisitante");
     }
 
     // Default deny
@@ -28,29 +44,76 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // User profiles collection
+    // User profiles collection (/users/{userId})
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isOwner(userId);
+      allow read: if isOwner(userId) || isAdminOrGestor();
+      allow create: if isOwner(userId) || isAdminOrGestor();
       allow update: if isOwner(userId) || isAdminOrGestor();
       allow delete: if isAdminOrGestor();
     }
 
-    // Clients collection
+    // Clients collection (/clients/{clientId})
     match /clients/{clientId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if isAdminOrGestor() || isOwner(clientId) || (isSignedIn() && resource.data.email == request.auth.token.email);
+      allow create: if isAdminOrGestor() || isOwner(clientId) || (isSignedIn() && request.resource.data.email == request.auth.token.email);
+      allow update: if isAdminOrGestor() || isOwner(clientId) || (isSignedIn() && resource.data.email == request.auth.token.email);
+      allow delete: if isAdminOrGestor();
     }
 
-    // Service Orders collection
+    // Professionals collection (/professionals/{profId})
+    match /professionals/{profId} {
+      allow read: if isAdminOrGestor() || isOwner(profId) || (isSignedIn() && resource.data.email == request.auth.token.email);
+      allow create: if isAdminOrGestor() || isOwner(profId);
+      allow update: if isAdminOrGestor() || isOwner(profId);
+      allow delete: if isAdminOrGestor();
+    }
+
+    // Service Orders collection (/serviceOrders/{orderId})
     match /serviceOrders/{orderId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      // Gestores/Admins have full access
+      allow read: if isAdminOrGestor() ||
+        (isRequisitante() && (
+          resource.data.clientId == request.auth.uid ||
+          resource.data.createdByUid == request.auth.uid ||
+          resource.data.clientId == request.auth.token.email
+        )) ||
+        (isProfissional() && (
+          resource.data.assignedTo == request.auth.uid ||
+          resource.data.assignedTo == request.auth.token.email ||
+          resource.data.assignedTo == getUserData().name
+        ));
+
+      allow create: if isAdminOrGestor() ||
+        (isRequisitante() && (
+          request.resource.data.clientId == request.auth.uid ||
+          request.resource.data.createdByUid == request.auth.uid
+        ));
+
+      allow update: if isAdminOrGestor() ||
+        (isRequisitante() && (
+          resource.data.clientId == request.auth.uid ||
+          resource.data.createdByUid == request.auth.uid
+        )) ||
+        (isProfissional() && (
+          resource.data.assignedTo == request.auth.uid ||
+          resource.data.assignedTo == request.auth.token.email ||
+          resource.data.assignedTo == getUserData().name
+        ));
+
+      allow delete: if isAdminOrGestor();
+    }
+
+    // System Logs collection (/system_logs/{logId})
+    match /system_logs/{logId} {
+      allow read: if isAdminOrGestor();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdminOrGestor();
     }
 
     // Connection testing doc
     match /test/{docId} {
-      allow read, write: if true;
+      allow read, write: if isSignedIn();
     }
   }
 }
+

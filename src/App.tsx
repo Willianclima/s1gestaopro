@@ -34,6 +34,8 @@ import {
 } from "lucide-react";
 import { useToast } from "./components/ToastContext";
 import { useSystemTheme } from "./hooks/useSystemTheme";
+import { motion, AnimatePresence } from "motion/react";
+import { initSWLocalStorageSWR, syncAllCoreLocalStorageToSW } from "./utils/swLocalStorageSync";
 
 
 export default function App() {
@@ -177,32 +179,42 @@ export default function App() {
     };
   }, []);
 
-  // Registro e ciclo de vida do Service Worker (sw.js) para funcionamento offline e cache
+  // Registro e ciclo de vida do Service Worker (sw.js) para funcionamento offline, cache e SWR de LocalStorage
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+
+    // Inicializa a escuta de mensagens de Stale-While-Revalidate para LocalStorage
+    const cleanupSWR = initSWLocalStorageSWR((key, val) => {
+      console.log(`[PWA SWR LocalStorage] Dado revalidado em segundo plano para a chave '${key}'.`);
+    });
 
     const registerServiceWorker = async () => {
       try {
         const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-        setSwRegistration(registration);
-        console.log("[PWA] Service Worker ('/sw.js') registrado com sucesso! Escopo:", registration.scope);
+        if (registration) {
+          setSwRegistration(registration);
+          console.log("[PWA] Service Worker ('/sw.js') registrado com sucesso! Escopo:", registration.scope);
 
-        // Monitora atualizações da aplicação e cache
-        registration.onupdatefound = () => {
-          const installingWorker = registration.installing;
-          if (installingWorker) {
-            installingWorker.onstatechange = () => {
-              if (installingWorker.state === "installed") {
-                if (navigator.serviceWorker.controller) {
-                  console.log("[PWA] Nova versão do aplicativo instalada em segundo plano.");
-                  toastInfo("Nova versão do sistema pronta! Atualizações aplicadas no cache.", "PWA Atualizado");
-                } else {
-                  console.log("[PWA] Conteúdo e assets essenciais cacheados para uso offline.");
+          // Sincroniza dados atuais do LocalStorage no CacheStorage
+          syncAllCoreLocalStorageToSW();
+
+          // Monitora atualizações da aplicação e cache
+          registration.onupdatefound = () => {
+            const installingWorker = registration.installing;
+            if (installingWorker) {
+              installingWorker.onstatechange = () => {
+                if (installingWorker.state === "installed") {
+                  if (navigator.serviceWorker.controller) {
+                    console.log("[PWA] Nova versão do aplicativo instalada em segundo plano.");
+                    toastInfo("Nova versão do sistema pronta! Atualizações aplicadas no cache.", "PWA Atualizado");
+                  } else {
+                    console.log("[PWA] Conteúdo e assets essenciais cacheados para uso offline.");
+                  }
                 }
-              }
-            };
-          }
-        };
+              };
+            }
+          };
+        }
       } catch (error) {
         console.error("[PWA] Erro ao registrar o Service Worker ('/sw.js'):", error);
       }
@@ -218,6 +230,10 @@ export default function App() {
         }).catch(err => console.error("Erro ao solicitar permissão de notificação:", err));
       }
     }
+
+    return () => {
+      cleanupSWR();
+    };
   }, []);
 
   // Função para disparar a instalação nativa do aplicativo PWA
@@ -652,8 +668,26 @@ export default function App() {
   // Global Header Search state & ref
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   const [isGlobalSearchFocused, setIsGlobalSearchFocused] = useState(false);
+  const [debouncedGlobalSearchTerm, setDebouncedGlobalSearchTerm] = useState("");
+  const [isDebouncingGlobalSearch, setIsDebouncingGlobalSearch] = useState(false);
   const globalSearchInputRef = useRef<HTMLInputElement>(null);
   const globalSearchContainerRef = useRef<HTMLDivElement>(null);
+
+  // 500ms debounce effect for global search input
+  useEffect(() => {
+    if (!globalSearchTerm.trim()) {
+      setDebouncedGlobalSearchTerm("");
+      setIsDebouncingGlobalSearch(false);
+      return;
+    }
+    setIsDebouncingGlobalSearch(true);
+    const timer = setTimeout(() => {
+      setDebouncedGlobalSearchTerm(globalSearchTerm);
+      setIsDebouncingGlobalSearch(false);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [globalSearchTerm]);
 
   // Keyboard shortcut (⌘K or Ctrl+K) and outside-click handler for Global Search
   useEffect(() => {
@@ -1012,6 +1046,45 @@ export default function App() {
 
         localStorage.setItem(seenStorageKey, JSON.stringify(seenIds));
         console.log(`[NotificationEngine] Updated seen orders cache key "${seenStorageKey}" with:`, seenIds);
+      }
+
+      // A2. ADMINS, GESTORES: Notify about new self-registered users awaiting approval
+      const seenClientsStorageKey = `service_mgt_seen_pending_clients_${currentUser.id}`;
+      let seenClientIds: string[] = [];
+      try {
+        const cachedSeenClients = localStorage.getItem(seenClientsStorageKey);
+        seenClientIds = cachedSeenClients ? JSON.parse(cachedSeenClients) : [];
+      } catch (e) {
+        console.error("[NotificationEngine] Error reading seen pending clients cache:", e);
+      }
+
+      const pendingUsers = clients.filter(c => c.status === "pendente_autorizacao");
+      const unseenPendingUsers = pendingUsers.filter(c => !seenClientIds.includes(c.id));
+
+      if (unseenPendingUsers.length > 0) {
+        unseenPendingUsers.forEach((pendingUser) => {
+          console.log(`[NotificationEngine] TRIGGERING NOTIFICATION for Admin/Gestor: New Pending User "${pendingUser.name}" (${pendingUser.document})`);
+
+          toastSystem(
+            `Novo auto-cadastro aguardando autorização: "${pendingUser.name}" (CPF: ${pendingUser.document})`,
+            "Novo Usuário para Aprovação"
+          );
+
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            try {
+              new Notification("Novo Usuário para Aprovação", {
+                body: `O usuário ${pendingUser.name} efetuou auto-cadastro e aguarda liberação de acesso pelo Administrador.`,
+                icon: "/favicon.ico",
+              });
+            } catch (e) {
+              console.error("[NotificationEngine] Error triggering native notification for pending client:", e);
+            }
+          }
+
+          seenClientIds.push(pendingUser.id);
+        });
+
+        localStorage.setItem(seenClientsStorageKey, JSON.stringify(seenClientIds));
       }
     }
 
@@ -2584,8 +2657,18 @@ export default function App() {
       return;
     }
 
-    const allClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
-    const documentExists = allClients.some(c => c.document.replace(/\D/g, "") === cleanCPF) ||
+    let existingClients: Client[] = [];
+    try {
+      const stored = localStorage.getItem("service_mgt_clients2");
+      if (stored) {
+        existingClients = JSON.parse(stored);
+      }
+    } catch (e) {}
+    if (!existingClients || existingClients.length === 0) {
+      existingClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
+    }
+
+    const documentExists = existingClients.some(c => c.document.replace(/\D/g, "") === cleanCPF) ||
                            professionals.some(p => p.document && p.document.replace(/\D/g, "") === cleanCPF);
 
     if (documentExists) {
@@ -2642,9 +2725,26 @@ export default function App() {
       biddingTermsAccepted: regBiddingConsent
     };
 
-    const updated = [...allClients, newClient];
+    // Deduplicate and merge properly
+    const clientMap = new Map<string, Client>();
+    INITIAL_CLIENTS.forEach(c => clientMap.set(c.id, c));
+    clients.forEach(c => clientMap.set(c.id, c));
+    existingClients.forEach(c => clientMap.set(c.id, c));
+    clientMap.set(newClient.id, newClient);
+
+    const updated = Array.from(clientMap.values());
     setClients(updated);
     localStorage.setItem("service_mgt_clients2", JSON.stringify(updated));
+
+    // Also dispatch cross-tab and storage events
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(new StorageEvent("storage", {
+          key: "service_mgt_clients2",
+          newValue: JSON.stringify(updated)
+        }));
+      } catch (err) {}
+    }
 
     // System log with AI audit info
     addSystemLog(
@@ -3071,6 +3171,45 @@ export default function App() {
     : [];
 
   const totalGlobalSearchResults = searchResultsOS.length + searchResultsClients.length + searchResultsProfessionals.length;
+
+  // 500ms Debounced search computation for dynamic results counter
+  const debouncedSearchQuery = debouncedGlobalSearchTerm.trim().toLowerCase();
+
+  const debouncedResultsOSCount = debouncedSearchQuery
+    ? visibleOrders.filter(os => {
+        const client = clients.find(c => c.id === os.clientId);
+        const clientName = client ? client.name.toLowerCase() : "";
+        const assignedTech = os.assignedTo ? os.assignedTo.toLowerCase() : "";
+        return os.id.toLowerCase().includes(debouncedSearchQuery) ||
+               os.title.toLowerCase().includes(debouncedSearchQuery) ||
+               (os.description && os.description.toLowerCase().includes(debouncedSearchQuery)) ||
+               clientName.includes(debouncedSearchQuery) ||
+               assignedTech.includes(debouncedSearchQuery) ||
+               os.category.toLowerCase().includes(debouncedSearchQuery);
+      }).length
+    : 0;
+
+  const debouncedResultsClientsCount = debouncedSearchQuery
+    ? clients.filter(c => {
+        return c.name.toLowerCase().includes(debouncedSearchQuery) ||
+               c.email.toLowerCase().includes(debouncedSearchQuery) ||
+               c.phone.includes(debouncedSearchQuery) ||
+               c.document.includes(debouncedSearchQuery) ||
+               (c.address && c.address.toLowerCase().includes(debouncedSearchQuery));
+      }).length
+    : 0;
+
+  const debouncedResultsProfessionalsCount = debouncedSearchQuery
+    ? professionals.filter(p => {
+        return p.name.toLowerCase().includes(debouncedSearchQuery) ||
+               p.role.toLowerCase().includes(debouncedSearchQuery) ||
+               p.specialty.toLowerCase().includes(debouncedSearchQuery) ||
+               p.phone.includes(debouncedSearchQuery) ||
+               (p.workLocation && p.workLocation.toLowerCase().includes(debouncedSearchQuery));
+      }).length
+    : 0;
+
+  const debouncedTotalResults = debouncedResultsOSCount + debouncedResultsClientsCount + debouncedResultsProfessionalsCount;
 
   if (!currentUser) {
     return (
@@ -4506,6 +4645,29 @@ export default function App() {
               </div>
             </div>
 
+            {/* Dynamic Results Counter below input (with 500ms debounce) */}
+            {globalSearchTerm.trim().length > 0 && (
+              <div 
+                id="global-search-counter-bar"
+                className="mt-1 px-1 flex items-center justify-between text-[11px] font-semibold transition-all select-none"
+              >
+                {isDebouncingGlobalSearch ? (
+                  <span className="text-slate-400 dark:text-slate-500 flex items-center gap-1.5 animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
+                    Buscando resultados...
+                  </span>
+                ) : debouncedTotalResults === 0 ? (
+                  <span className="text-rose-600 dark:text-rose-400 font-extrabold flex items-center gap-1 bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-md border border-rose-200 dark:border-rose-800/60 shadow-2xs">
+                    <span>⚠️</span> Nenhum resultado
+                  </span>
+                ) : (
+                  <span className="text-emerald-700 dark:text-emerald-400 font-extrabold flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/60 shadow-2xs">
+                    <span>✓</span> {debouncedTotalResults} {debouncedTotalResults === 1 ? "resultado encontrado" : "resultados encontrados"}
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Instant Floating Results Overlay Panel */}
             {isGlobalSearchFocused && globalSearchQuery.length > 0 && (
               <div className="absolute left-0 right-0 top-full mt-2 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl overflow-hidden z-50 max-h-[480px] overflow-y-auto custom-scrollbar">
@@ -4915,7 +5077,15 @@ export default function App() {
 
         {/* Dynamic Nav View port */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-8">
-          <div className="w-full max-w-6xl mx-auto pb-12">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="w-full max-w-6xl mx-auto pb-12"
+            >
             
             {/* Contexto Cadastros: Sub-Navegação Compartilhada */}
             {["clients", "professionals", "permissions"].includes(activeTab) && (
@@ -5780,8 +5950,9 @@ export default function App() {
               </div>
             )}
 
-          </div>
-        </main>
+          </motion.div>
+        </AnimatePresence>
+      </main>
       </div>
     </div>
   );
