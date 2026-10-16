@@ -317,29 +317,74 @@ async function runSecurityTestSuite() {
     // =============================================================
     console.log("\n📌 Grupo 8: Fluxos legítimos de cadastro e autenticação de administrador funcionam");
 
-    // 8.1 Autenticação de Administrador via POST /api/auth/verify-admin
-    const resVerifyAdmin = await fetch(`${baseUrl}/api/auth/verify-admin`, {
+    // 8.1 Validação de Falha Segura do endpoint /api/auth/verify-admin quando ADMIN_PASSWORD não configurada
+    const originalAdminPass = process.env.ADMIN_PASSWORD;
+    delete process.env.ADMIN_PASSWORD;
+
+    const resVerifyAdminMissingPass = await fetch(`${baseUrl}/api/auth/verify-admin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ document: "369.111.218-84", password: "qualquer-senha-ou-configurada" })
+      body: JSON.stringify({ document: "369.111.218-84", password: "qualquer-senha" })
     });
-    // Se ADMIN_PASSWORD não estiver setada em env, aceita; se estiver, valida status
-    const dataVerifyAdmin = await resVerifyAdmin.json();
-    if (resVerifyAdmin.status === 200) {
-      assert(
-        dataVerifyAdmin.success === true && typeof dataVerifyAdmin.token === "string",
-        "POST /api/auth/verify-admin emite token de sessão criptografado válido",
-        "true + token",
-        `${dataVerifyAdmin.success} + ${typeof dataVerifyAdmin.token}`
-      );
+    assert(
+      resVerifyAdminMissingPass.status === 503,
+      "POST /api/auth/verify-admin falha de forma segura (503 Service Unavailable) se ADMIN_PASSWORD não estiver configurada",
+      "503",
+      String(resVerifyAdminMissingPass.status)
+    );
 
-      // Testa se o token emitido pelo endpoint verify-admin tem acesso administrativo
-      const resTestIssuedToken = await fetch(`${baseUrl}/api/postgres/system-logs`, {
-        headers: { "Authorization": `Bearer ${dataVerifyAdmin.token}` }
-      });
-      assert(resTestIssuedToken.status === 200, "Token emitido pelo verify-admin autentica rota administrativa", "200", String(resTestIssuedToken.status));
-    } else {
-      assert(resVerifyAdmin.status === 401, "POST /api/auth/verify-admin exige senha correta", "401", String(resVerifyAdmin.status));
+    // 8.2 Autenticação de Administrador com ADMIN_PASSWORD configurada
+    const testAdminSecret = "SuperSecureAdminPassword2026!";
+    process.env.ADMIN_PASSWORD = testAdminSecret;
+
+    // Tentativa com senha errada (deve retornar 401)
+    const resVerifyAdminWrongPass = await fetch(`${baseUrl}/api/auth/verify-admin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "369.111.218-84", password: "senha-completamente-incorreta" })
+    });
+    assert(
+      resVerifyAdminWrongPass.status === 401,
+      "POST /api/auth/verify-admin rejeita senha incorreta com 401",
+      "401",
+      String(resVerifyAdminWrongPass.status)
+    );
+
+    // Tentativa com senha correta (deve emitir token de administrador e retornar 200)
+    const resVerifyAdminSuccess = await fetch(`${baseUrl}/api/auth/verify-admin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "369.111.218-84", password: testAdminSecret })
+    });
+    assert(
+      resVerifyAdminSuccess.status === 200,
+      "POST /api/auth/verify-admin com credenciais corretas retorna 200",
+      "200",
+      String(resVerifyAdminSuccess.status)
+    );
+
+    const dataVerifyAdmin = await resVerifyAdminSuccess.json();
+    assert(
+      dataVerifyAdmin.success === true && typeof dataVerifyAdmin.token === "string",
+      "POST /api/auth/verify-admin emite token de sessão criptografado válido",
+      "true + token",
+      `${dataVerifyAdmin.success} + ${typeof dataVerifyAdmin.token}`
+    );
+
+    // Testa se o token emitido pelo endpoint verify-admin tem acesso administrativo
+    const resTestIssuedToken = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${dataVerifyAdmin.token}` }
+    });
+    assert(
+      resTestIssuedToken.status === 200,
+      "Token emitido pelo verify-admin autentica rota administrativa",
+      "200",
+      String(resTestIssuedToken.status)
+    );
+
+    // Restaura ambiente original
+    if (originalAdminPass) {
+      process.env.ADMIN_PASSWORD = originalAdminPass;
     }
 
     // 8.2 Auto-cadastro público (anônimo) força status 'pendente_autorizacao' e papel 'requisitante'
@@ -396,6 +441,8 @@ async function runSecurityTestSuite() {
 
   if (failed > 0) {
     process.exit(1);
+  } else {
+    process.exit(0);
   }
 }
 

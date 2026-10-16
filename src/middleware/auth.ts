@@ -16,8 +16,39 @@ export interface AuthRequest extends Request {
   user?: AuthenticatedUser;
 }
 
-// Chave secreta para assinatura criptográfica de tokens de sessão emitidos pelo servidor
-const SESSION_SECRET = process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || "s1gestaopro-secure-server-signing-secret-key-36911121884";
+declare global {
+  // eslint-disable-next-line no-var
+  var __ephemeralDevSessionSecret: string | undefined;
+}
+
+/**
+ * Obtém a chave secreta para assinatura criptográfica de tokens de sessão.
+ * NUNCA utiliza chaves padrão estáticas hardcoded no código.
+ * Exige SESSION_SECRET do ambiente. Em ambiente de produção, falha fatalmente se ausente.
+ * Em desenvolvimento/testes locais sem variável configurada, gera uma chave volátil
+ * em memória (512 bits) exclusiva para a instância em execução.
+ */
+export function getSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET;
+  if (secret && secret.trim().length >= 16) {
+    return secret.trim();
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "[FATAL SECURITY ERROR] SESSION_SECRET não configurado ou muito fraco (mínimo 16 caracteres). Defina a variável de ambiente SESSION_SECRET no painel de segredos do ambiente."
+    );
+  }
+
+  if (!globalThis.__ephemeralDevSessionSecret) {
+    console.warn(
+      "⚠️ [SEGURANÇA] SESSION_SECRET não fornecido no ambiente. Gerando chave volátil forte em memória (512 bits) para esta instância."
+    );
+    globalThis.__ephemeralDevSessionSecret = crypto.randomBytes(64).toString("hex");
+  }
+
+  return globalThis.__ephemeralDevSessionSecret;
+}
 
 /**
  * Emite um token de sessão assinado pelo servidor (HMAC-SHA256) com tempo de expiração
@@ -35,10 +66,11 @@ export function signServerSessionToken(
     iss: "s1gestaopro-backend"
   };
 
+  const secret = getSessionSecret();
   const b64Header = Buffer.from(JSON.stringify(header)).toString("base64url");
   const b64Payload = Buffer.from(JSON.stringify(fullPayload)).toString("base64url");
   const data = `${b64Header}.${b64Payload}`;
-  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(data).digest("base64url");
+  const signature = crypto.createHmac("sha256", secret).update(data).digest("base64url");
   return `${data}.${signature}`;
 }
 
@@ -51,7 +83,8 @@ export function verifyServerSessionToken(token: string): AuthenticatedUser | nul
     if (parts.length !== 3) return null;
     const [b64Header, b64Payload, signature] = parts;
     const data = `${b64Header}.${b64Payload}`;
-    const expectedSignature = crypto.createHmac("sha256", SESSION_SECRET).update(data).digest("base64url");
+    const secret = getSessionSecret();
+    const expectedSignature = crypto.createHmac("sha256", secret).update(data).digest("base64url");
 
     const sigBuf = Buffer.from(signature);
     const expBuf = Buffer.from(expectedSignature);

@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { 
@@ -122,6 +123,19 @@ const authRateLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: "Muitas tentativas de autenticação detectadas. Por favor, aguarde 15 minutos e tente novamente."
+  },
+  validate: { xForwardedForHeader: false }
+});
+
+// Limitação estrita para o endpoint administrativo contra ataques de força bruta
+const adminLoginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // Janela de 15 minutos
+  max: 5, // Máximo de 5 tentativas por janela
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Muitas tentativas de login de administrador. Por segurança, tente novamente após 15 minutos."
   },
   validate: { xForwardedForHeader: false }
 });
@@ -594,7 +608,7 @@ function isAllowedMessagingGateway(urlStr: string): boolean {
 }
 
 // Endpoint para validação segura de credenciais de Administrador via Backend
-app.post("/api/auth/verify-admin", (req, res) => {
+app.post("/api/auth/verify-admin", adminLoginRateLimiter, (req, res) => {
   try {
     const { document, password } = req.body;
     const normalizedDoc = (document || "").toString().replace(/\D/g, "");
@@ -608,12 +622,22 @@ app.post("/api/auth/verify-admin", (req, res) => {
       return res.status(400).json({ success: false, message: "Por favor, informe a senha de administrador." });
     }
 
-    // Se houver variável de ambiente ADMIN_PASSWORD definida, utiliza ela estritamente
+    // Regra de segurança: Se ADMIN_PASSWORD não estiver configurada no ambiente do servidor,
+    // o endpoint falha de forma segura rejeitando a autenticação e alertando o operador.
     const serverAdminPass = process.env.ADMIN_PASSWORD;
-    if (serverAdminPass) {
-      if (password !== serverAdminPass) {
-        return res.status(401).json({ success: false, message: "Senha de administrador incorreta." });
-      }
+    if (!serverAdminPass || serverAdminPass.trim() === "") {
+      console.error("🔒 [SEGURANÇA] Tentativa de login administrativo rejeitada: ADMIN_PASSWORD não configurada no ambiente.");
+      return res.status(503).json({
+        success: false,
+        message: "Autenticação administrativa desativada temporariamente: credenciais de administrador não foram configuradas no servidor."
+      });
+    }
+
+    // Comparação em tempo constante (timing-safe) para impedir ataques de temporização
+    const passBuf = Buffer.from(password);
+    const expectedBuf = Buffer.from(serverAdminPass);
+    if (passBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(passBuf, expectedBuf)) {
+      return res.status(401).json({ success: false, message: "Senha de administrador incorreta." });
     }
 
     const adminUser = {
