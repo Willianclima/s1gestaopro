@@ -16,27 +16,60 @@ export interface AuthRequest extends Request {
   user?: AuthenticatedUser;
 }
 
+export const VALID_ROLES = ["admin", "gestor", "gestor_servicos", "profissional", "requisitante"] as const;
+export type ValidRole = typeof VALID_ROLES[number];
+
 declare global {
   // eslint-disable-next-line no-var
   var __ephemeralDevSessionSecret: string | undefined;
 }
 
+// Armazenamento em memória para revogação imediata de sessões e tokens
+const revokedUidsBeforeTimestamp = new Map<string, number>();
+const revokedTokenSignatures = new Set<string>();
+
+/**
+ * Revoga todas as sessões ativas de um usuário emitidas antes do momento da revogação.
+ */
+export function revokeUserSessions(uid: string): void {
+  revokedUidsBeforeTimestamp.set(uid, Math.floor(Date.now() / 1000));
+}
+
+/**
+ * Revoga um token de sessão individual via assinatura criptográfica.
+ */
+export function revokeSessionToken(token: string): void {
+  const parts = token.split(".");
+  if (parts.length === 3) {
+    revokedTokenSignatures.add(parts[2]);
+  }
+}
+
+/**
+ * Limpa o registro de revogações (usado exclusivamente em ambiente isolado de testes).
+ */
+export function resetRevocationStore(): void {
+  revokedUidsBeforeTimestamp.clear();
+  revokedTokenSignatures.clear();
+}
+
 /**
  * Obtém a chave secreta para assinatura criptográfica de tokens de sessão.
  * NUNCA utiliza chaves padrão estáticas hardcoded no código.
- * Exige SESSION_SECRET do ambiente. Em ambiente de produção, falha fatalmente se ausente.
- * Em desenvolvimento/testes locais sem variável configurada, gera uma chave volátil
- * em memória (512 bits) exclusiva para a instância em execução.
+ * Exige SESSION_SECRET do ambiente com no mínimo 32 bytes de entropia (32 caracteres).
+ * Em ambiente de produção, falha fatalmente se ausente ou insuficiente.
+ * Em desenvolvimento/testes sem variável configurada, gera uma chave volátil
+ * em memória (512 bits / 64 bytes) exclusiva para a instância em execução.
  */
 export function getSessionSecret(): string {
   const secret = process.env.SESSION_SECRET;
-  if (secret && secret.trim().length >= 16) {
+  if (secret && secret.trim().length >= 32) {
     return secret.trim();
   }
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "[FATAL SECURITY ERROR] SESSION_SECRET não configurado ou muito fraco (mínimo 16 caracteres). Defina a variável de ambiente SESSION_SECRET no painel de segredos do ambiente."
+      "[FATAL SECURITY ERROR] SESSION_SECRET não configurado ou com entropia insuficiente em produção (mínimo exigido: 32 caracteres / 256 bits). Configure uma chave forte via variável de ambiente SESSION_SECRET."
     );
   }
 
@@ -75,13 +108,24 @@ export function signServerSessionToken(
 }
 
 /**
- * Valida a integridade, assinatura e validade temporal de um token de sessão emitido pelo servidor
+ * Valida a integridade, assinatura, emissor, expiração e integridade temporal de um token de sessão.
+ * Rejeita categoricamente:
+ * - Tokens sem assinatura ou com assinatura inválida (timing-safe check)
+ * - Headers com alg diferente de HS256 ou typ diferente de JWT
+ * - Tokens sem campo exp ou com exp expirado
+ * - Tokens sem campo iss ou com emissor diferente de 's1gestaopro-backend'
+ * - Tokens sem campo uid válido ou com perfil (role) fora da matriz permitida
+ * - Tokens expressamente revogados
  */
 export function verifyServerSessionToken(token: string): AuthenticatedUser | null {
   try {
+    if (!token || typeof token !== "string" || !token.includes(".")) return null;
     const parts = token.split(".");
     if (parts.length !== 3) return null;
     const [b64Header, b64Payload, signature] = parts;
+    if (!b64Header || !b64Payload || !signature) return null;
+
+    // 1. Verificação de integridade da assinatura criptográfica HMAC-SHA256 em tempo constante
     const data = `${b64Header}.${b64Payload}`;
     const secret = getSessionSecret();
     const expectedSignature = crypto.createHmac("sha256", secret).update(data).digest("base64url");
@@ -92,18 +136,59 @@ export function verifyServerSessionToken(token: string): AuthenticatedUser | nul
       return null;
     }
 
-    const payload = JSON.parse(Buffer.from(b64Payload, "base64url").toString("utf-8"));
+    // 2. Validação estrutural do cabeçalho JWT
+    const headerStr = Buffer.from(b64Header, "base64url").toString("utf-8");
+    const header = JSON.parse(headerStr);
+    if (!header || typeof header !== "object" || header.alg !== "HS256" || header.typ !== "JWT") {
+      return null;
+    }
+
+    // 3. Validação rigorosa dos campos do Payload
+    const payloadStr = Buffer.from(b64Payload, "base64url").toString("utf-8");
+    const payload = JSON.parse(payloadStr);
+    if (!payload || typeof payload !== "object") return null;
+
+    // 3.1 Emissor (iss) obrigatório e restrito
+    if (payload.iss !== "s1gestaopro-backend") {
+      return null;
+    }
+
+    // 3.2 Expiração (exp) obrigatória e temporalmente válida
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && payload.exp < now) {
-      return null; // Token expirado
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= now) {
+      return null; // Ausente, não numérico ou expirado
+    }
+
+    // 3.3 iat obrigatório e coerente
+    if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat) || payload.iat > now + 300) {
+      return null;
+    }
+
+    // 3.4 Identidade (uid) obrigatória
+    if (typeof payload.uid !== "string" || payload.uid.trim() === "") {
+      return null;
+    }
+
+    // 3.5 Papel (role) obrigatório e validado contra matriz
+    if (typeof payload.role !== "string" || !VALID_ROLES.includes(payload.role as ValidRole)) {
+      return null;
+    }
+
+    // 3.6 Checagem de revogação de sessão
+    if (revokedTokenSignatures.has(signature)) {
+      return null;
+    }
+    const userRevokedAt = revokedUidsBeforeTimestamp.get(payload.uid);
+    if (userRevokedAt !== undefined && payload.iat <= userRevokedAt) {
+      return null;
     }
 
     return {
-      uid: payload.uid,
-      email: payload.email,
-      name: payload.name,
-      document: payload.document,
-      role: payload.role,
+      uid: payload.uid.trim(),
+      email: typeof payload.email === "string" ? payload.email.trim() : undefined,
+      name: typeof payload.name === "string" ? payload.name.trim() : undefined,
+      document: typeof payload.document === "string" ? payload.document.trim() : undefined,
+      role: payload.role as ValidRole,
       authType: "server_session"
     };
   } catch {
@@ -140,6 +225,24 @@ export const requireAuth = async (
   // 1. Tenta verificar como token de sessão emitido pelo servidor
   const serverUser = verifyServerSessionToken(token);
   if (serverUser) {
+    // Para contas vinculadas a usuários do banco, valida status e sincroniza permissão atual
+    if (serverUser.uid !== "gestor-admin") {
+      try {
+        const dbProfile = await getUserByUid(serverUser.uid);
+        if (dbProfile) {
+          if (dbProfile.status === "bloqueado") {
+            return res.status(403).json({
+              error: "Acesso bloqueado: Esta conta está inativa ou suspensa pela administração."
+            });
+          }
+          if (dbProfile.userType) {
+            serverUser.role = dbProfile.userType as ValidRole;
+          }
+        }
+      } catch {
+        // Falha segura
+      }
+    }
     req.user = serverUser;
     return next();
   }
@@ -216,6 +319,22 @@ export const optionalAuth = async (
   // 1. Tenta sessão de servidor
   const serverUser = verifyServerSessionToken(token);
   if (serverUser) {
+    if (serverUser.uid !== "gestor-admin") {
+      try {
+        const dbProfile = await getUserByUid(serverUser.uid);
+        if (dbProfile) {
+          if (dbProfile.status === "bloqueado") {
+            req.user = undefined;
+            return next();
+          }
+          if (dbProfile.userType) {
+            serverUser.role = dbProfile.userType as ValidRole;
+          }
+        }
+      } catch {
+        // Ignora erro em optionalAuth
+      }
+    }
     req.user = serverUser;
     return next();
   }

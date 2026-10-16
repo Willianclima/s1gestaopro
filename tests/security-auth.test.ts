@@ -14,8 +14,15 @@
  */
 
 import http from "http";
+import crypto from "crypto";
 import { app } from "../server.ts";
-import { signServerSessionToken } from "../src/middleware/auth.ts";
+import {
+  signServerSessionToken,
+  getSessionSecret,
+  revokeSessionToken,
+  revokeUserSessions,
+  resetRevocationStore
+} from "../src/middleware/auth.ts";
 
 interface TestResult {
   name: string;
@@ -130,7 +137,7 @@ async function runSecurityTestSuite() {
     // =============================================================
     // GRUPO 2: Token inválido, expirado ou forjado é recusado (401)
     // =============================================================
-    console.log("\n📌 Grupo 2: Token inválido, expirado ou forjado é recusado (401)");
+    console.log("\n📌 Grupo 2: Token inválido, expirado, forjado ou malformado é recusado (401)");
 
     const resExpired = await fetch(`${baseUrl}/api/postgres/system-logs`, {
       headers: { "Authorization": `Bearer ${expiredToken}` }
@@ -146,6 +153,100 @@ async function runSecurityTestSuite() {
       headers: { "Authorization": `Bearer string-aleatoria-invalida` }
     });
     assert(resGarbage.status === 401, "Token de formato malformado é recusado", "401", String(resGarbage.status));
+
+    // 2.1 Token sem expiração (exp ausente) deve ser sumariamente recusado
+    const validSecret = getSessionSecret();
+    const validHeaderB64 = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+    
+    const payloadNoExp = {
+      uid: "user-no-exp",
+      role: "admin",
+      iss: "s1gestaopro-backend",
+      iat: Math.floor(Date.now() / 1000)
+    };
+    const b64NoExp = Buffer.from(JSON.stringify(payloadNoExp)).toString("base64url");
+    const sigNoExp = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64NoExp}`).digest("base64url");
+    const tokenWithoutExp = `${validHeaderB64}.${b64NoExp}.${sigNoExp}`;
+
+    const resNoExp = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenWithoutExp}` }
+    });
+    assert(resNoExp.status === 401, "Token sem campo 'exp' é expressamente recusado", "401", String(resNoExp.status));
+
+    // 2.2 Token com emissor incorreto (iss malicioso ou estranho)
+    const payloadWrongIss = {
+      uid: "user-wrong-iss",
+      role: "admin",
+      iss: "forged-issuer-s1",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64WrongIss = Buffer.from(JSON.stringify(payloadWrongIss)).toString("base64url");
+    const sigWrongIss = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64WrongIss}`).digest("base64url");
+    const tokenWrongIss = `${validHeaderB64}.${b64WrongIss}.${sigWrongIss}`;
+
+    const resWrongIss = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenWrongIss}` }
+    });
+    assert(resWrongIss.status === 401, "Token com emissor (iss) incorreto é recusado", "401", String(resWrongIss.status));
+
+    // 2.3 Token com emissor ausente
+    const payloadMissingIss = {
+      uid: "user-missing-iss",
+      role: "admin",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64MissingIss = Buffer.from(JSON.stringify(payloadMissingIss)).toString("base64url");
+    const sigMissingIss = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64MissingIss}`).digest("base64url");
+    const tokenMissingIss = `${validHeaderB64}.${b64MissingIss}.${sigMissingIss}`;
+
+    const resMissingIss = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenMissingIss}` }
+    });
+    assert(resMissingIss.status === 401, "Token sem campo 'iss' é recusado", "401", String(resMissingIss.status));
+
+    // 2.4 Token com papel fora da matriz autorizada (role: 'super_root')
+    const payloadInvalidRole = {
+      uid: "user-bad-role",
+      role: "super_root",
+      iss: "s1gestaopro-backend",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64InvalidRole = Buffer.from(JSON.stringify(payloadInvalidRole)).toString("base64url");
+    const sigInvalidRole = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64InvalidRole}`).digest("base64url");
+    const tokenInvalidRole = `${validHeaderB64}.${b64InvalidRole}.${sigInvalidRole}`;
+
+    const resInvalidRole = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenInvalidRole}` }
+    });
+    assert(resInvalidRole.status === 401, "Token com papel (role) inválido é recusado", "401", String(resInvalidRole.status));
+
+    // 2.5 Token revogado individualmente
+    const tokenToRevoke = signServerSessionToken({
+      uid: "user-revocation-test",
+      role: "admin"
+    });
+    revokeSessionToken(tokenToRevoke);
+
+    const resRevokedToken = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenToRevoke}` }
+    });
+    assert(resRevokedToken.status === 401, "Token de sessão revogado individualmente é recusado", "401", String(resRevokedToken.status));
+
+    // 2.6 Sessões do usuário revogadas em lote
+    const tokenBeforeUserRevoke = signServerSessionToken({
+      uid: "user-batch-revoke",
+      role: "admin"
+    });
+    // Aguarda 1 segundo para garantir que iat <= userRevokedAt
+    revokeUserSessions("user-batch-revoke");
+
+    const resUserRevoked = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenBeforeUserRevoke}` }
+    });
+    assert(resUserRevoked.status === 401, "Tokens anteriores à revogação de usuário são recusados", "401", String(resUserRevoked.status));
 
     // =============================================================
     // GRUPO 3: Cabeçalhos falsos e papéis adulterados não concedem acesso (401)
@@ -382,6 +483,45 @@ async function runSecurityTestSuite() {
       String(resTestIssuedToken.status)
     );
 
+    // 8.1.1 Teste de Rate Limiting Administrativo (Máximo de 5 tentativas por IP em 15 minutos)
+    // Já realizamos 3 tentativas (missing pass, wrong pass, success).
+    // Tentativa 4:
+    const resAttempt4 = await fetch(`${baseUrl}/api/auth/verify-admin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "369.111.218-84", password: testAdminSecret })
+    });
+    assert(resAttempt4.status === 200, "Tentativa 4/5 de login administrativo aceita pelo rate limiter", "200", String(resAttempt4.status));
+
+    // Tentativa 5:
+    const resAttempt5 = await fetch(`${baseUrl}/api/auth/verify-admin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "369.111.218-84", password: testAdminSecret })
+    });
+    assert(resAttempt5.status === 200, "Tentativa 5/5 de login administrativo aceita pelo rate limiter", "200", String(resAttempt5.status));
+
+    // Tentativa 6: Deve ser bloqueada com status 429 Too Many Requests
+    const resAttempt6Exceeded = await fetch(`${baseUrl}/api/auth/verify-admin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "369.111.218-84", password: testAdminSecret })
+    });
+    assert(
+      resAttempt6Exceeded.status === 429,
+      "adminLoginRateLimiter bloqueia 6ª tentativa consecutiva com HTTP 429 (Too Many Requests)",
+      "429",
+      String(resAttempt6Exceeded.status)
+    );
+
+    const rateLimitData = await resAttempt6Exceeded.json();
+    assert(
+      rateLimitData.success === false && typeof rateLimitData.message === "string" && rateLimitData.message.includes("Muitas tentativas"),
+      "adminLoginRateLimiter retorna payload seguro informando bloqueio de tentativas",
+      "success: false + mensagem de bloqueio",
+      `${rateLimitData.success} + ${rateLimitData.message}`
+    );
+
     // Restaura ambiente original
     if (originalAdminPass) {
       process.env.ADMIN_PASSWORD = originalAdminPass;
@@ -392,7 +532,7 @@ async function runSecurityTestSuite() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: "Cidadão Teste Auto Cadastro",
+        name: "Cidadão Teste Auto Cadastro Isolado",
         document: "123.456.789-00",
         phone: "(18) 99999-8888",
         status: "ativo", // Tentativa de auto-aprovação maliciosa
@@ -413,6 +553,15 @@ async function runSecurityTestSuite() {
       "requisitante",
       String(autoCadData.usuario?.userType)
     );
+
+    // Limpeza segura e imediata do registro de teste gerado no banco persistente
+    if (autoCadData?.usuario?.id) {
+      const resCleanup = await fetch(`${baseUrl}/api/usuarios/${autoCadData.usuario.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${adminToken}` }
+      });
+      assert(resCleanup.status === 200, "Limpeza segura de registros de teste concluída sem persistência residual (DELETE)", "200", String(resCleanup.status));
+    }
 
     // 8.3 Rota pública de validação de CPF (suporte ao auto-cadastro)
     const resValidateCpf = await fetch(`${baseUrl}/api/gemini/validate-cpf`, {
