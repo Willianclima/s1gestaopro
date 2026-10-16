@@ -28,6 +28,15 @@ import {
   upsertUser
 } from "./src/db/repository.ts";
 import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
+import {
+  requireAuth,
+  optionalAuth,
+  requireRole,
+  requireAdmin,
+  requireGestorOrAdmin,
+  signServerSessionToken,
+  AuthRequest
+} from "./src/middleware/auth.ts";
 
 dotenv.config();
 
@@ -120,19 +129,6 @@ const authRateLimiter = rateLimit({
 app.use("/api/", apiRateLimiter);
 app.use("/api/auth/", authRateLimiter);
 
-// 4. Middleware de Autenticação Obrigatória para Rotas Sensíveis
-function requireApiAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const authHeader = req.headers["authorization"] || req.headers["x-app-auth"] || req.headers["x-user-role"];
-  
-  if (!authHeader) {
-    return res.status(401).json({
-      error: "Acesso negado: Esta rota da API requer autenticação prévia com token de usuário ou credencial válida."
-    });
-  }
-  
-  next();
-}
-
 const PORT = 3000;
 
 // Lazy initialize Gemini client to prevent startup crash if GEMINI_API_KEY is missing
@@ -218,12 +214,22 @@ async function generateContentWithRetry(ai: any, model: string, contents: string
 }
 
 // API: AI Service Assistants
-app.post("/api/gemini/assist", requireApiAuth, async (req, res) => {
+app.post("/api/gemini/assist", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const { action, title, clientName, price, category, description, categoriesList, professionalsList, teamsList } = req.body;
     
     if (!action) {
       return res.status(400).json({ error: "Parâmetro 'action' é obrigatório." });
+    }
+
+    // Auditoria de logs do sistema via IA é estritamente restrita a Administradores e Gestores
+    if (action === "analyze_system_logs") {
+      const userRole = req.user?.role || "";
+      if (!["admin", "gestor", "gestor_servicos"].includes(userRole)) {
+        return res.status(403).json({
+          error: "Acesso negado: Auditoria de logs de auditoria via IA é restrita aos perfis de Gestor e Administrador."
+        });
+      }
     }
 
     // 1. Verificar Cache Local para otimização e mitigação de indisponibilidade
@@ -610,17 +616,30 @@ app.post("/api/auth/verify-admin", (req, res) => {
       }
     }
 
+    const adminUser = {
+      id: "gestor-admin",
+      name: "Willian C. Lima",
+      document: normalizedDoc === "36911121884" ? "369.111.218-84" : "999.999.999-99",
+      userType: "admin"
+    };
+
+    // Emissão de token criptográfico assinado pelo servidor (HMAC-SHA256)
+    const token = signServerSessionToken({
+      uid: "gestor-admin",
+      email: "willianclima@gmail.com",
+      name: adminUser.name,
+      document: adminUser.document,
+      role: "admin"
+    });
+
     return res.json({
       success: true,
-      user: {
-        id: "gestor-admin",
-        name: "Willian C. Lima",
-        document: normalizedDoc === "36911121884" ? "369.111.218-84" : "999.999.999-99",
-        userType: "admin"
-      }
+      token,
+      user: adminUser
     });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: "Erro ao processar autenticação do administrador." });
+    console.error("Erro na autenticação de administrador:", error);
+    return res.status(500).json({ success: false, message: "Erro interno no servidor ao processar autenticação." });
   }
 });
 
@@ -629,127 +648,216 @@ app.post("/api/auth/verify-admin", (req, res) => {
 // ==========================================
 
 // 0. AUTH USER PROFILES (GET /api/postgres/users/:uid & POST /api/postgres/users)
-app.get("/api/postgres/users/:uid", async (req, res) => {
+app.get("/api/postgres/users/:uid", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const { uid } = req.params;
+    const isSelf = req.user!.uid === uid;
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    if (!isSelf && !isPrivileged) {
+      return res.status(403).json({ error: "Acesso negado: Você só pode consultar seu próprio perfil de usuário." });
+    }
+
     const userProfile = await getUserByUid(uid);
     if (!userProfile) {
       return res.status(404).json({ error: "Perfil de usuário não encontrado no PostgreSQL" });
     }
     res.json(userProfile);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar perfil no PostgreSQL" });
+    console.error("Erro ao buscar perfil no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar perfil." });
   }
 });
 
-app.post("/api/postgres/users", async (req, res) => {
+app.post("/api/postgres/users", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const body = req.body;
     if (!body || !body.uid || !body.email) {
       return res.status(400).json({ error: "Os campos 'uid' e 'email' são obrigatórios." });
     }
+
+    const isSelf = req.user!.uid === body.uid;
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    if (!isSelf && !isPrivileged) {
+      return res.status(403).json({ error: "Acesso negado: Você só pode atualizar seu próprio perfil de usuário." });
+    }
+
+    // Prevenção de escalada de privilégios (Privilege Escalation Protection)
+    if (!isPrivileged) {
+      body.userType = "requisitante";
+      body.status = "ativo";
+    }
+
     const savedUser = await upsertUser(body);
     res.json({ success: true, user: savedUser, profile: savedUser });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao salvar perfil no PostgreSQL" });
+    console.error("Erro ao salvar perfil no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao salvar perfil." });
   }
 });
 
 // 1. READ ALL (GET /api/usuarios, /api/postgres/usuarios, /api/postgres/clients)
-app.get(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], requireApiAuth, async (req, res) => {
+app.get(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const usuariosList = await getAllUsuarios();
-    res.json(usuariosList);
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    if (isPrivileged || req.user!.role === "profissional") {
+      return res.json(usuariosList);
+    }
+
+    // Requisitante comum vê apenas seu próprio registro (Regra de Isolamento por Registro)
+    const userUid = req.user!.uid;
+    const userDoc = req.user!.document ? req.user!.document.replace(/\D/g, "") : "";
+    const userEmail = (req.user!.email || "").toLowerCase();
+
+    const filtered = usuariosList.filter(u => {
+      const docMatch = userDoc && u.document && u.document.replace(/\D/g, "") === userDoc;
+      const emailMatch = userEmail && u.email && u.email.toLowerCase() === userEmail;
+      return u.id === userUid || docMatch || emailMatch;
+    });
+
+    res.json(filtered);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar usuários no PostgreSQL" });
+    console.error("Erro ao buscar usuários no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar usuários." });
   }
 });
 
 // 2. READ BY ID (GET /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
-app.get(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+app.get(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    const isSelf = req.user!.uid === id || (req.user!.document && req.user!.document.replace(/\D/g, "") === id.replace(/\D/g, ""));
+
+    if (!isPrivileged && !isSelf && req.user!.role !== "profissional") {
+      return res.status(403).json({ error: "Acesso negado: Você só pode consultar seu próprio cadastro." });
+    }
+
     const usuario = await getUsuarioById(id);
     if (!usuario) {
       return res.status(404).json({ error: "Usuário não encontrado" });
     }
     res.json(usuario);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar usuário por ID no PostgreSQL" });
+    console.error("Erro ao buscar usuário por ID no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar usuário." });
   }
 });
 
 // 3. CREATE (POST /api/usuarios, /api/postgres/usuarios, /api/postgres/clients)
-app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], requireApiAuth, async (req, res) => {
+// Permite auto-cadastro público (optionalAuth) com regras estritas: status sempre "pendente_autorizacao" e papel "requisitante"
+app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], optionalAuth as any, async (req: AuthRequest, res) => {
   try {
     const body = req.body;
     if (!body || typeof body !== "object") {
       return res.status(400).json({ error: "O corpo da requisição é obrigatório" });
     }
-    if (!body.name) {
+    if (!body.name || typeof body.name !== "string" || body.name.trim() === "") {
       return res.status(400).json({ error: "O campo 'name' (nome do usuário) é obrigatório." });
+    }
+
+    const isPrivileged = req.user && ["admin", "gestor", "gestor_servicos"].includes(req.user.role);
+    let finalStatus = body.status || "ativo";
+    let finalUserType = body.userType || "requisitante";
+
+    // Se a criação for feita por auto-cadastro anônimo ou usuário comum, força pendente e requisitante
+    if (!isPrivileged) {
+      finalStatus = "pendente_autorizacao";
+      finalUserType = "requisitante";
     }
 
     const usuarioData = {
       ...body,
-      id: body.id || `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: body.id || (req.user ? req.user.uid : `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`),
+      status: finalStatus,
+      userType: finalUserType
     };
 
     const usuario = await upsertUsuario(usuarioData);
     res.status(201).json({ success: true, usuario, client: usuario });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao criar usuário no PostgreSQL" });
+    console.error("Erro ao criar usuário no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao criar usuário." });
   }
 });
 
 // 4. UPDATE (PUT /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
-app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const body = req.body || {};
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    const isSelf = req.user!.uid === id;
+
+    if (!isPrivileged && !isSelf) {
+      return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+    }
+
     const existing = await getUsuarioById(id);
     if (!existing) {
       return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
 
+    const safeBody = { ...body };
+    // Usuários não privilegiados não podem auto-aprovar (mudar status para ativo) nem alterar o próprio papel
+    if (!isPrivileged) {
+      delete safeBody.status;
+      delete safeBody.userType;
+    }
+
     const updatedData = {
       ...existing,
-      ...body,
+      ...safeBody,
       id, // Preserva o ID da URL
     };
 
     const usuario = await upsertUsuario(updatedData);
     res.json({ success: true, usuario, client: usuario });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao atualizar usuário no PostgreSQL" });
+    console.error("Erro ao atualizar usuário no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao atualizar usuário." });
   }
 });
 
 // 5. UPDATE PARCIAL (PATCH /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
-app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const body = req.body || {};
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    const isSelf = req.user!.uid === id;
+
+    if (!isPrivileged && !isSelf) {
+      return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+    }
+
     const existing = await getUsuarioById(id);
     if (!existing) {
       return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
 
+    const safeBody = { ...body };
+    if (!isPrivileged) {
+      delete safeBody.status;
+      delete safeBody.userType;
+    }
+
     const updatedData = {
       ...existing,
-      ...body,
-      id, // Preserva o ID da URL
+      ...safeBody,
+      id,
     };
 
     const usuario = await upsertUsuario(updatedData);
     res.json({ success: true, usuario, client: usuario });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao atualizar usuário no PostgreSQL" });
+    console.error("Erro ao atualizar usuário no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao atualizar usuário." });
   }
 });
 
 // 6. DELETE (DELETE /api/usuarios/:id, /api/postgres/usuarios/:id, /api/postgres/clients/:id)
-app.delete(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireApiAuth, async (req, res) => {
+app.delete(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const deleted = await deleteUsuario(id);
@@ -758,142 +866,219 @@ app.delete(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cl
     }
     res.json({ success: true, message: "Usuário removido com sucesso", id });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao remover usuário no PostgreSQL" });
+    console.error("Erro ao remover usuário no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao remover usuário." });
   }
 });
 
 // GET /api/postgres/service-orders
-app.get("/api/postgres/service-orders", requireApiAuth, async (req, res) => {
+app.get("/api/postgres/service-orders", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const orders = await getAllServiceOrders();
-    res.json(orders);
+    const role = req.user!.role;
+
+    if (["admin", "gestor", "gestor_servicos"].includes(role)) {
+      return res.json(orders);
+    }
+
+    if (role === "profissional") {
+      const userUid = req.user!.uid.toLowerCase();
+      const userName = (req.user!.name || "").toLowerCase();
+      const userEmail = (req.user!.email || "").toLowerCase();
+      const filtered = orders.filter(o => {
+        const assigned = (o.assignedTo || "").toLowerCase();
+        return (
+          (userUid && assigned === userUid) ||
+          (userName && assigned.includes(userName)) ||
+          (userEmail && assigned === userEmail)
+        );
+      });
+      return res.json(filtered);
+    }
+
+    // Requisitante comum vê apenas chamados criados por ele
+    const userUid = req.user!.uid;
+    const filtered = orders.filter(o => {
+      return o.clientId === userUid || (o as any).createdByUid === userUid;
+    });
+    res.json(filtered);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar ordens de serviço no PostgreSQL" });
+    console.error("Erro ao buscar ordens de serviço no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar ordens de serviço." });
   }
 });
 
 // POST /api/postgres/service-orders
-app.post("/api/postgres/service-orders", requireApiAuth, async (req, res) => {
+app.post("/api/postgres/service-orders", requireAuth as any, async (req: AuthRequest, res) => {
   try {
-    const order = await upsertServiceOrder(req.body);
+    const role = req.user!.role;
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(role);
+    const body = { ...req.body };
+
+    if (!isPrivileged) {
+      if (role === "profissional") {
+        if (!body.id) {
+          return res.status(403).json({ error: "Acesso negado: Profissionais não podem criar novas ordens diretamente." });
+        }
+        const existingOrders = await getAllServiceOrders();
+        const existing = existingOrders.find(o => o.id === body.id);
+        if (!existing) {
+          return res.status(404).json({ error: "Ordem de serviço não encontrada." });
+        }
+        const assigned = (existing.assignedTo || "").toLowerCase();
+        const isAssigned = (
+          assigned === req.user!.uid.toLowerCase() ||
+          (req.user!.name && assigned.includes(req.user!.name.toLowerCase())) ||
+          (req.user!.email && assigned === req.user!.email.toLowerCase())
+        );
+        if (!isAssigned) {
+          return res.status(403).json({ error: "Acesso negado: Você só pode atualizar ordens atribuídas a você." });
+        }
+        // Impede que o técnico transfira a ordem para outra pessoa
+        body.assignedTo = existing.assignedTo;
+        body.clientId = existing.clientId;
+      } else {
+        // Requisitante comum: ordem vinculada estritamente ao seu UID
+        body.clientId = req.user!.uid;
+        body.createdByUid = req.user!.uid;
+      }
+    }
+
+    const order = await upsertServiceOrder(body);
     res.json({ success: true, order });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao salvar ordem de serviço no PostgreSQL" });
+    console.error("Erro ao salvar ordem de serviço no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao salvar ordem de serviço." });
   }
 });
 
 // GET /api/postgres/system-logs
-app.get("/api/postgres/system-logs", requireApiAuth, async (req, res) => {
+app.get("/api/postgres/system-logs", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const logs = await getAllSystemLogs();
     res.json(logs);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar logs no PostgreSQL" });
+    console.error("Erro ao buscar logs no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar logs." });
   }
 });
 
 // POST /api/postgres/system-logs
-app.post("/api/postgres/system-logs", requireApiAuth, async (req, res) => {
+app.post("/api/postgres/system-logs", requireAuth as any, async (req: AuthRequest, res) => {
   try {
-    const log = await insertSystemLog(req.body);
+    const logData = {
+      ...req.body,
+      userId: req.user!.uid
+    };
+    const log = await insertSystemLog(logData);
     res.json({ success: true, log });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao gravar log no PostgreSQL" });
+    console.error("Erro ao gravar log no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao gravar log." });
   }
 });
 
 // GET /api/postgres/login-attempts
-app.get("/api/postgres/login-attempts", requireApiAuth, async (req, res) => {
+app.get("/api/postgres/login-attempts", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const attempts = await getAllLoginAttempts();
     res.json(attempts);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar tentativas de login no PostgreSQL" });
+    console.error("Erro ao buscar tentativas de login no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar tentativas de login." });
   }
 });
 
 // POST /api/postgres/login-attempts
-app.post("/api/postgres/login-attempts", requireApiAuth, async (req, res) => {
+app.post("/api/postgres/login-attempts", optionalAuth as any, async (req: AuthRequest, res) => {
   try {
     const attempt = await insertLoginAttempt(req.body);
     res.json({ success: true, attempt });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao registrar tentativa de login no PostgreSQL" });
+    console.error("Erro ao registrar tentativa de login no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao registrar tentativa de login." });
   }
 });
 
 // GET /api/postgres/access-profiles
-app.get("/api/postgres/access-profiles", requireApiAuth, async (req, res) => {
+app.get("/api/postgres/access-profiles", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const profiles = await getAllAccessProfiles();
     res.json(profiles);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar perfis no PostgreSQL" });
+    console.error("Erro ao buscar perfis no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar perfis." });
   }
 });
 
-// POST /api/postgres/access-profiles
-app.post("/api/postgres/access-profiles", requireApiAuth, async (req, res) => {
+// POST /api/postgres/access-profiles (Restrito exclusivamente a Administradores)
+app.post("/api/postgres/access-profiles", requireAuth as any, requireAdmin as any, async (req: AuthRequest, res) => {
   try {
     const profile = await upsertAccessProfile(req.body);
     res.json({ success: true, profile });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao salvar perfil no PostgreSQL" });
+    console.error("Erro ao salvar perfil no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao salvar perfil." });
   }
 });
 
 // GET /api/postgres/professionals
-app.get("/api/postgres/professionals", requireApiAuth, async (req, res) => {
+app.get("/api/postgres/professionals", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const profs = await getAllProfessionals();
     res.json(profs);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar profissionais no PostgreSQL" });
+    console.error("Erro ao buscar profissionais no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar profissionais." });
   }
 });
 
 // POST /api/postgres/professionals
-app.post("/api/postgres/professionals", requireApiAuth, async (req, res) => {
+app.post("/api/postgres/professionals", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const prof = await upsertProfessional(req.body);
     res.json({ success: true, prof });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao salvar profissional no PostgreSQL" });
+    console.error("Erro ao salvar profissional no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao salvar profissional." });
   }
 });
 
 // GET /api/postgres/service-categories
-app.get("/api/postgres/service-categories", requireApiAuth, async (req, res) => {
+app.get("/api/postgres/service-categories", requireAuth as any, async (req: AuthRequest, res) => {
   try {
     const cats = await getAllServiceCategories();
     res.json(cats);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao buscar categorias no PostgreSQL" });
+    console.error("Erro ao buscar categorias no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar categorias." });
   }
 });
 
 // POST /api/postgres/service-categories
-app.post("/api/postgres/service-categories", requireApiAuth, async (req, res) => {
+app.post("/api/postgres/service-categories", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const cat = await upsertServiceCategory(req.body);
     res.json({ success: true, cat });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao salvar categoria no PostgreSQL" });
+    console.error("Erro ao salvar categoria no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao salvar categoria." });
   }
 });
 
-// POST /api/postgres/migrate-from-firestore (Trigger ETL Migration)
-app.post("/api/postgres/migrate-from-firestore", requireApiAuth, async (req, res) => {
+// POST /api/postgres/migrate-from-firestore (Trigger ETL Migration - Restrito estritamente a Administradores)
+app.post("/api/postgres/migrate-from-firestore", requireAuth as any, requireAdmin as any, async (req: AuthRequest, res) => {
   try {
     const result = await runFirestoreToPostgresMigration();
     res.json(result);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || "Erro ao executar migração ETL do Firestore para o PostgreSQL" });
+    console.error("Erro ao executar migração ETL:", error);
+    res.status(500).json({ error: "Erro interno ao executar migração ETL do Firestore para o PostgreSQL." });
   }
 });
 
-// Proxy route for secure WhatsApp API calls (avoiding CORS and browser limits)
-app.post("/api/whatsapp/proxy", requireApiAuth, async (req, res) => {
+// Proxy route for secure WhatsApp API calls (Restrito a Gestores e Administradores)
+app.post("/api/whatsapp/proxy", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const { url, method, headers, body } = req.body;
     
@@ -975,7 +1160,7 @@ app.post("/api/whatsapp/proxy", requireApiAuth, async (req, res) => {
     return res.status(500).json({
       ok: false,
       status: 500,
-      error: error.message || "Erro interno de rede ao tentar encaminhar requisição do WhatsApp"
+      error: "Erro interno no servidor ao tentar encaminhar requisição do WhatsApp"
     });
   }
 });
@@ -1003,6 +1188,13 @@ async function setupServer() {
   });
 }
 
-setupServer().catch((err) => {
-  console.error("Falha ao inicializar o servidor Express:", err);
-});
+// Export app instance for automated security tests
+export { app };
+
+const isDirectRun = process.env.NODE_ENV !== "test" && (!process.argv[1] || process.argv[1].endsWith("server.ts") || process.argv[1].endsWith("server.cjs"));
+
+if (isDirectRun) {
+  setupServer().catch((err) => {
+    console.error("Falha ao inicializar o servidor Express:", err);
+  });
+}

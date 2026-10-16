@@ -26,8 +26,9 @@ setPersistence(auth, browserLocalPersistence).catch(err => {
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/gmail.send');
 
-let isSigningIn = false;
+import { setAuthToken, clearAuthToken, getApiAuthHeaders } from './apiAuth';
 let cachedAccessToken: string | null = null;
+let isSigningIn = false;
 
 export interface UserProfileData {
   uid: string;
@@ -49,7 +50,13 @@ export interface UserProfileData {
  */
 export const getUserProfile = async (uid: string): Promise<UserProfileData | null> => {
   try {
-    const res = await fetch(`/api/postgres/users/${encodeURIComponent(uid)}`);
+    let token = auth.currentUser ? await auth.currentUser.getIdToken().catch(() => "") : "";
+    if (token) setAuthToken(token);
+    const headers = getApiAuthHeaders();
+
+    const res = await fetch(`/api/postgres/users/${encodeURIComponent(uid)}`, {
+      headers
+    });
     if (res.ok) {
       const data = await res.json();
       return data as UserProfileData;
@@ -68,9 +75,13 @@ export const getUserProfile = async (uid: string): Promise<UserProfileData | nul
  */
 export const saveUserProfile = async (profile: UserProfileData): Promise<void> => {
   try {
+    let token = auth.currentUser ? await auth.currentUser.getIdToken().catch(() => "") : "";
+    if (token) setAuthToken(token);
+    const headers = getApiAuthHeaders();
+
     await fetch('/api/postgres/users', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(profile)
     });
   } catch (err) {
@@ -229,6 +240,7 @@ export const getAccessToken = async (): Promise<string | null> => {
 export const logoutUser = async () => {
   await signOut(auth);
   cachedAccessToken = null;
+  clearAuthToken();
 };
 
 /**

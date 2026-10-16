@@ -142,7 +142,10 @@ export async function getAllUsuarios(): Promise<Client[]> {
 
 export async function upsertUsuario(usuario: Client) {
   try {
-    const { id, name, document, phone, email, address, ...extraData } = usuario;
+    const { id, name, document, phone, email, address, status, userType, ...extraData } = usuario;
+    const finalStatus = status || "ativo";
+    const finalUserType = userType || "requisitante";
+
     const result = await db.insert(usuarios)
       .values({
         id,
@@ -151,7 +154,13 @@ export async function upsertUsuario(usuario: Client) {
         phone: phone || "",
         email: email || "",
         address: address || "",
-        data: extraData,
+        status: finalStatus,
+        userType: finalUserType,
+        data: {
+          ...extraData,
+          status: finalStatus,
+          userType: finalUserType
+        },
       })
       .onConflictDoUpdate({
         target: usuarios.id,
@@ -161,11 +170,31 @@ export async function upsertUsuario(usuario: Client) {
           phone: phone || "",
           email: email || "",
           address: address || "",
-          data: extraData,
+          status: finalStatus,
+          userType: finalUserType,
+          data: {
+            ...extraData,
+            status: finalStatus,
+            userType: finalUserType
+          },
         },
       })
       .returning();
-    return result[0];
+
+    const r = result[0];
+    return {
+      id: r.id,
+      name: r.name,
+      document: r.document || "",
+      phone: r.phone || "",
+      email: r.email || "",
+      address: r.address || "",
+      status: r.status || (r.data as any)?.status || finalStatus,
+      userType: r.userType || (r.data as any)?.userType || finalUserType,
+      notes: (r.data as any)?.notes || "",
+      createdAt: (r.data as any)?.createdAt || r.createdAt?.toISOString() || new Date().toISOString(),
+      ...(r.data as any || {}),
+    };
   } catch (error) {
     console.error("Database error in upsertUsuario:", error);
     throw new Error("Erro ao salvar usuário no PostgreSQL.", { cause: error });

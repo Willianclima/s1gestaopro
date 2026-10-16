@@ -2301,6 +2301,9 @@ export default function App() {
         
         if (res.ok && data.success && data.user) {
           const adminUser: CurrentUser = data.user;
+          if (data.token) {
+            localStorage.setItem("service_mgt_auth_token", data.token);
+          }
           setCurrentUser(adminUser);
           localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
           setLoginError("");
@@ -3113,6 +3116,7 @@ export default function App() {
     await logoutUser();
     setCurrentUser(null);
     localStorage.removeItem("service_mgt_logged_user");
+    localStorage.removeItem("service_mgt_auth_token");
     setConsentCheck(false);
   };
 

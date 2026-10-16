@@ -15,7 +15,8 @@
     "db:seed": "tsx scripts/init-local-data-postgres.ts",
     "clean": "rm -rf dist server.js",
     "firestore:indexes": "tsx scripts/manage-firestore-indexes.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:security": "tsx tests/security-auth.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
