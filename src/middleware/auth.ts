@@ -25,23 +25,90 @@ declare global {
 }
 
 // Armazenamento em memória para revogação imediata de sessões e tokens
+// NOTA DE ARQUITETURA DISTRIBUÍDA:
+// Em ambiente com múltiplas réplicas/instâncias em balanceador de carga, os conjuntos em memória
+// operam localmente por processo. Para clusterização horizontal em produção, as revogações
+// devem ser sincronizadas via Redis compartilhado ou coluna 'sessions_revoked_at' no PostgreSQL.
 const revokedUidsBeforeTimestamp = new Map<string, number>();
 const revokedTokenSignatures = new Set<string>();
+const revokedJtis = new Set<string>();
+
+/**
+ * Calcula a entropia de Shannon (bits por caractere) de uma string.
+ */
+export function calculateShannonEntropy(str: string): number {
+  if (!str) return 0;
+  const frequencies = new Map<string, number>();
+  for (const char of str) {
+    frequencies.set(char, (frequencies.get(char) || 0) + 1);
+  }
+  let entropy = 0;
+  const len = str.length;
+  for (const count of frequencies.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+/**
+ * Valida a entropia real da chave secreta.
+ * Rejeita segredos com:
+ * - Menos de 32 caracteres
+ * - Menos de 10 caracteres únicos
+ * - Entropia de Shannon inferior a 3.0 bits/caractere (evita passphrases repetitivas como '12341234...' ou 'aaaa...')
+ */
+export function validateSecretEntropy(secret: string): { valid: boolean; reason?: string } {
+  if (!secret || secret.trim().length < 32) {
+    return { valid: false, reason: "Tamanho inferior a 32 caracteres (mínimo de 256 bits)." };
+  }
+  const trimmed = secret.trim();
+  const uniqueChars = new Set(trimmed).size;
+  if (uniqueChars < 10) {
+    return { valid: false, reason: `Variedade insuficiente de caracteres (${uniqueChars} caracteres distintos; mínimo exigido: 10).` };
+  }
+  const entropy = calculateShannonEntropy(trimmed);
+  if (entropy < 3.0) {
+    return {
+      valid: false,
+      reason: `Entropia criptográfica insuficiente (${entropy.toFixed(2)} bits/char; mínimo exigido: 3.0). Gere via 'openssl rand -hex 32' (64 chars hexadecimais = 256 bits reais de entropia).`
+    };
+  }
+  return { valid: true };
+}
 
 /**
  * Revoga todas as sessões ativas de um usuário emitidas antes do momento da revogação.
+ * Funciona para qualquer UID, incluindo a conta especial de administrador mestre ('gestor-admin').
  */
 export function revokeUserSessions(uid: string): void {
   revokedUidsBeforeTimestamp.set(uid, Math.floor(Date.now() / 1000));
 }
 
 /**
- * Revoga um token de sessão individual via assinatura criptográfica.
+ * Revoga um token de sessão individual via assinatura criptográfica e JTI (se presente).
  */
 export function revokeSessionToken(token: string): void {
   const parts = token.split(".");
   if (parts.length === 3) {
     revokedTokenSignatures.add(parts[2]);
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+      if (payload?.jti && typeof payload.jti === "string") {
+        revokedJtis.add(payload.jti);
+      }
+    } catch {
+      // Ignora falha de parse
+    }
+  }
+}
+
+/**
+ * Revoga um token de sessão diretamente pelo seu identificador único JTI.
+ */
+export function revokeTokenByJti(jti: string): void {
+  if (jti && typeof jti === "string") {
+    revokedJtis.add(jti.trim());
   }
 }
 
@@ -51,31 +118,44 @@ export function revokeSessionToken(token: string): void {
 export function resetRevocationStore(): void {
   revokedUidsBeforeTimestamp.clear();
   revokedTokenSignatures.clear();
+  revokedJtis.clear();
 }
 
 /**
  * Obtém a chave secreta para assinatura criptográfica de tokens de sessão.
  * NUNCA utiliza chaves padrão estáticas hardcoded no código.
- * Exige SESSION_SECRET do ambiente com no mínimo 32 bytes de entropia (32 caracteres).
- * Em ambiente de produção, falha fatalmente se ausente ou insuficiente.
+ * Exige SESSION_SECRET do ambiente com alta entropia criptográfica real (mínimo 32 caracteres / 256 bits).
+ * Em ambiente de produção, falha fatalmente se ausente ou com entropia insuficiente.
  * Em desenvolvimento/testes sem variável configurada, gera uma chave volátil
- * em memória (512 bits / 64 bytes) exclusiva para a instância em execução.
+ * em memória (512 bits / 64 bytes criptográficos) exclusiva para a instância em execução.
  */
 export function getSessionSecret(): string {
   const secret = process.env.SESSION_SECRET;
-  if (secret && secret.trim().length >= 32) {
+  if (secret) {
+    const entropyCheck = validateSecretEntropy(secret);
+    if (entropyCheck.valid) {
+      return secret.trim();
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        `[FATAL SECURITY ERROR] SESSION_SECRET com entropia insuficiente em produção: ${entropyCheck.reason} Gere uma chave forte via 'openssl rand -hex 32'.`
+      );
+    }
+    console.warn(
+      `⚠️ [SEGURANÇA] SESSION_SECRET fornecido possui baixa entropia (${entropyCheck.reason}). Recomendado gerar via 'openssl rand -hex 32'.`
+    );
     return secret.trim();
   }
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "[FATAL SECURITY ERROR] SESSION_SECRET não configurado ou com entropia insuficiente em produção (mínimo exigido: 32 caracteres / 256 bits). Configure uma chave forte via variável de ambiente SESSION_SECRET."
+      "[FATAL SECURITY ERROR] SESSION_SECRET não configurado em produção. Configure uma chave com alta entropia real via 'openssl rand -hex 32'."
     );
   }
 
   if (!globalThis.__ephemeralDevSessionSecret) {
     console.warn(
-      "⚠️ [SEGURANÇA] SESSION_SECRET não fornecido no ambiente. Gerando chave volátil forte em memória (512 bits) para esta instância."
+      "⚠️ [SEGURANÇA] SESSION_SECRET não fornecido no ambiente. Gerando chave volátil forte em memória (512 bits / 64 bytes criptográficos) para esta instância."
     );
     globalThis.__ephemeralDevSessionSecret = crypto.randomBytes(64).toString("hex");
   }
@@ -84,15 +164,17 @@ export function getSessionSecret(): string {
 }
 
 /**
- * Emite um token de sessão assinado pelo servidor (HMAC-SHA256) com tempo de expiração
+ * Emite um token de sessão assinado pelo servidor (HMAC-SHA256) com tempo de expiração,
+ * JTI único gerado criptograficamente para rastreabilidade e carimbo temporal iat.
  */
 export function signServerSessionToken(
-  payload: { uid: string; email?: string; role: string; name?: string; document?: string },
+  payload: { uid: string; email?: string; role: string; name?: string; document?: string; jti?: string },
   expiresInSeconds = 86400 // 24 horas padrão
 ): string {
   const header = { alg: "HS256", typ: "JWT" };
   const now = Math.floor(Date.now() / 1000);
   const fullPayload = {
+    jti: payload.jti || crypto.randomUUID(),
     ...payload,
     iat: now,
     exp: now + expiresInSeconds,
@@ -114,10 +196,12 @@ export function signServerSessionToken(
  * - Headers com alg diferente de HS256 ou typ diferente de JWT
  * - Tokens sem campo exp ou com exp expirado
  * - Tokens sem campo iss ou com emissor diferente de 's1gestaopro-backend'
+ * - Tokens sem iat, com iat não-numérico, iat <= 0 ou iat no futuro (> 60 segundos de tolerância para clock skew)
  * - Tokens sem campo uid válido ou com perfil (role) fora da matriz permitida
- * - Tokens expressamente revogados
+ * - Tokens expressamente revogados (por assinatura ou por JTI)
+ * - Sessões emitidas antes do carimbo de revogação do usuário
  */
-export function verifyServerSessionToken(token: string): AuthenticatedUser | null {
+export function verifyServerSessionToken(token: string): (AuthenticatedUser & { jti?: string }) | null {
   try {
     if (!token || typeof token !== "string" || !token.includes(".")) return null;
     const parts = token.split(".");
@@ -159,8 +243,14 @@ export function verifyServerSessionToken(token: string): AuthenticatedUser | nul
       return null; // Ausente, não numérico ou expirado
     }
 
-    // 3.3 iat obrigatório e coerente
-    if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat) || payload.iat > now + 300) {
+    // 3.3 iat obrigatório, estritamente numérico, positivo e temporalmente coerente
+    // Rejeita tokens sem iat, não numéricos, <= 0 ou emitidos no futuro (além de 60 segundos de tolerância de clock skew)
+    if (
+      typeof payload.iat !== "number" ||
+      !Number.isFinite(payload.iat) ||
+      payload.iat <= 0 ||
+      payload.iat > now + 60
+    ) {
       return null;
     }
 
@@ -174,10 +264,15 @@ export function verifyServerSessionToken(token: string): AuthenticatedUser | nul
       return null;
     }
 
-    // 3.6 Checagem de revogação de sessão
+    // 3.6 Checagem de revogação de token (por assinatura criptográfica ou JTI)
     if (revokedTokenSignatures.has(signature)) {
       return null;
     }
+    if (payload.jti && typeof payload.jti === "string" && revokedJtis.has(payload.jti)) {
+      return null;
+    }
+
+    // 3.7 Checagem de revogação de todas as sessões do usuário
     const userRevokedAt = revokedUidsBeforeTimestamp.get(payload.uid);
     if (userRevokedAt !== undefined && payload.iat <= userRevokedAt) {
       return null;
@@ -189,7 +284,8 @@ export function verifyServerSessionToken(token: string): AuthenticatedUser | nul
       name: typeof payload.name === "string" ? payload.name.trim() : undefined,
       document: typeof payload.document === "string" ? payload.document.trim() : undefined,
       role: payload.role as ValidRole,
-      authType: "server_session"
+      authType: "server_session",
+      jti: typeof payload.jti === "string" ? payload.jti : undefined
     };
   } catch {
     return null;
@@ -225,19 +321,31 @@ export const requireAuth = async (
   // 1. Tenta verificar como token de sessão emitido pelo servidor
   const serverUser = verifyServerSessionToken(token);
   if (serverUser) {
-    // Para contas vinculadas a usuários do banco, valida status e sincroniza permissão atual
-    if (serverUser.uid !== "gestor-admin") {
+    // 1.1 Para o administrador mestre especial, valida se ADMIN_PASSWORD ainda está configurada
+    if (serverUser.uid === "gestor-admin") {
+      const serverAdminPass = process.env.ADMIN_PASSWORD;
+      if (!serverAdminPass || serverAdminPass.trim() === "") {
+        return res.status(503).json({
+          error: "Acesso administrativo indisponível: Credenciais mestres desativadas no servidor."
+        });
+      }
+    } else {
+      // 1.2 Para contas vinculadas a usuários do banco, valida status e sincroniza permissão atual
       try {
         const dbProfile = await getUserByUid(serverUser.uid);
         if (dbProfile) {
-          if (dbProfile.status === "bloqueado") {
+          if (["bloqueado", "desativado", "inativo", "suspenso"].includes(dbProfile.status)) {
             return res.status(403).json({
               error: "Acesso bloqueado: Esta conta está inativa ou suspensa pela administração."
             });
           }
           if (dbProfile.userType) {
+            // Sincronização dinâmica de permissão em tempo real (previne privilégios desatualizados)
             serverUser.role = dbProfile.userType as ValidRole;
           }
+          if (dbProfile.name) serverUser.name = dbProfile.name;
+          if (dbProfile.document) serverUser.document = dbProfile.document;
+          if (dbProfile.email) serverUser.email = dbProfile.email;
         }
       } catch {
         // Falha segura

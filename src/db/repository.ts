@@ -119,6 +119,16 @@ export async function getOrCreateUser(uid: string, email: string, name?: string,
   return upsertUser({ uid, email, name, document, userType });
 }
 
+export async function deleteUser(uid: string): Promise<boolean> {
+  try {
+    const result = await db.delete(users).where(eq(users.uid, uid)).returning();
+    return result.length > 0;
+  } catch (error) {
+    console.error("Database error in deleteUser:", error);
+    return false;
+  }
+}
+
 // Helper: Usuarios (Antigo Clients)
 export async function getAllUsuarios(): Promise<Client[]> {
   try {

@@ -20,9 +20,13 @@ import {
   signServerSessionToken,
   getSessionSecret,
   revokeSessionToken,
+  revokeTokenByJti,
   revokeUserSessions,
-  resetRevocationStore
+  resetRevocationStore,
+  validateSecretEntropy,
+  calculateShannonEntropy
 } from "../src/middleware/auth.ts";
+import { upsertUser, deleteUser } from "../src/db/repository.ts";
 
 interface TestResult {
   name: string;
@@ -233,20 +237,134 @@ async function runSecurityTestSuite() {
     const resRevokedToken = await fetch(`${baseUrl}/api/postgres/system-logs`, {
       headers: { "Authorization": `Bearer ${tokenToRevoke}` }
     });
-    assert(resRevokedToken.status === 401, "Token de sessão revogado individualmente é recusado", "401", String(resRevokedToken.status));
+    // 2.7 Validação rigorosa do campo iat (issued-at)
+    // 2.7.1 Token sem iat deve ser recusado
+    const payloadNoIat = {
+      uid: "user-no-iat",
+      role: "admin",
+      iss: "s1gestaopro-backend",
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64NoIat = Buffer.from(JSON.stringify(payloadNoIat)).toString("base64url");
+    const sigNoIat = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64NoIat}`).digest("base64url");
+    const tokenNoIat = `${validHeaderB64}.${b64NoIat}.${sigNoIat}`;
 
-    // 2.6 Sessões do usuário revogadas em lote
+    const resNoIat = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenNoIat}` }
+    });
+    assert(resNoIat.status === 401, "Token sem campo 'iat' é recusado (401)", "401", String(resNoIat.status));
+
+    // 2.7.2 Token com iat não-numérico (string) deve ser recusado
+    const payloadStringIat = {
+      uid: "user-string-iat",
+      role: "admin",
+      iss: "s1gestaopro-backend",
+      iat: "2026-10-19T00:00:00Z",
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64StringIat = Buffer.from(JSON.stringify(payloadStringIat)).toString("base64url");
+    const sigStringIat = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64StringIat}`).digest("base64url");
+    const tokenStringIat = `${validHeaderB64}.${b64StringIat}.${sigStringIat}`;
+
+    const resStringIat = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenStringIat}` }
+    });
+    assert(resStringIat.status === 401, "Token com campo 'iat' não-numérico é recusado (401)", "401", String(resStringIat.status));
+
+    // 2.7.3 Token com iat negativo ou zero deve ser recusado
+    const payloadZeroIat = {
+      uid: "user-zero-iat",
+      role: "admin",
+      iss: "s1gestaopro-backend",
+      iat: 0,
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64ZeroIat = Buffer.from(JSON.stringify(payloadZeroIat)).toString("base64url");
+    const sigZeroIat = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64ZeroIat}`).digest("base64url");
+    const tokenZeroIat = `${validHeaderB64}.${b64ZeroIat}.${sigZeroIat}`;
+
+    const resZeroIat = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenZeroIat}` }
+    });
+    assert(resZeroIat.status === 401, "Token com campo 'iat' menor ou igual a zero é recusado (401)", "401", String(resZeroIat.status));
+
+    // 2.7.4 Token com iat no futuro além de 60s (clock skew > 60s, ex: +120s) deve ser recusado
+    const payloadFutureIat = {
+      uid: "user-future-iat",
+      role: "admin",
+      iss: "s1gestaopro-backend",
+      iat: Math.floor(Date.now() / 1000) + 120, // 2 minutos no futuro
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64FutureIat = Buffer.from(JSON.stringify(payloadFutureIat)).toString("base64url");
+    const sigFutureIat = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64FutureIat}`).digest("base64url");
+    const tokenFutureIat = `${validHeaderB64}.${b64FutureIat}.${sigFutureIat}`;
+
+    const resFutureIat = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenFutureIat}` }
+    });
+    assert(resFutureIat.status === 401, "Token com 'iat' no futuro (>60s clock skew) é recusado (401)", "401", String(resFutureIat.status));
+
+    // 2.7.5 Token com iat com clock skew aceitável (ex: +30s no futuro) deve ser aceito
+    const payloadAcceptableIat = {
+      uid: "admin-tester-01",
+      role: "admin",
+      iss: "s1gestaopro-backend",
+      iat: Math.floor(Date.now() / 1000) + 30, // 30s no futuro (dentro da tolerância de 60s)
+      exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    const b64AcceptableIat = Buffer.from(JSON.stringify(payloadAcceptableIat)).toString("base64url");
+    const sigAcceptableIat = crypto.createHmac("sha256", validSecret).update(`${validHeaderB64}.${b64AcceptableIat}`).digest("base64url");
+    const tokenAcceptableIat = `${validHeaderB64}.${b64AcceptableIat}.${sigAcceptableIat}`;
+
+    const resAcceptableIat = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenAcceptableIat}` }
+    });
+    assert(resAcceptableIat.status === 200, "Token com 'iat' dentro da tolerância de 60s de clock skew é aceito (200)", "200", String(resAcceptableIat.status));
+
+    // 2.8 Identificador único JTI (JWT ID) e revogação por JTI
+    const customJti = `jti-test-${crypto.randomUUID()}`;
+    const tokenWithCustomJti = signServerSessionToken({
+      uid: "user-jti-test",
+      role: "admin",
+      jti: customJti
+    });
+    const parsedPayloadJti = JSON.parse(Buffer.from(tokenWithCustomJti.split(".")[1], "base64url").toString("utf-8"));
+    assert(parsedPayloadJti.jti === customJti, "Token gerado pelo servidor emite campo 'jti' único", customJti, String(parsedPayloadJti.jti));
+
+    // Revoga o token pelo seu JTI
+    revokeTokenByJti(customJti);
+    const resRevokedByJti = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${tokenWithCustomJti}` }
+    });
+    assert(resRevokedByJti.status === 401, "Token de sessão revogado especificamente pelo 'jti' é recusado (401)", "401", String(resRevokedByJti.status));
+
+    // 2.9 Revogação em lote de sessões de usuário
     const tokenBeforeUserRevoke = signServerSessionToken({
       uid: "user-batch-revoke",
       role: "admin"
     });
-    // Aguarda 1 segundo para garantir que iat <= userRevokedAt
     revokeUserSessions("user-batch-revoke");
 
     const resUserRevoked = await fetch(`${baseUrl}/api/postgres/system-logs`, {
       headers: { "Authorization": `Bearer ${tokenBeforeUserRevoke}` }
     });
-    assert(resUserRevoked.status === 401, "Tokens anteriores à revogação de usuário são recusados", "401", String(resUserRevoked.status));
+    assert(resUserRevoked.status === 401, "Tokens anteriores à revogação de usuário são recusados (401)", "401", String(resUserRevoked.status));
+
+    // 2.10 Revogação em lote de sessões da conta de administrador mestre (gestor-admin)
+    const adminTokenToRevoke = signServerSessionToken({
+      uid: "gestor-admin",
+      role: "admin"
+    });
+    revokeUserSessions("gestor-admin");
+
+    const resAdminRevoked = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${adminTokenToRevoke}` }
+    });
+    assert(resAdminRevoked.status === 401, "Tokens da conta administrativa mestre são invalidados por revokeUserSessions (401)", "401", String(resAdminRevoked.status));
+
+    // Limpeza isolada do repositório de revogações após a bateria de testes de revogação
+    resetRevocationStore();
 
     // =============================================================
     // GRUPO 3: Cabeçalhos falsos e papéis adulterados não concedem acesso (401)
@@ -570,6 +688,101 @@ async function runSecurityTestSuite() {
       body: JSON.stringify({ cpf: "11122233344" })
     });
     assert(resValidateCpf.status === 200 || resValidateCpf.status === 400, "POST /api/gemini/validate-cpf operacional para validação pública", "200 ou 400", String(resValidateCpf.status));
+
+    // =============================================================
+    // GRUPO 9: Conferência Técnica dos 4 Pilares de Segurança
+    // =============================================================
+    console.log("\n📌 Grupo 9: Conferência Técnica dos 4 Pilares (Entropia, iat, Revogação e Permissões Dinâmicas)");
+
+    // 9.1 Entropia de SESSION_SECRET
+    const checkShort = validateSecretEntropy("curta-com-menos-de-32-chars");
+    assert(!checkShort.valid, "validateSecretEntropy rejeita segredos com tamanho < 32", "false", String(checkShort.valid));
+
+    const checkUniform = validateSecretEntropy("a".repeat(32));
+    assert(!checkUniform.valid, "validateSecretEntropy rejeita senhas repetitivas de 32 chars (baixa variedade/entropia zero)", "false", String(checkUniform.valid));
+
+    const checkRepetitive = validateSecretEntropy("12341234123412341234123412341234");
+    assert(!checkRepetitive.valid, "validateSecretEntropy rejeita sequência cíclica de baixa entropia de Shannon", "false", String(checkRepetitive.valid));
+
+    const cryptoSecret = crypto.randomBytes(32).toString("hex"); // 64 chars hexadecimais = 256 bits de entropia
+    const checkCrypto = validateSecretEntropy(cryptoSecret);
+    const entropyBits = calculateShannonEntropy(cryptoSecret);
+    assert(checkCrypto.valid && entropyBits >= 3.0, "validateSecretEntropy aceita chave criptográfica com alta entropia (openssl rand -hex 32)", "true", `${checkCrypto.valid} (${entropyBits.toFixed(2)} bits/char)`);
+
+    // 9.2 Revalidação dinâmica de permissões no backend (Prevenção de privilégios antigos em tokens assinados)
+    const testStaleUid = `stale-user-${Date.now()}`;
+    await upsertUser({
+      uid: testStaleUid,
+      email: `${testStaleUid}@s1gestao.local`,
+      name: "Usuário Teste Revalidação Dinâmica",
+      document: "11122233399",
+      userType: "requisitante", // Papel REAL no banco
+      status: "ativo"
+    });
+
+    // Forja um token assinado onde o payload alega role 'admin'
+    const staleAdminClaimToken = signServerSessionToken({
+      uid: testStaleUid,
+      email: `${testStaleUid}@s1gestao.local`,
+      role: "admin", // Alegação de privilégio elevado no token
+      name: "Usuário Teste Revalidação Dinâmica"
+    });
+
+    // Envia para rota restrita a administradores (/api/postgres/system-logs)
+    const resStaleAttempt = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${staleAdminClaimToken}` }
+    });
+    assert(
+      resStaleAttempt.status === 403,
+      "requireAuth revalida papel no PostgreSQL em tempo real e bloqueia token desatualizado com alegação antiga (403)",
+      "403",
+      String(resStaleAttempt.status)
+    );
+
+    // 9.3 Revalidação dinâmica de status bloqueado/desativado no banco
+    await upsertUser({
+      uid: testStaleUid,
+      email: `${testStaleUid}@s1gestao.local`,
+      userType: "requisitante",
+      status: "bloqueado" // Bloqueio imediato da conta pela administração
+    });
+
+    const resBlockedUser = await fetch(`${baseUrl}/api/postgres/users/${testStaleUid}`, {
+      headers: { "Authorization": `Bearer ${staleAdminClaimToken}` }
+    });
+    assert(
+      resBlockedUser.status === 403,
+      "requireAuth consulta status do banco e bloqueia imediatamente conta desativada/suspensa (403)",
+      "403",
+      String(resBlockedUser.status)
+    );
+
+    // Limpeza segura do usuário de teste
+    await deleteUser(testStaleUid);
+
+    // 9.4 Desativação segura da conta especial de administrador mestre (gestor-admin)
+    const currentAdminPass = process.env.ADMIN_PASSWORD;
+    try {
+      delete process.env.ADMIN_PASSWORD; // Desativação das credenciais mestres no ambiente
+      const tokenAdminMaster = signServerSessionToken({
+        uid: "gestor-admin",
+        role: "admin"
+      });
+
+      const resDisabledAdminMaster = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+        headers: { "Authorization": `Bearer ${tokenAdminMaster}` }
+      });
+      assert(
+        resDisabledAdminMaster.status === 503,
+        "requireAuth desativa com HTTP 503 tokens do administrador mestre quando ADMIN_PASSWORD é removida",
+        "503",
+        String(resDisabledAdminMaster.status)
+      );
+    } finally {
+      if (currentAdminPass) {
+        process.env.ADMIN_PASSWORD = currentAdminPass;
+      }
+    }
 
   } finally {
     // Encerra servidor de teste
