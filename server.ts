@@ -11,6 +11,7 @@ import {
   getUsuarioById,
   upsertUsuario,
   deleteUsuario,
+  countServiceOrdersByClientId,
   getAllClients, 
   upsertClient, 
   getAllProfessionals,
@@ -19,6 +20,9 @@ import {
   upsertServiceOrder, 
   getAllServiceCategories,
   upsertServiceCategory,
+  getServiceCategoryById,
+  countServiceOrdersByCategory,
+  deleteServiceCategory,
   getAllSystemLogs, 
   insertSystemLog, 
   getAllLoginAttempts, 
@@ -810,14 +814,22 @@ app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
   try {
     const { id } = req.params;
     const body = req.body || {};
-    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const isSelf = req.user!.uid === id;
 
-    if (!isPrivileged && !isSelf) {
-      return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    const isExactSelf = req.user!.uid === id;
+
+    let existing = await getUsuarioById(id);
+
+    if (!isPrivileged && !isExactSelf) {
+      const userDoc = req.user!.document ? req.user!.document.replace(/\D/g, "") : "";
+      const clientDoc = existing?.document ? existing.document.replace(/\D/g, "") : "";
+      const docMatch = Boolean(userDoc && clientDoc && userDoc === clientDoc);
+
+      if (!existing || !docMatch) {
+        return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+      }
     }
 
-    const existing = await getUsuarioById(id);
     if (!existing) {
       return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
@@ -848,14 +860,22 @@ app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cli
   try {
     const { id } = req.params;
     const body = req.body || {};
-    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const isSelf = req.user!.uid === id;
 
-    if (!isPrivileged && !isSelf) {
-      return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+    const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
+    const isExactSelf = req.user!.uid === id;
+
+    let existing = await getUsuarioById(id);
+
+    if (!isPrivileged && !isExactSelf) {
+      const userDoc = req.user!.document ? req.user!.document.replace(/\D/g, "") : "";
+      const clientDoc = existing?.document ? existing.document.replace(/\D/g, "") : "";
+      const docMatch = Boolean(userDoc && clientDoc && userDoc === clientDoc);
+
+      if (!existing || !docMatch) {
+        return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+      }
     }
 
-    const existing = await getUsuarioById(id);
     if (!existing) {
       return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
@@ -884,11 +904,28 @@ app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cli
 app.delete(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clients/:id"], requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    if (!id || typeof id !== "string") {
+      return res.status(400).json({ error: "ID de usuário inválido." });
+    }
+
+    const existingUser = await getUsuarioById(id);
+    if (!existingUser) {
+      return res.status(404).json({ error: "Usuário não encontrado ou já removido no PostgreSQL." });
+    }
+
+    // Proteção de integridade referencial: impede excluir usuário que possui Ordens de Serviço vinculadas
+    const activeOrdersCount = await countServiceOrdersByClientId(id);
+    if (activeOrdersCount > 0) {
+      return res.status(400).json({
+        error: `Acesso negado: O requisitante "${existingUser.name}" possui ${activeOrdersCount} ordem(ns) de serviço vinculada(s) e não pode ser excluído. Reatribua ou conclua as ordens antes da remoção.`
+      });
+    }
+
     const deleted = await deleteUsuario(id);
     if (!deleted) {
-      return res.status(404).json({ error: "Usuário não encontrado ou já removido" });
+      return res.status(404).json({ error: "Usuário não encontrado ou já removido." });
     }
-    res.json({ success: true, message: "Usuário removido com sucesso", id });
+    res.json({ success: true, message: `Usuário "${existingUser.name}" removido com sucesso do PostgreSQL.`, id });
   } catch (error: any) {
     console.error("Erro ao remover usuário no PostgreSQL:", error);
     res.status(500).json({ error: "Erro interno no servidor ao remover usuário." });
@@ -1082,11 +1119,66 @@ app.get("/api/postgres/service-categories", requireAuth as any, async (req: Auth
 // POST /api/postgres/service-categories
 app.post("/api/postgres/service-categories", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
   try {
-    const cat = await upsertServiceCategory(req.body);
+    const body = req.body;
+    if (!body || !body.name || typeof body.name !== "string" || body.name.trim() === "") {
+      return res.status(400).json({ error: "O campo 'name' é obrigatório para cadastrar ou editar categoria." });
+    }
+    const cleanId = (body.id && typeof body.id === "string" && body.id.trim()) ? body.id.trim() : `cat-${Date.now()}`;
+    const cleanName = body.name.trim();
+    const cleanColor = typeof body.color === "string" ? body.color.trim() : "#3b82f6";
+    const slaHours = typeof body.slaHours === "number" && body.slaHours > 0 ? body.slaHours : 24;
+    const reminderIntervalHours = typeof body.reminderIntervalHours === "number" && body.reminderIntervalHours > 0 ? body.reminderIntervalHours : 4;
+    const reminderEnabled = typeof body.reminderEnabled === "boolean" ? body.reminderEnabled : true;
+    const notifyGestor = typeof body.notifyGestor === "boolean" ? body.notifyGestor : true;
+    const notifyTechnician = typeof body.notifyTechnician === "boolean" ? body.notifyTechnician : true;
+
+    const cat = await upsertServiceCategory({
+      id: cleanId,
+      name: cleanName,
+      color: cleanColor,
+      slaHours,
+      reminderIntervalHours,
+      reminderEnabled,
+      notifyGestor,
+      notifyTechnician,
+    });
     res.json({ success: true, cat });
   } catch (error: any) {
     console.error("Erro ao salvar categoria no PostgreSQL:", error);
     res.status(500).json({ error: "Erro interno no servidor ao salvar categoria." });
+  }
+});
+
+// DELETE /api/postgres/service-categories/:id
+app.delete("/api/postgres/service-categories/:id", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    if (!id || typeof id !== "string") {
+      return res.status(400).json({ error: "ID de categoria inválido." });
+    }
+
+    const existingCat = await getServiceCategoryById(id);
+    if (!existingCat) {
+      return res.status(404).json({ error: "Categoria de serviço não encontrada no PostgreSQL." });
+    }
+
+    // Proteção de integridade referencial funcional: não exclui categoria em uso por ordens de serviço
+    const activeOrdersCount = await countServiceOrdersByCategory(existingCat.name);
+    if (activeOrdersCount > 0) {
+      return res.status(400).json({
+        error: `A categoria "${existingCat.name}" possui ${activeOrdersCount} ordem(ns) de serviço vinculada(s) e não pode ser excluída.`
+      });
+    }
+
+    const deleted = await deleteServiceCategory(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Não foi possível remover a categoria solicitada." });
+    }
+
+    res.json({ success: true, message: `Categoria "${existingCat.name}" removida com sucesso.` });
+  } catch (error: any) {
+    console.error("Erro ao remover categoria no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno no servidor ao remover categoria." });
   }
 });
 

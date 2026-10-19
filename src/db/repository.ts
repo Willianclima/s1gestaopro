@@ -133,17 +133,26 @@ export async function deleteUser(uid: string): Promise<boolean> {
 export async function getAllUsuarios(): Promise<Client[]> {
   try {
     const rows = await db.select().from(usuarios);
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      document: r.document || "",
-      phone: r.phone || "",
-      email: r.email || "",
-      address: r.address || "",
-      notes: (r.data as any)?.notes || "",
-      createdAt: (r.data as any)?.createdAt || r.createdAt?.toISOString() || new Date().toISOString(),
-      ...(r.data as any || {}),
-    }));
+    return rows.map((r) => {
+      const extraData = (r.data as Record<string, any>) || {};
+      return {
+        id: r.id,
+        name: r.name,
+        document: r.document || "",
+        phone: r.phone || "",
+        email: r.email || "",
+        address: r.address || "",
+        lat: r.lat ?? extraData.lat ?? undefined,
+        lng: r.lng ?? extraData.lng ?? undefined,
+        formattedAddress: r.formattedAddress || extraData.formattedAddress || undefined,
+        isAddressValidated: r.isAddressValidated ?? extraData.isAddressValidated ?? false,
+        notes: r.notes || extraData.notes || "",
+        status: (r.status || extraData.status || "ativo") as any,
+        userType: (r.userType || extraData.userType || "requisitante") as any,
+        createdAt: (extraData.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
+        ...extraData,
+      };
+    });
   } catch (error) {
     console.error("Database error in getAllUsuarios:", error);
     throw new Error("Erro ao buscar usuários no PostgreSQL.", { cause: error });
@@ -152,7 +161,7 @@ export async function getAllUsuarios(): Promise<Client[]> {
 
 export async function upsertUsuario(usuario: Client) {
   try {
-    const { id, name, document, phone, email, address, status, userType, ...extraData } = usuario;
+    const { id, name, document, phone, email, address, status, userType, lat, lng, formattedAddress, isAddressValidated, notes, ...extraData } = usuario;
     const finalStatus = status || "ativo";
     const finalUserType = userType || "requisitante";
 
@@ -164,6 +173,11 @@ export async function upsertUsuario(usuario: Client) {
         phone: phone || "",
         email: email || "",
         address: address || "",
+        lat: lat ?? null,
+        lng: lng ?? null,
+        formattedAddress: formattedAddress ?? null,
+        isAddressValidated: isAddressValidated ?? false,
+        notes: notes || "",
         status: finalStatus,
         userType: finalUserType,
         data: {
@@ -180,6 +194,11 @@ export async function upsertUsuario(usuario: Client) {
           phone: phone || "",
           email: email || "",
           address: address || "",
+          lat: lat ?? null,
+          lng: lng ?? null,
+          formattedAddress: formattedAddress ?? null,
+          isAddressValidated: isAddressValidated ?? false,
+          notes: notes || "",
           status: finalStatus,
           userType: finalUserType,
           data: {
@@ -192,6 +211,7 @@ export async function upsertUsuario(usuario: Client) {
       .returning();
 
     const r = result[0];
+    const rExtra = (r.data as Record<string, any>) || {};
     return {
       id: r.id,
       name: r.name,
@@ -199,11 +219,15 @@ export async function upsertUsuario(usuario: Client) {
       phone: r.phone || "",
       email: r.email || "",
       address: r.address || "",
-      status: r.status || (r.data as any)?.status || finalStatus,
-      userType: r.userType || (r.data as any)?.userType || finalUserType,
-      notes: (r.data as any)?.notes || "",
-      createdAt: (r.data as any)?.createdAt || r.createdAt?.toISOString() || new Date().toISOString(),
-      ...(r.data as any || {}),
+      lat: r.lat ?? rExtra.lat ?? undefined,
+      lng: r.lng ?? rExtra.lng ?? undefined,
+      formattedAddress: r.formattedAddress || rExtra.formattedAddress || undefined,
+      isAddressValidated: r.isAddressValidated ?? rExtra.isAddressValidated ?? false,
+      status: (r.status || rExtra.status || finalStatus) as any,
+      userType: (r.userType || rExtra.userType || finalUserType) as any,
+      notes: r.notes || rExtra.notes || "",
+      createdAt: (rExtra.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
+      ...rExtra,
     };
   } catch (error) {
     console.error("Database error in upsertUsuario:", error);
@@ -216,6 +240,7 @@ export async function getUsuarioById(id: string): Promise<Client | null> {
     const rows = await db.select().from(usuarios).where(eq(usuarios.id, id));
     if (!rows.length) return null;
     const r = rows[0];
+    const extraData = (r.data as Record<string, any>) || {};
     return {
       id: r.id,
       name: r.name,
@@ -223,13 +248,29 @@ export async function getUsuarioById(id: string): Promise<Client | null> {
       phone: r.phone || "",
       email: r.email || "",
       address: r.address || "",
-      notes: (r.data as any)?.notes || "",
-      createdAt: (r.data as any)?.createdAt || r.createdAt?.toISOString() || new Date().toISOString(),
-      ...(r.data as any || {}),
+      lat: r.lat ?? extraData.lat ?? undefined,
+      lng: r.lng ?? extraData.lng ?? undefined,
+      formattedAddress: r.formattedAddress || extraData.formattedAddress || undefined,
+      isAddressValidated: r.isAddressValidated ?? extraData.isAddressValidated ?? false,
+      notes: r.notes || extraData.notes || "",
+      status: (r.status || extraData.status || "ativo") as any,
+      userType: (r.userType || extraData.userType || "requisitante") as any,
+      createdAt: (extraData.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
+      ...extraData,
     };
   } catch (error) {
     console.error("Database error in getUsuarioById:", error);
     throw new Error("Erro ao buscar usuário por ID no PostgreSQL.", { cause: error });
+  }
+}
+
+export async function countServiceOrdersByClientId(clientId: string): Promise<number> {
+  try {
+    const rows = await db.select().from(serviceOrders).where(eq(serviceOrders.clientId, clientId));
+    return rows.length;
+  } catch (error) {
+    console.error("Database error in countServiceOrdersByClientId:", error);
+    return 0;
   }
 }
 
@@ -314,6 +355,16 @@ export async function upsertServiceOrder(order: ServiceOrder) {
   } catch (error) {
     console.error("Database error in upsertServiceOrder:", error);
     throw new Error("Erro ao salvar ordem de serviço no PostgreSQL.", { cause: error });
+  }
+}
+
+export async function deleteServiceOrder(id: string): Promise<boolean> {
+  try {
+    const result = await db.delete(serviceOrders).where(eq(serviceOrders.id, id)).returning();
+    return result.length > 0;
+  } catch (error) {
+    console.error("Database error in deleteServiceOrder:", error);
+    return false;
   }
 }
 
@@ -552,6 +603,47 @@ export async function upsertServiceCategory(cat: ServiceCategory) {
   } catch (error) {
     console.error("Database error in upsertServiceCategory:", error);
     throw new Error("Erro ao salvar categoria no PostgreSQL.", { cause: error });
+  }
+}
+
+export async function getServiceCategoryById(id: string): Promise<ServiceCategory | null> {
+  try {
+    const rows = await db.select().from(serviceCategories).where(eq(serviceCategories.id, id));
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      id: r.id,
+      name: r.name,
+      color: r.color || "#3b82f6",
+      slaHours: r.slaHours || 24,
+      reminderIntervalHours: r.reminderIntervalHours || 4,
+      reminderEnabled: r.reminderEnabled ?? true,
+      notifyGestor: r.notifyGestor ?? true,
+      notifyTechnician: r.notifyTechnician ?? true,
+    };
+  } catch (error) {
+    console.error("Database error in getServiceCategoryById:", error);
+    return null;
+  }
+}
+
+export async function countServiceOrdersByCategory(categoryName: string): Promise<number> {
+  try {
+    const rows = await db.select().from(serviceOrders).where(eq(serviceOrders.category, categoryName));
+    return rows.length;
+  } catch (error) {
+    console.error("Database error in countServiceOrdersByCategory:", error);
+    return 0;
+  }
+}
+
+export async function deleteServiceCategory(id: string): Promise<boolean> {
+  try {
+    const result = await db.delete(serviceCategories).where(eq(serviceCategories.id, id)).returning();
+    return result.length > 0;
+  } catch (error) {
+    console.error("Database error in deleteServiceCategory:", error);
+    throw new Error("Erro ao remover categoria no PostgreSQL.", { cause: error });
   }
 }
 

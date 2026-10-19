@@ -23,6 +23,15 @@ import { broadcastNotification } from "./utils/broadcastNotification";
 import { checkAndTriggerSlaReminders } from "./utils/slaUtils";
 import { googleSignIn, logoutUser, subscribeToAuthChanges, saveUserProfile } from "./services/firebaseAuth";
 import { getApiAuthHeaders } from "./services/apiAuth";
+import { 
+  fetchPostgresServiceCategories, 
+  savePostgresServiceCategory, 
+  deletePostgresServiceCategory,
+  fetchUsuarios,
+  createUsuario,
+  updateUsuario,
+  deleteUsuario
+} from "./services/postgresService";
 import { validateCPFAlgorithm, validateCPFWithGemini, CpfValidationResult } from "./utils/cpfValidator";
 
 import { 
@@ -812,23 +821,61 @@ export default function App() {
     }
 
     if (cachedCategories) {
-      const parsed: ServiceCategory[] = JSON.parse(cachedCategories);
-      const updated = [...parsed];
-      let needsUpdate = false;
-      INITIAL_CATEGORIES.forEach(initCat => {
-        if (!parsed.some(pc => pc.name.toLowerCase() === initCat.name.toLowerCase())) {
-          updated.push(initCat);
-          needsUpdate = true;
+      try {
+        const parsed: ServiceCategory[] = JSON.parse(cachedCategories);
+        const updated = [...parsed];
+        let needsUpdate = false;
+        INITIAL_CATEGORIES.forEach(initCat => {
+          if (!parsed.some(pc => pc.name.toLowerCase() === initCat.name.toLowerCase())) {
+            updated.push(initCat);
+            needsUpdate = true;
+          }
+        });
+        setCategories(updated);
+        if (needsUpdate) {
+          localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
         }
-      });
-      setCategories(updated);
-      if (needsUpdate) {
-        localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+      } catch {
+        setCategories(INITIAL_CATEGORIES);
       }
     } else {
       setCategories(INITIAL_CATEGORIES);
       localStorage.setItem("service_mgt_categories2", JSON.stringify(INITIAL_CATEGORIES));
     }
+
+    // Sincronização oficial de Categorias & SLAs com PostgreSQL via API protegida (Fase 2.2)
+    fetchPostgresServiceCategories()
+      .then((remoteCats) => {
+        if (Array.isArray(remoteCats) && remoteCats.length > 0) {
+          setCategories(remoteCats);
+          localStorage.setItem("service_mgt_categories2", JSON.stringify(remoteCats));
+        } else if (Array.isArray(remoteCats) && remoteCats.length === 0) {
+          // Se o banco PostgreSQL de categorias ainda estiver vazio, inicializa com os defaults
+          INITIAL_CATEGORIES.forEach((cat) => {
+            savePostgresServiceCategory(cat).catch(() => {});
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn("[PostgreSQL] Operando com categorias em cache local (modo de contingência):", err?.message || err);
+      });
+
+    // Sincronização oficial de Usuários & Requisitantes com PostgreSQL via API protegida (Fase 2.3)
+    fetchUsuarios()
+      .then((remoteUsers) => {
+        if (Array.isArray(remoteUsers) && remoteUsers.length > 0) {
+          setClients(remoteUsers);
+          localStorage.setItem("service_mgt_clients2", JSON.stringify(remoteUsers));
+        } else if (Array.isArray(remoteUsers) && remoteUsers.length === 0) {
+          // Se o banco PostgreSQL de usuários estiver vazio, inicializa com os defaults
+          INITIAL_CLIENTS.forEach((u) => {
+            createUsuario(u).catch(() => {});
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn("[PostgreSQL] Operando com usuários em cache local (modo de contingência):", err?.message || err);
+      });
 
     if (cachedProfessionals) {
       setProfessionals(JSON.parse(cachedProfessionals));
@@ -1496,54 +1543,95 @@ export default function App() {
     }
   };
 
-  // Client Callback implementations
-  const handleAddClient = (client: Client) => {
-    const newProfs = syncClientToProfessional(client, professionals);
-    updateClientsState([client, ...clients]);
-    updateProfessionalsState(newProfs);
-    addSystemLog(
-      "Cadastro de Requisitante",
-      `Novo requisitante "${client.name}" (${client.document}) cadastrado com sucesso.`,
-      "requisitante"
-    );
-    toastSuccess(`Requisitante "${client.name}" cadastrado com sucesso!`, "Cadastro Realizado");
-  };
+  // Client Callback implementations (Oficializado no PostgreSQL via API protegida)
+  const handleAddClient = async (client: Client) => {
+    try {
+      // 1. Gravação oficial na API protegida (PostgreSQL)
+      const res = await createUsuario(client);
+      const confirmedClient = res.usuario || res.client || client;
 
-  const handleUpdateClient = (updatedClient: Client) => {
-    const oldClient = clients.find(c => c.id === updatedClient.id);
-    updateClientsState(clients.map(c => c.id === updatedClient.id ? updatedClient : c));
-    
-    const newProfs = syncClientToProfessional(updatedClient, professionals);
-    updateProfessionalsState(newProfs);
-    
-    let logDetail = `Os dados cadastrais do requisitante "${updatedClient.name}" foram atualizados.`;
-    if (oldClient && oldClient.password !== updatedClient.password) {
-      logDetail += " [Senha de acesso alterada pelo Gestor]";
-    }
-    
-    addSystemLog(
-      "Edição de Requisitante",
-      logDetail,
-      "requisitante"
-    );
-    toastSuccess(`Dados cadastrais de "${updatedClient.name}" foram atualizados.`, "Requisitante Atualizado");
-  };
-
-  const handleDeleteClient = (id: string) => {
-    const client = clients.find(c => c.id === id);
-    updateClientsState(clients.filter(c => c.id !== id));
-    
-    if (client) {
-      const newProfs = professionals.filter(p => p.document !== client.document && p.id !== client.id);
+      // 2. Atualização de estado confirmada e espelhamento no cache de contingência
+      const newProfs = syncClientToProfessional(confirmedClient, professionals);
+      const updatedClients = [confirmedClient, ...clients.filter(c => c.id !== confirmedClient.id)];
+      updateClientsState(updatedClients);
       updateProfessionalsState(newProfs);
-    }
 
-    addSystemLog(
-      "Remoção de Requisitante",
-      `Requisitante "${client ? client.name : id}" removido do sistema de gestão integrada.`,
-      "requisitante"
-    );
-    toastWarn(`Requisitante "${client ? client.name : id}" removido do sistema.`, "Cadastro Excluído");
+      addSystemLog(
+        "Cadastro de Requisitante",
+        `Novo requisitante "${confirmedClient.name}" (${confirmedClient.document}) cadastrado com sucesso no PostgreSQL.`,
+        "requisitante"
+      );
+      toastSuccess(`Requisitante "${confirmedClient.name}" cadastrado com sucesso no servidor!`, "Cadastro Realizado");
+    } catch (err: any) {
+      console.error("Erro ao cadastrar requisitante no PostgreSQL:", err);
+      toastError(
+        `Falha ao salvar no banco de dados: ${err.message || "Erro desconhecido"}. Verifique suas credenciais e permissões.`,
+        "Erro de Persistência"
+      );
+    }
+  };
+
+  const handleUpdateClient = async (updatedClient: Client) => {
+    const oldClient = clients.find(c => c.id === updatedClient.id);
+    try {
+      // 1. Atualização oficial na API protegida (PostgreSQL)
+      const res = await updateUsuario(updatedClient.id, updatedClient);
+      const confirmedClient = res.usuario || res.client || updatedClient;
+
+      // 2. Atualização de estado confirmada e espelhamento no cache de contingência
+      const updatedList = clients.map(c => c.id === confirmedClient.id ? confirmedClient : c);
+      updateClientsState(updatedList);
+      
+      const newProfs = syncClientToProfessional(confirmedClient, professionals);
+      updateProfessionalsState(newProfs);
+      
+      let logDetail = `Os dados cadastrais do requisitante "${confirmedClient.name}" foram atualizados no PostgreSQL.`;
+      if (oldClient && oldClient.password !== confirmedClient.password) {
+        logDetail += " [Senha de acesso alterada pelo Gestor]";
+      }
+      
+      addSystemLog(
+        "Edição de Requisitante",
+        logDetail,
+        "requisitante"
+      );
+      toastSuccess(`Dados cadastrais de "${confirmedClient.name}" foram atualizados no servidor.`, "Requisitante Atualizado");
+    } catch (err: any) {
+      console.error("Erro ao atualizar requisitante no PostgreSQL:", err);
+      toastError(
+        `Falha ao atualizar no banco de dados: ${err.message || "Erro desconhecido"}. As alterações não foram confirmadas.`,
+        "Erro de Persistência"
+      );
+    }
+  };
+
+  const handleDeleteClient = async (id: string) => {
+    const client = clients.find(c => c.id === id);
+    try {
+      // 1. Exclusão oficial na API protegida (PostgreSQL) com validação de integridade referencial
+      await deleteUsuario(id);
+
+      // 2. Remoção de estado confirmada e espelhamento no cache de contingência
+      updateClientsState(clients.filter(c => c.id !== id));
+      
+      if (client) {
+        const newProfs = professionals.filter(p => p.document !== client.document && p.id !== client.id);
+        updateProfessionalsState(newProfs);
+      }
+
+      addSystemLog(
+        "Remoção de Requisitante",
+        `Requisitante "${client ? client.name : id}" removido do PostgreSQL com sucesso.`,
+        "requisitante"
+      );
+      toastWarn(`Requisitante "${client ? client.name : id}" removido do sistema.`, "Cadastro Excluído");
+    } catch (err: any) {
+      console.error("Erro ao remover requisitante no PostgreSQL:", err);
+      toastError(
+        err.message || "Erro ao remover usuário do banco de dados.",
+        "Erro ao Excluir"
+      );
+    }
   };
 
   const triggerAutoNotificationsForNewOrder = async (order: ServiceOrder) => {
@@ -1895,8 +1983,8 @@ export default function App() {
     toastSuccess(`Dados de "${updatedProf.name}" foram salvos com sucesso!`, "Técnico Atualizado");
   };
 
-  // Service Category CRUD Handlers (Restricted to Administrative users)
-  const handleAddCategory = (newCat: ServiceCategory) => {
+  // Service Category CRUD Handlers (Restricted to Administrative users, oficializado no PostgreSQL via API)
+  const handleAddCategory = async (newCat: ServiceCategory) => {
     const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
     if (!isAdminUser) {
       toastError("Apenas usuários Administrativos têm permissão para cadastrar novas categorias de serviço.", "Acesso Restrito");
@@ -1914,20 +2002,40 @@ export default function App() {
     const createdCat: ServiceCategory = {
       id: newCat.id || `cat-${Date.now()}`,
       name: cleanName,
-      color: newCat.color || "blue"
+      color: newCat.color || "#3b82f6",
+      slaHours: newCat.slaHours || 24,
+      reminderIntervalHours: newCat.reminderIntervalHours || 4,
+      reminderEnabled: newCat.reminderEnabled ?? true,
+      notifyGestor: newCat.notifyGestor ?? true,
+      notifyTechnician: newCat.notifyTechnician ?? true
     };
-    const updated = [...categories, createdCat];
-    setCategories(updated);
-    localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
-    addSystemLog(
-      "Cadastro de Categoria",
-      `Nova categoria de serviço "${createdCat.name}" cadastrada pelo usuário administrativo ${currentUser?.name || ""}.`,
-      "sistema"
-    );
-    toastSuccess(`Categoria "${createdCat.name}" cadastrada com sucesso!`, "Categoria Registrada");
+
+    try {
+      // 1. Gravação oficial na API protegida (PostgreSQL)
+      const res = await savePostgresServiceCategory(createdCat);
+      const confirmedCat = res.cat || createdCat;
+
+      // 2. Atualização de estado confirmada e espelhamento no cache de contingência
+      const updated = [...categories, confirmedCat];
+      setCategories(updated);
+      localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+
+      addSystemLog(
+        "Cadastro de Categoria",
+        `Nova categoria de serviço "${confirmedCat.name}" cadastrada no PostgreSQL pelo usuário ${currentUser?.name || ""}.`,
+        "sistema"
+      );
+      toastSuccess(`Categoria "${confirmedCat.name}" cadastrada com sucesso no servidor!`, "Categoria Registrada");
+    } catch (err: any) {
+      console.error("Erro ao salvar categoria na API:", err);
+      toastError(
+        `Falha ao salvar no banco de dados: ${err.message || "Erro desconhecido"}. Verifique suas credenciais e conexão.`,
+        "Erro de Persistência"
+      );
+    }
   };
 
-  const handleUpdateCategory = (updatedCat: ServiceCategory) => {
+  const handleUpdateCategory = async (updatedCat: ServiceCategory) => {
     const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
     if (!isAdminUser) {
       toastError("Apenas usuários Administrativos têm permissão para editar categorias de serviço.", "Acesso Restrito");
@@ -1953,41 +2061,54 @@ export default function App() {
       name: cleanName
     };
 
-    const updated = categories.map(c => c.id === finalCat.id ? finalCat : c);
-    setCategories(updated);
-    localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+    try {
+      // 1. Gravação oficial na API protegida (PostgreSQL)
+      const res = await savePostgresServiceCategory(finalCat);
+      const confirmedCat = res.cat || finalCat;
 
-    // Update orders and professionals if category name changed
-    if (nameChanged) {
-      const updatedOrders = orders.map(o => o.category === oldCat.name ? { ...o, category: cleanName } : o);
-      setOrders(updatedOrders);
-      localStorage.setItem("service_mgt_orders2", JSON.stringify(updatedOrders));
+      // 2. Atualização do estado confirmada e espelhamento no cache
+      const updated = categories.map(c => c.id === confirmedCat.id ? confirmedCat : c);
+      setCategories(updated);
+      localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
 
-      const updatedProfs = professionals.map(p => {
-        const isSpec = p.specialty === oldCat.name;
-        const newSpecs = (p.specialties || []).map(s => s === oldCat.name ? cleanName : s);
-        if (isSpec || p.specialties?.includes(oldCat.name)) {
-          return {
-            ...p,
-            specialty: isSpec ? cleanName : p.specialty,
-            specialties: newSpecs
-          };
-        }
-        return p;
-      });
-      setProfessionals(updatedProfs);
-      localStorage.setItem("service_mgt_professionals2", JSON.stringify(updatedProfs));
+      // Update orders and professionals if category name changed
+      if (nameChanged) {
+        const updatedOrders = orders.map(o => o.category === oldCat.name ? { ...o, category: cleanName } : o);
+        setOrders(updatedOrders);
+        localStorage.setItem("service_mgt_orders2", JSON.stringify(updatedOrders));
+
+        const updatedProfs = professionals.map(p => {
+          const isSpec = p.specialty === oldCat.name;
+          const newSpecs = (p.specialties || []).map(s => s === oldCat.name ? cleanName : s);
+          if (isSpec || p.specialties?.includes(oldCat.name)) {
+            return {
+              ...p,
+              specialty: isSpec ? cleanName : p.specialty,
+              specialties: newSpecs
+            };
+          }
+          return p;
+        });
+        setProfessionals(updatedProfs);
+        localStorage.setItem("service_mgt_professionals2", JSON.stringify(updatedProfs));
+      }
+
+      addSystemLog(
+        "Edição de Categoria",
+        `Categoria "${oldCat.name}" atualizada para "${cleanName}" no PostgreSQL por ${currentUser?.name || "Administrador"}.`,
+        "sistema"
+      );
+      toastSuccess(`Categoria "${cleanName}" atualizada com sucesso no servidor!`, "Categoria Salva");
+    } catch (err: any) {
+      console.error("Erro ao atualizar categoria na API:", err);
+      toastError(
+        `Falha ao atualizar no banco de dados: ${err.message || "Erro desconhecido"}. As alterações não foram confirmadas.`,
+        "Erro de Persistência"
+      );
     }
-
-    addSystemLog(
-      "Edição de Categoria",
-      `Categoria "${oldCat.name}" atualizada para "${cleanName}" por ${currentUser?.name || "Administrador"}.`,
-      "sistema"
-    );
-    toastSuccess(`Categoria "${cleanName}" atualizada com sucesso!`, "Categoria Salva");
   };
 
-  const handleDeleteCategory = (categoryId: string) => {
+  const handleDeleteCategory = async (categoryId: string) => {
     const isAdminUser = currentUser?.userType === "admin" || currentUser?.userType === "gestor" || currentUser?.userType === "gestor_servicos";
     if (!isAdminUser) {
       toastError("Apenas usuários Administrativos têm permissão para excluir categorias de serviço.", "Acesso Restrito");
@@ -2002,16 +2123,28 @@ export default function App() {
       return;
     }
 
-    const updated = categories.filter(c => c.id !== categoryId);
-    setCategories(updated);
-    localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+    try {
+      // 1. Exclusão oficial na API protegida (PostgreSQL)
+      await deletePostgresServiceCategory(categoryId);
 
-    addSystemLog(
-      "Exclusão de Categoria",
-      `Categoria "${catToDelete.name}" removida por ${currentUser?.name || "Administrador"}.`,
-      "sistema"
-    );
-    toastWarn(`Categoria "${catToDelete.name}" removida com sucesso.`, "Categoria Excluída");
+      // 2. Remoção do estado confirmada e espelhamento no cache
+      const updated = categories.filter(c => c.id !== categoryId);
+      setCategories(updated);
+      localStorage.setItem("service_mgt_categories2", JSON.stringify(updated));
+
+      addSystemLog(
+        "Exclusão de Categoria",
+        `Categoria "${catToDelete.name}" removida do PostgreSQL por ${currentUser?.name || "Administrador"}.`,
+        "sistema"
+      );
+      toastWarn(`Categoria "${catToDelete.name}" removida com sucesso do servidor.`, "Categoria Excluída");
+    } catch (err: any) {
+      console.error("Erro ao excluir categoria na API:", err);
+      toastError(
+        `Falha ao excluir no banco de dados: ${err.message || "Erro desconhecido"}.`,
+        "Erro ao Excluir"
+      );
+    }
   };
 
   const sendProgrammaticWhatsapp = async (targetPhone: string, messageText: string, settings: WhatsappSettings) => {
@@ -3037,8 +3170,8 @@ export default function App() {
     }, 2500);
   };
 
-  // Approve pending client with custom access options
-  const handleApproveClient = (
+  // Approve pending client with custom access options (Oficializado no PostgreSQL via API)
+  const handleApproveClient = async (
     clientId: string, 
     type: "gestor" | "requisitante" | "gestor_servicos" | "admin", 
     warehouseId?: string, 
@@ -3053,57 +3186,68 @@ export default function App() {
     }
   ) => {
     const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
-    const updated = activeClients.map(c => {
-      if (c.id === clientId) {
-        return { 
-          ...c, 
-          status: "ativo" as const, 
-          userType: type,
-          warehouseId: warehouseId || undefined,
-          workLocation: workLocation || undefined,
-          isTrialRequested: approvalOptions?.isTrialRequested !== undefined ? approvalOptions.isTrialRequested : c.isTrialRequested,
-          trialDays: approvalOptions?.trialDays !== undefined ? approvalOptions.trialDays : c.trialDays,
-          enablePurchaseOpportunity: approvalOptions?.enablePurchaseOpportunity !== undefined ? approvalOptions.enablePurchaseOpportunity : c.enablePurchaseOpportunity,
-          proposalEmail: approvalOptions?.proposalEmail || c.proposalEmail || c.email,
-          selectedPlan: approvalOptions?.selectedPlan || c.selectedPlan,
-          proposalValue: approvalOptions?.proposalValue || c.proposalValue,
-          trialRequestedAt: c.trialRequestedAt || new Date().toISOString()
-        };
-      }
-      return c;
-    });
-    setClients(updated);
-    localStorage.setItem("service_mgt_clients2", JSON.stringify(updated));
-
     const client = activeClients.find(c => c.id === clientId);
-    if (client) {
+    if (!client) return;
+
+    const payload: Partial<Client> = {
+      ...client,
+      status: "ativo" as const,
+      userType: type,
+      warehouseId: warehouseId || undefined,
+      workLocation: workLocation || undefined,
+      isTrialRequested: approvalOptions?.isTrialRequested !== undefined ? approvalOptions.isTrialRequested : client.isTrialRequested,
+      trialDays: approvalOptions?.trialDays !== undefined ? approvalOptions.trialDays : client.trialDays,
+      enablePurchaseOpportunity: approvalOptions?.enablePurchaseOpportunity !== undefined ? approvalOptions.enablePurchaseOpportunity : client.enablePurchaseOpportunity,
+      proposalEmail: approvalOptions?.proposalEmail || client.proposalEmail || client.email,
+      selectedPlan: approvalOptions?.selectedPlan || client.selectedPlan,
+      proposalValue: approvalOptions?.proposalValue || client.proposalValue,
+      trialRequestedAt: client.trialRequestedAt || new Date().toISOString()
+    };
+
+    try {
+      const res = await updateUsuario(clientId, payload);
+      const confirmedClient = res.usuario || res.client || (payload as Client);
+
+      const updated = activeClients.map(c => c.id === clientId ? confirmedClient : c);
+      setClients(updated);
+      localStorage.setItem("service_mgt_clients2", JSON.stringify(updated));
+
       const modeText = approvalOptions?.isTrialRequested
         ? `Degustação (${approvalOptions.trialDays || 15} dias)`
         : "Acesso Completo Ilimitado";
       addSystemLog(
         "Cadastro Autorizado", 
-        `CPF ${client.document} (${client.name}) aprovado pelo Gestor como ${type}. Modalidade: ${modeText}.`, 
+        `CPF ${client.document} (${client.name}) aprovado pelo Gestor como ${type} no PostgreSQL. Modalidade: ${modeText}.`, 
         "sistema"
       );
       toastSuccess(`Cadastro de "${client.name}" autorizado (${modeText})!`, "Acesso Liberado");
+    } catch (err: any) {
+      console.error("Erro ao aprovar usuário no PostgreSQL:", err);
+      toastError(`Falha ao aprovar no servidor: ${err.message || "Erro desconhecido"}`, "Erro de Aprovação");
     }
   };
 
-  // Reject/Delete pending client
-  const handleRejectClient = (clientId: string) => {
+  // Reject/Delete pending client (Oficializado no PostgreSQL via API)
+  const handleRejectClient = async (clientId: string) => {
     const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
     const client = activeClients.find(c => c.id === clientId);
-    const updated = activeClients.filter(c => c.id !== clientId);
-    setClients(updated);
-    localStorage.setItem("service_mgt_clients2", JSON.stringify(updated));
+    try {
+      await deleteUsuario(clientId);
+      const updated = activeClients.filter(c => c.id !== clientId);
+      setClients(updated);
+      localStorage.setItem("service_mgt_clients2", JSON.stringify(updated));
 
-    if (client) {
-      addSystemLog(
-        "Cadastro Recusado", 
-        `Cadastro pendente de ${client.name} (CPF ${client.document}) foi reprovado e removido do sistema pelo Gestor.`, 
-        "sistema"
-      );
-      toastWarn(`Cadastro de "${client.name}" reprovado e removido do sistema.`, "Cadastro Recusado");
+      if (client) {
+        addSystemLog(
+          "Cadastro Recusado", 
+          `Cadastro pendente de ${client.name} (CPF ${client.document}) foi reprovado e removido do PostgreSQL pelo Gestor.`, 
+          "sistema"
+        );
+        toastWarn(`Cadastro de "${client.name}" reprovado e removido do sistema.`, "Cadastro Recusado");
+      }
+    } catch (err: any) {
+      console.error("Erro ao reprovar usuário no PostgreSQL:", err);
+      toastError(`Falha ao rejeitar no servidor: ${err.message || "Erro desconhecido"}`, "Erro de Reprovação");
     }
   };
 

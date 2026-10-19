@@ -26,7 +26,14 @@ import {
   validateSecretEntropy,
   calculateShannonEntropy
 } from "../src/middleware/auth.ts";
-import { upsertUser, deleteUser } from "../src/db/repository.ts";
+import { 
+  upsertUser, 
+  deleteUser, 
+  upsertUsuario, 
+  deleteUsuario, 
+  upsertServiceOrder, 
+  deleteServiceOrder 
+} from "../src/db/repository.ts";
 
 interface TestResult {
   name: string;
@@ -422,6 +429,22 @@ async function runSecurityTestSuite() {
     });
     assert(resReqProfs.status === 403, "Requisitante impedido de criar profissionais (POST /professionals)", "403", String(resReqProfs.status));
 
+    const resReqCreateCat = await fetch(`${baseUrl}/api/postgres/service-categories`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${requisitanteToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ name: "Categoria Proibida", slaHours: 12 })
+    });
+    assert(resReqCreateCat.status === 403, "Requisitante impedido de cadastrar categorias de serviço (POST /service-categories)", "403", String(resReqCreateCat.status));
+
+    const resReqDeleteCat = await fetch(`${baseUrl}/api/postgres/service-categories/cat-1`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${requisitanteToken}` }
+    });
+    assert(resReqDeleteCat.status === 403, "Requisitante impedido de excluir categorias de serviço (DELETE /service-categories/:id)", "403", String(resReqDeleteCat.status));
+
     const resReqDeleteUser = await fetch(`${baseUrl}/api/usuarios/some-user-id`, {
       method: "DELETE",
       headers: { "Authorization": `Bearer ${requisitanteToken}` }
@@ -520,6 +543,59 @@ async function runSecurityTestSuite() {
       headers: { "Authorization": `Bearer ${adminToken}` }
     });
     assert(resAdminCats.status === 200, "Administrador autorizado a consultar categorias de serviço", "200", String(resAdminCats.status));
+
+    // 7.1 Criação de nova categoria de serviço com SLA pelo Administrador
+    const testCatId = `cat-test-${Date.now()}`;
+    const resCreateCat = await fetch(`${baseUrl}/api/postgres/service-categories`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: testCatId,
+        name: "Manutenção Predial Automatizada",
+        color: "#10b981",
+        slaHours: 36,
+        reminderIntervalHours: 6,
+        reminderEnabled: true,
+        notifyGestor: true,
+        notifyTechnician: true
+      })
+    });
+    assert(resCreateCat.status === 200, "Administrador autorizado a criar categoria de serviço no PostgreSQL (200)", "200", String(resCreateCat.status));
+    const createCatData = await resCreateCat.json();
+    assert(
+      createCatData.success === true && createCatData.cat?.name === "Manutenção Predial Automatizada" && createCatData.cat?.slaHours === 36,
+      "Categoria de serviço gravada com campos de SLA e notificações preservados",
+      "true + 36h SLA",
+      `${createCatData.success} + ${createCatData.cat?.slaHours}h SLA`
+    );
+
+    // 7.2 Rejeição de payload de categoria inválido (sem nome)
+    const resInvalidCat = await fetch(`${baseUrl}/api/postgres/service-categories`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ color: "#ff0000" }) // Sem campo name
+    });
+    assert(resInvalidCat.status === 400, "POST /api/postgres/service-categories rejeita payload sem nome (400)", "400", String(resInvalidCat.status));
+
+    // 7.3 Exclusão de categoria pelo Administrador
+    const resDeleteCat = await fetch(`${baseUrl}/api/postgres/service-categories/${testCatId}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(resDeleteCat.status === 200, "Administrador autorizado a excluir categoria de serviço (DELETE)", "200", String(resDeleteCat.status));
+
+    // 7.4 Tentativa de exclusão de categoria inexistente retorna 404
+    const resDeleteCatNotFound = await fetch(`${baseUrl}/api/postgres/service-categories/cat-non-existent-999`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(resDeleteCatNotFound.status === 404, "Exclusão de categoria inexistente retorna 404", "404", String(resDeleteCatNotFound.status));
 
     const resAdminProfiles = await fetch(`${baseUrl}/api/postgres/access-profiles`, {
       headers: { "Authorization": `Bearer ${adminToken}` }
@@ -783,6 +859,294 @@ async function runSecurityTestSuite() {
         process.env.ADMIN_PASSWORD = currentAdminPass;
       }
     }
+
+    // =============================================================
+    // GRUPO 10: Integração de Usuários e Requisitantes (Fase 2.3)
+    // =============================================================
+    console.log("\n📌 Grupo 10: Integração de Usuários e Requisitantes (Fase 2.3 - Regras de Acesso e Integridade)");
+
+    // 10.1 Leitura completa autorizada para Administrador
+    const resAdminListUsers = await fetch(`${baseUrl}/api/usuarios`, {
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(resAdminListUsers.status === 200, "Administrador autorizado a listar todos os usuários (200 OK)", "200", String(resAdminListUsers.status));
+    const adminUsersData = await resAdminListUsers.json();
+    assert(Array.isArray(adminUsersData), "GET /api/usuarios retorna lista (array) de usuários", "true", String(Array.isArray(adminUsersData)));
+
+    // Preparação dos dados de teste isolados para Requisitantes
+    const testReqUid1 = `test-req-iso-1-${Date.now()}`;
+    const testReqUid2 = `test-req-iso-2-${Date.now()}`;
+    const testReqDoc1 = "123.456.789-11";
+    const testReqDoc2 = "987.654.321-22";
+
+    // Cria usuários no PostgreSQL para teste
+    await upsertUsuario({
+      id: testReqUid1,
+      name: "Requisitante Teste 1 (Isolamento)",
+      document: testReqDoc1,
+      phone: "(18) 99111-2222",
+      email: "req1.iso@s1gestao.local",
+      address: "Rua Teste 1, Araçatuba",
+      notes: "Registro de teste isolado",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString()
+    });
+
+    await upsertUsuario({
+      id: testReqUid2,
+      name: "Requisitante Teste 2 (Outro Cidadão)",
+      document: testReqDoc2,
+      phone: "(18) 99333-4444",
+      email: "req2.iso@s1gestao.local",
+      address: "Rua Teste 2, Araçatuba",
+      notes: "Registro de outro usuário",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString()
+    });
+
+    // Também sincroniza na tabela users para passar pela verificação dinâmica do requireAuth
+    await upsertUser({
+      uid: testReqUid1,
+      email: "req1.iso@s1gestao.local",
+      name: "Requisitante Teste 1 (Isolamento)",
+      document: testReqDoc1,
+      userType: "requisitante",
+      status: "ativo"
+    });
+
+    await upsertUser({
+      uid: testReqUid2,
+      email: "req2.iso@s1gestao.local",
+      name: "Requisitante Teste 2 (Outro Cidadão)",
+      document: testReqDoc2,
+      userType: "requisitante",
+      status: "ativo"
+    });
+
+    const tokenReq1 = signServerSessionToken({
+      uid: testReqUid1,
+      email: "req1.iso@s1gestao.local",
+      role: "requisitante",
+      document: testReqDoc1,
+      name: "Requisitante Teste 1"
+    });
+
+    // 10.2 Leitura com isolamento por registro para Requisitante comum
+    const resReq1List = await fetch(`${baseUrl}/api/usuarios`, {
+      headers: { "Authorization": `Bearer ${tokenReq1}` }
+    });
+    assert(resReq1List.status === 200, "Requisitante pode chamar GET /api/usuarios (200 OK)", "200", String(resReq1List.status));
+    const req1ListData = await resReq1List.json();
+    const containsOtherUser = req1ListData.some((u: any) => u.id === testReqUid2);
+    assert(
+      !containsOtherUser,
+      "Isolamento por registro: Requisitante comum não visualiza cadastros de outros usuários na listagem",
+      "false",
+      String(containsOtherUser)
+    );
+    const containsSelf = req1ListData.some((u: any) => u.id === testReqUid1);
+    assert(
+      containsSelf,
+      "Isolamento por registro: Requisitante comum visualiza seu próprio cadastro na listagem",
+      "true",
+      String(containsSelf)
+    );
+
+    // 10.3 Requisitante comum tentando consultar outro usuário por ID (403 Forbidden)
+    const resReq1GetOther = await fetch(`${baseUrl}/api/usuarios/${testReqUid2}`, {
+      headers: { "Authorization": `Bearer ${tokenReq1}` }
+    });
+    assert(
+      resReq1GetOther.status === 403,
+      "Requisitante comum impedido de consultar cadastro de outro usuário por ID (403 Forbidden)",
+      "403",
+      String(resReq1GetOther.status)
+    );
+
+    // 10.4 Requisitante comum consultando seu próprio cadastro por ID (200 OK)
+    const resReq1GetSelf = await fetch(`${baseUrl}/api/usuarios/${testReqUid1}`, {
+      headers: { "Authorization": `Bearer ${tokenReq1}` }
+    });
+    assert(
+      resReq1GetSelf.status === 200,
+      "Requisitante comum autorizado a consultar seu próprio cadastro por ID (200 OK)",
+      "200",
+      String(resReq1GetSelf.status)
+    );
+    const req1SelfData = await resReq1GetSelf.json();
+    assert(
+      req1SelfData.name === "Requisitante Teste 1 (Isolamento)",
+      "Dados retornados correspondem ao próprio requisitante autenticado",
+      "Requisitante Teste 1 (Isolamento)",
+      String(req1SelfData.name)
+    );
+
+    // 10.5 Requisitante comum impedido de alterar cadastro de outro usuário (PUT -> 403)
+    const resReq1PutOther = await fetch(`${baseUrl}/api/usuarios/${testReqUid2}`, {
+      method: "PUT",
+      headers: { 
+        "Authorization": `Bearer ${tokenReq1}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ name: "Nome Adulterado Ilicitamente" })
+    });
+    assert(
+      resReq1PutOther.status === 403,
+      "Requisitante comum impedido de alterar cadastro de outro usuário (403 Forbidden)",
+      "403",
+      String(resReq1PutOther.status)
+    );
+
+    // 10.6 Requisitante comum alterando seu próprio perfil tem campos de privilégio sanitizados
+    const resReq1PutSelf = await fetch(`${baseUrl}/api/usuarios/${testReqUid1}`, {
+      method: "PUT",
+      headers: { 
+        "Authorization": `Bearer ${tokenReq1}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ 
+        name: "Requisitante 1 (Nome Atualizado)",
+        phone: "(18) 99888-7777",
+        status: "pendente_autorizacao", // Tentativa de adulterar status
+        userType: "admin"               // Tentativa de auto-elevação de papel
+      })
+    });
+    assert(
+      resReq1PutSelf.status === 200,
+      "Requisitante autorizado a atualizar seus próprios dados de contato (200 OK)",
+      "200",
+      String(resReq1PutSelf.status)
+    );
+    const req1PutResult = await resReq1PutSelf.json();
+    assert(
+      req1PutResult.usuario?.name === "Requisitante 1 (Nome Atualizado)",
+      "Nome e telefone do próprio usuário foram atualizados com sucesso",
+      "Requisitante 1 (Nome Atualizado)",
+      String(req1PutResult.usuario?.name)
+    );
+    assert(
+      req1PutResult.usuario?.userType === "requisitante",
+      "Segurança: backend sanitizou e rejeitou tentativa de auto-elevação para 'admin'",
+      "requisitante",
+      String(req1PutResult.usuario?.userType)
+    );
+    assert(
+      req1PutResult.usuario?.status === "ativo",
+      "Segurança: backend sanitizou e preservou status 'ativo' sem permitir adulteração",
+      "ativo",
+      String(req1PutResult.usuario?.status)
+    );
+
+    // 10.7 Exclusão de usuário bloqueada quando há Ordens de Serviço vinculadas (Integridade Referencial)
+    const testOrderId = `test-os-ref-${Date.now()}`;
+    await upsertServiceOrder({
+      id: testOrderId,
+      clientId: testReqUid1, // Vínculo explícito com testReqUid1
+      title: "Ordem de Serviço Teste para Integridade Referencial",
+      description: "OS de teste vinculada ao requisitante",
+      category: "Elétrica",
+      status: "aberto",
+      priority: "medium",
+      assignedTo: "Eletricista Teste",
+      startDate: new Date().toISOString(),
+      endDate: new Date().toISOString(),
+      notes: "OS de teste",
+      history: [],
+      createdAt: new Date().toISOString()
+    });
+
+    const resDeleteWithOrder = await fetch(`${baseUrl}/api/usuarios/${testReqUid1}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(
+      resDeleteWithOrder.status === 400,
+      "Integridade referencial: exclusão bloqueada quando há Ordens de Serviço vinculadas (400 Bad Request)",
+      "400",
+      String(resDeleteWithOrder.status)
+    );
+    const deleteOrderBlockedData = await resDeleteWithOrder.json();
+    assert(
+      typeof deleteOrderBlockedData.error === "string" && deleteOrderBlockedData.error.includes("ordem(ns) de serviço vinculada"),
+      "Mensagem de erro explicativa informa presença de ordens de serviço ativas vinculadas",
+      "true",
+      String(deleteOrderBlockedData.error?.includes("ordem(ns) de serviço vinculada"))
+    );
+
+    // Remove a ordem de serviço vinculada para liberar o teste de exclusão
+    await deleteServiceOrder(testOrderId);
+
+    // 10.8 Requisitante comum impedido de excluir qualquer usuário (403 Forbidden)
+    const resReqDeleteAttempt = await fetch(`${baseUrl}/api/usuarios/${testReqUid2}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${tokenReq1}` }
+    });
+    assert(
+      resReqDeleteAttempt.status === 403,
+      "Requisitante comum impedido de excluir usuários (403 Forbidden)",
+      "403",
+      String(resReqDeleteAttempt.status)
+    );
+
+    // 10.9 Exclusão de usuário permitida para Administrador quando não há ordens vinculadas
+    const resAdminDelete = await fetch(`${baseUrl}/api/usuarios/${testReqUid1}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(
+      resAdminDelete.status === 200,
+      "Administrador autorizado a remover usuário sem ordens vinculadas (200 OK)",
+      "200",
+      String(resAdminDelete.status)
+    );
+
+    // Limpeza segura dos registros residuais de teste
+    await deleteUsuario(testReqUid2);
+    await deleteUser(testReqUid1);
+    await deleteUser(testReqUid2);
+
+    // 10.10 Criação autorizada de usuário por Administrador com privilégios completos
+    const testAdminCreatedUid = `test-admin-created-${Date.now()}`;
+    const resAdminCreateUser = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { 
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: testAdminCreatedUid,
+        name: "Gestor Criado por Administrador",
+        document: "555.666.777-88",
+        phone: "(18) 98765-4321",
+        email: "gestor.admin.created@s1gestao.local",
+        status: "ativo",
+        userType: "gestor"
+      })
+    });
+    assert(
+      resAdminCreateUser.status === 201,
+      "Administrador autorizado a criar usuário com privilégios definidos (201 Created)",
+      "201",
+      String(resAdminCreateUser.status)
+    );
+    const adminCreatedData = await resAdminCreateUser.json();
+    assert(
+      adminCreatedData.usuario?.status === "ativo",
+      "Usuário criado por Administrador mantém status 'ativo'",
+      "ativo",
+      String(adminCreatedData.usuario?.status)
+    );
+    assert(
+      adminCreatedData.usuario?.userType === "gestor",
+      "Usuário criado por Administrador mantém papel 'gestor'",
+      "gestor",
+      String(adminCreatedData.usuario?.userType)
+    );
+
+    // Limpeza do usuário criado pelo Administrador
+    await deleteUsuario(testAdminCreatedUid);
 
   } finally {
     // Encerra servidor de teste

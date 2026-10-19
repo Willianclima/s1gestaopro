@@ -5,7 +5,10 @@ export async function fetchUsuarios(): Promise<Client[]> {
   const res = await fetch("/api/usuarios", {
     headers: getApiAuthHeaders(),
   });
-  if (!res.ok) throw new Error("Erro ao buscar usuários no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao buscar usuários no PostgreSQL");
+  }
   return res.json();
 }
 
@@ -13,36 +16,48 @@ export async function fetchUsuarioById(id: string): Promise<Client> {
   const res = await fetch(`/api/usuarios/${encodeURIComponent(id)}`, {
     headers: getApiAuthHeaders(),
   });
-  if (!res.ok) throw new Error("Erro ao buscar usuário por ID no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao buscar usuário por ID no PostgreSQL");
+  }
   return res.json();
 }
 
-export async function createUsuario(usuario: Partial<Client>) {
+export async function createUsuario(usuario: Partial<Client>): Promise<{ success: boolean; usuario: Client; client: Client }> {
   const res = await fetch("/api/usuarios", {
     method: "POST",
     headers: getApiAuthHeaders(),
     body: JSON.stringify(usuario),
   });
-  if (!res.ok) throw new Error("Erro ao criar usuário no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao criar usuário no PostgreSQL");
+  }
   return res.json();
 }
 
-export async function updateUsuario(id: string, usuario: Partial<Client>) {
+export async function updateUsuario(id: string, usuario: Partial<Client>): Promise<{ success: boolean; usuario: Client; client: Client }> {
   const res = await fetch(`/api/usuarios/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: getApiAuthHeaders(),
     body: JSON.stringify(usuario),
   });
-  if (!res.ok) throw new Error("Erro ao atualizar usuário no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao atualizar usuário no PostgreSQL");
+  }
   return res.json();
 }
 
-export async function deleteUsuario(id: string) {
+export async function deleteUsuario(id: string): Promise<{ success: boolean; message?: string; id?: string }> {
   const res = await fetch(`/api/usuarios/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: getApiAuthHeaders(),
   });
-  if (!res.ok) throw new Error("Erro ao remover usuário no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao remover usuário no PostgreSQL");
+  }
   return res.json();
 }
 
@@ -145,17 +160,35 @@ export async function fetchPostgresServiceCategories(): Promise<ServiceCategory[
   const res = await fetch("/api/postgres/service-categories", {
     headers: getApiAuthHeaders(),
   });
-  if (!res.ok) throw new Error("Erro ao buscar categorias de serviço no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao buscar categorias de serviço no PostgreSQL");
+  }
   return res.json();
 }
 
-export async function savePostgresServiceCategory(cat: ServiceCategory) {
+export async function savePostgresServiceCategory(cat: ServiceCategory): Promise<{ success: boolean; cat: ServiceCategory }> {
   const res = await fetch("/api/postgres/service-categories", {
     method: "POST",
     headers: getApiAuthHeaders(),
     body: JSON.stringify(cat),
   });
-  if (!res.ok) throw new Error("Erro ao salvar categoria no PostgreSQL");
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao salvar categoria no PostgreSQL");
+  }
+  return res.json();
+}
+
+export async function deletePostgresServiceCategory(id: string): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(`/api/postgres/service-categories/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: getApiAuthHeaders(),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Erro ao remover categoria no PostgreSQL");
+  }
   return res.json();
 }
 

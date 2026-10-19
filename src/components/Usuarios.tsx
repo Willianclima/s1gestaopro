@@ -8,9 +8,9 @@ import UserProposalEditalModal from "./UserProposalEditalModal";
 interface UsuariosProps {
   clients: Client[];
   orders: ServiceOrder[];
-  onAddClient: (client: Client) => void;
-  onUpdateClient: (client: Client) => void;
-  onDeleteClient: (id: string) => void;
+  onAddClient: (client: Client) => void | Promise<void>;
+  onUpdateClient: (client: Client) => void | Promise<void>;
+  onDeleteClient: (id: string) => void | Promise<void>;
   almoxarifados?: Almoxarifado[];
   categories?: ServiceCategory[];
   globalSearchTerm?: string;
