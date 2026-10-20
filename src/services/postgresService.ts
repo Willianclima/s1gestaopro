@@ -1,15 +1,25 @@
 import { getApiAuthHeaders } from "./apiAuth.ts";
 import type { Client, Professional, ServiceOrder, ServiceCategory, SystemLog, LoginAttempt, AccessProfile } from "../types.ts";
 
-export async function fetchUsuarios(): Promise<Client[]> {
+export class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
+export async function fetchUsuarios(signal?: AbortSignal): Promise<Client[]> {
   const res = await fetch("/api/usuarios", {
     headers: getApiAuthHeaders(),
+    signal,
   });
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || "Erro ao buscar usuários no PostgreSQL");
+    throw new ApiRequestError(errorData.error || "Erro ao buscar usuários no PostgreSQL", res.status);
   }
-  return res.json();
+  const data = await res.json();
+  if (!Array.isArray(data)) throw new ApiRequestError("Resposta inválida ao buscar usuários no PostgreSQL", res.status);
+  return data;
 }
 
 export async function fetchUsuarioById(id: string): Promise<Client> {

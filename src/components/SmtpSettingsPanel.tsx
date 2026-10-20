@@ -375,7 +375,7 @@ export default function SmtpSettingsPanel({
   const [host, setHost] = useState(settings.host || "smtp.aracatubaservicos.com.br");
   const [port, setPort] = useState(settings.port || "587");
   const [user, setUser] = useState(settings.user || "suporte@aracatubaservicos.com.br");
-  const [pass, setPass] = useState(settings.pass || "************");
+  const [pass, setPass] = useState("");
   const [senderAddress, setSenderAddress] = useState(settings.senderAddress || "Araçatuba Serviços <suporte@aracatubaservicos.com.br>");
   const [secure, setSecure] = useState(settings.secure !== undefined ? settings.secure : true);
   const [smtpEnabled, setSmtpEnabled] = useState(settings.enabled !== undefined ? settings.enabled : false);
@@ -431,7 +431,7 @@ export default function SmtpSettingsPanel({
       setHost("smtp.aracatubaservicos.com.br");
       setPort("587");
       setUser("suporte@aracatubaservicos.com.br");
-      setPass("************");
+      setPass("");
       setSenderAddress("Araçatuba Serviços <suporte@aracatubaservicos.com.br>");
       setSecure(true);
       onNotifyTest("Preset Restaurado", "Configuração corporativa padrão reatribuída.", "info");

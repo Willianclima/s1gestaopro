@@ -33,6 +33,8 @@ import {
   upsertUser
 } from "./src/db/repository.ts";
 import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
+import { validateCPFAlgorithm } from "./src/utils/cpfValidator.ts";
+import type { Client } from "./src/types.ts";
 import {
   requireAuth,
   optionalAuth,
@@ -733,17 +735,8 @@ app.get(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], re
     }
 
     // Requisitante comum vê apenas seu próprio registro (Regra de Isolamento por Registro)
-    const userUid = req.user!.uid;
-    const userDoc = req.user!.document ? req.user!.document.replace(/\D/g, "") : "";
-    const userEmail = (req.user!.email || "").toLowerCase();
-
-    const filtered = usuariosList.filter(u => {
-      const docMatch = userDoc && u.document && u.document.replace(/\D/g, "") === userDoc;
-      const emailMatch = userEmail && u.email && u.email.toLowerCase() === userEmail;
-      return u.id === userUid || docMatch || emailMatch;
-    });
-
-    res.json(filtered);
+    const ownIds = linkedUsuarioIds(usuariosList, req.user!);
+    return res.json(usuariosList.filter((usuario) => ownIds.has(usuario.id)));
   } catch (error: any) {
     console.error("Erro ao buscar usuários no PostgreSQL:", error);
     res.status(500).json({ error: "Erro interno no servidor ao buscar usuários." });
@@ -755,9 +748,8 @@ app.get(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
   try {
     const { id } = req.params;
     const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const isSelf = req.user!.uid === id || (req.user!.document && req.user!.document.replace(/\D/g, "") === id.replace(/\D/g, ""));
-
-    if (!isPrivileged && !isSelf && req.user!.role !== "profissional") {
+    const canReadAll = isPrivileged || req.user!.role === "profissional";
+    if (!canReadAll && !linkedUsuarioIds(await getAllUsuarios(), req.user!).has(id)) {
       return res.status(403).json({ error: "Acesso negado: Você só pode consultar seu próprio cadastro." });
     }
 
@@ -816,30 +808,17 @@ app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
     const body = req.body || {};
 
     const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const isExactSelf = req.user!.uid === id;
-
-    let existing = await getUsuarioById(id);
-
-    if (!isPrivileged && !isExactSelf) {
-      const userDoc = req.user!.document ? req.user!.document.replace(/\D/g, "") : "";
-      const clientDoc = existing?.document ? existing.document.replace(/\D/g, "") : "";
-      const docMatch = Boolean(userDoc && clientDoc && userDoc === clientDoc);
-
-      if (!existing || !docMatch) {
-        return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
-      }
-    }
+    const existing = await getUsuarioById(id);
 
     if (!existing) {
       return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
 
-    const safeBody = { ...body };
-    // Usuários não privilegiados não podem auto-aprovar (mudar status para ativo) nem alterar o próprio papel
-    if (!isPrivileged) {
-      delete safeBody.status;
-      delete safeBody.userType;
+    if (!isPrivileged && !linkedUsuarioIds(await getAllUsuarios(), req.user!).has(id)) {
+      return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
     }
+
+    const safeBody = pickUsuarioUpdateFields(body, isPrivileged);
 
     const updatedData = {
       ...existing,
@@ -862,29 +841,17 @@ app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cli
     const body = req.body || {};
 
     const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const isExactSelf = req.user!.uid === id;
-
-    let existing = await getUsuarioById(id);
-
-    if (!isPrivileged && !isExactSelf) {
-      const userDoc = req.user!.document ? req.user!.document.replace(/\D/g, "") : "";
-      const clientDoc = existing?.document ? existing.document.replace(/\D/g, "") : "";
-      const docMatch = Boolean(userDoc && clientDoc && userDoc === clientDoc);
-
-      if (!existing || !docMatch) {
-        return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
-      }
-    }
+    const existing = await getUsuarioById(id);
 
     if (!existing) {
       return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
 
-    const safeBody = { ...body };
-    if (!isPrivileged) {
-      delete safeBody.status;
-      delete safeBody.userType;
+    if (!isPrivileged && !linkedUsuarioIds(await getAllUsuarios(), req.user!).has(id)) {
+      return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
     }
+
+    const safeBody = pickUsuarioUpdateFields(body, isPrivileged);
 
     const updatedData = {
       ...existing,
@@ -931,6 +898,41 @@ app.delete(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cl
     res.status(500).json({ error: "Erro interno no servidor ao remover usuário." });
   }
 });
+
+const SELF_EDITABLE_USUARIO_FIELDS = [
+  "name", "phone", "address", "lat", "lng", "formattedAddress", "isAddressValidated", "notes"
+] as const;
+const PRIVILEGED_USUARIO_FIELDS = [
+  "document", "email", "status", "userType", "warehouseId", "workLocation", "isTechnician",
+  "specialty", "specialties", "technicalRole", "isTrialRequested", "trialDays", "trialRequestedAt",
+  "lgpdAccepted", "biddingTermsAccepted", "enablePurchaseOpportunity", "proposalEmail", "proposalStatus",
+  "proposalRequestedAt", "selectedPlan", "proposalValue", "accessProfileId", "customPermissions"
+] as const;
+
+function linkedUsuarioIds(rows: Client[], user: NonNullable<AuthRequest["user"]>): Set<string> {
+  const stableMatches = rows.filter((row) => row.id === user.uid || row.googleUid === user.uid);
+  if (stableMatches.length === 1) return new Set([stableMatches[0].id]);
+  if (stableMatches.length > 1) return new Set();
+
+  const email = user.email?.trim().toLowerCase();
+  if (email) {
+    const emailMatches = rows.filter((row) => row.email?.trim().toLowerCase() === email);
+    return emailMatches.length === 1 ? new Set([emailMatches[0].id]) : new Set();
+  }
+
+  const document = user.document?.replace(/\D/g, "") || "";
+  if (!document || !validateCPFAlgorithm(document).isValid) return new Set();
+  const documentMatches = rows.filter((row) => row.document?.replace(/\D/g, "") === document);
+  return documentMatches.length === 1 ? new Set([documentMatches[0].id]) : new Set();
+}
+
+function pickUsuarioUpdateFields(body: Record<string, unknown>, privileged: boolean): Partial<Client> {
+  const allowed = new Set<string>([
+    ...SELF_EDITABLE_USUARIO_FIELDS,
+    ...(privileged ? PRIVILEGED_USUARIO_FIELDS : [])
+  ]);
+  return Object.fromEntries(Object.entries(body).filter(([key]) => allowed.has(key))) as Partial<Client>;
+}
 
 // GET /api/postgres/service-orders
 app.get("/api/postgres/service-orders", requireAuth as any, async (req: AuthRequest, res) => {

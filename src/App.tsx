@@ -30,7 +30,8 @@ import {
   fetchUsuarios,
   createUsuario,
   updateUsuario,
-  deleteUsuario
+  deleteUsuario,
+  ApiRequestError
 } from "./services/postgresService";
 import { validateCPFAlgorithm, validateCPFWithGemini, CpfValidationResult } from "./utils/cpfValidator";
 
@@ -655,7 +656,7 @@ export default function App() {
     host: "smtp.aracatubaservicos.com.br",
     port: "587",
     user: "suporte@aracatubaservicos.com.br",
-    pass: "S0m3_S3cur3_P@ssw0rd",
+    pass: "",
     senderAddress: "Araçatuba Serviços <suporte@aracatubaservicos.com.br>",
     secure: true,
     enabled: false
@@ -763,7 +764,8 @@ export default function App() {
     }
 
     if (cachedSmtp) {
-      setSmtpSettings(JSON.parse(cachedSmtp));
+      const parsedSmtp = JSON.parse(cachedSmtp);
+      setSmtpSettings({ ...parsedSmtp, pass: "" });
     }
 
     if (cachedWhatsapp) {
@@ -858,23 +860,6 @@ export default function App() {
       })
       .catch((err) => {
         console.warn("[PostgreSQL] Operando com categorias em cache local (modo de contingência):", err?.message || err);
-      });
-
-    // Sincronização oficial de Usuários & Requisitantes com PostgreSQL via API protegida (Fase 2.3)
-    fetchUsuarios()
-      .then((remoteUsers) => {
-        if (Array.isArray(remoteUsers) && remoteUsers.length > 0) {
-          setClients(remoteUsers);
-          localStorage.setItem("service_mgt_clients2", JSON.stringify(remoteUsers));
-        } else if (Array.isArray(remoteUsers) && remoteUsers.length === 0) {
-          // Se o banco PostgreSQL de usuários estiver vazio, inicializa com os defaults
-          INITIAL_CLIENTS.forEach((u) => {
-            createUsuario(u).catch(() => {});
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn("[PostgreSQL] Operando com usuários em cache local (modo de contingência):", err?.message || err);
       });
 
     if (cachedProfessionals) {
@@ -982,6 +967,50 @@ export default function App() {
       localStorage.setItem("service_mgt_blocked_dates", JSON.stringify(initialBlocked));
     }
   }, []);
+
+  // Revalida o escopo de usuários sempre que a identidade autenticada muda.
+  // A API atualiza o estado em memória sem substituir o cache compartilhado existente.
+  useEffect(() => {
+    if (!currentUser) return;
+    const controller = new AbortController();
+    const privileged = ["admin", "gestor", "gestor_servicos"].includes(currentUser.userType);
+
+    if (!privileged) {
+      try {
+        const cached = JSON.parse(localStorage.getItem("service_mgt_clients2") || "[]") as Client[];
+        const normalizedEmail = currentUser.email?.trim().toLowerCase();
+        const normalizedDocument = currentUser.document?.replace(/\D/g, "");
+        const documentMatches = normalizedDocument
+          ? cached.filter((client) => client.document?.replace(/\D/g, "") === normalizedDocument)
+          : [];
+        setClients(cached.filter((client) =>
+          client.id === currentUser.id ||
+          (!!currentUser.googleUid && client.googleUid === currentUser.googleUid) ||
+          (!!normalizedEmail && client.email?.trim().toLowerCase() === normalizedEmail) ||
+          (documentMatches.length === 1 && client.id === documentMatches[0].id)
+        ));
+      } catch {
+        setClients([]);
+      }
+    }
+
+    fetchUsuarios(controller.signal)
+      .then((remoteUsers) => {
+        if (!controller.signal.aborted) setClients(remoteUsers);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        if (err instanceof ApiRequestError && err.status === 401) {
+          console.info("[PostgreSQL] Revalidação requer uma sessão autenticada; cache preservado.");
+        } else if (err instanceof ApiRequestError && err.status === 403) {
+          console.warn("[PostgreSQL] Sessão sem autorização para este escopo; cache preservado.");
+        } else {
+          console.warn("[PostgreSQL] Falha de rede ou resposta inválida na revalidação; cache preservado.");
+        }
+      });
+
+    return () => controller.abort();
+  }, [currentUser?.id, currentUser?.userType, currentUser?.email, currentUser?.document, currentUser?.googleUid]);
 
   // 1. Real-time synchronization across multiple browser tabs (same local storage)
   useEffect(() => {
@@ -1243,7 +1272,11 @@ export default function App() {
   // Sync state helpers to persistent Storage
   const updateClientsState = (newClients: Client[]) => {
     setClients(newClients);
-    localStorage.setItem("service_mgt_clients2", JSON.stringify(newClients));
+    const privileged = ["admin", "gestor", "gestor_servicos"].includes(currentUser?.userType || "");
+    const cacheKey = privileged || !currentUser
+      ? "service_mgt_clients2"
+      : `service_mgt_clients2_user_${encodeURIComponent(currentUser.id)}`;
+    localStorage.setItem(cacheKey, JSON.stringify(newClients));
   };
 
   const updateOrdersState = (newOrders: ServiceOrder[]) => {
@@ -1432,8 +1465,9 @@ export default function App() {
   };
 
   const handleSaveSmtpSettings = (newSettings: SmtpSettings) => {
-    setSmtpSettings(newSettings);
-    localStorage.setItem("service_mgt_smtp", JSON.stringify(newSettings));
+    const safeSettings = { ...newSettings, pass: "" };
+    setSmtpSettings(safeSettings);
+    localStorage.setItem("service_mgt_smtp", JSON.stringify(safeSettings));
     addSystemLog(
       "Configuração SMTP",
       `Parâmetros do servidor SMTP atualizados pelo Gestor (${newSettings.host}:${newSettings.port}).`,
