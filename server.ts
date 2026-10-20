@@ -808,14 +808,14 @@ app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
     const body = req.body || {};
 
     const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const existing = await getUsuarioById(id);
-
-    if (!existing) {
-      return res.status(404).json({ error: "Usuário não encontrado para atualização" });
-    }
 
     if (!isPrivileged && !linkedUsuarioIds(await getAllUsuarios(), req.user!).has(id)) {
       return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+    }
+
+    const existing = await getUsuarioById(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
 
     const safeBody = pickUsuarioUpdateFields(body, isPrivileged);
@@ -841,14 +841,14 @@ app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cli
     const body = req.body || {};
 
     const isPrivileged = ["admin", "gestor", "gestor_servicos"].includes(req.user!.role);
-    const existing = await getUsuarioById(id);
-
-    if (!existing) {
-      return res.status(404).json({ error: "Usuário não encontrado para atualização" });
-    }
 
     if (!isPrivileged && !linkedUsuarioIds(await getAllUsuarios(), req.user!).has(id)) {
       return res.status(403).json({ error: "Acesso negado: Você não possui autorização para alterar este usuário." });
+    }
+
+    const existing = await getUsuarioById(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Usuário não encontrado para atualização" });
     }
 
     const safeBody = pickUsuarioUpdateFields(body, isPrivileged);
