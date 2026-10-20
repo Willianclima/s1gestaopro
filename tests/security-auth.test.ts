@@ -1148,6 +1148,180 @@ async function runSecurityTestSuite() {
     // Limpeza do usuário criado pelo Administrador
     await deleteUsuario(testAdminCreatedUid);
 
+    // 10.11 PATCH /api/usuarios/:id sanitiza e rejeita campos protegidos enviados por requisitante comum
+    const testPatchUid = `test-patch-${Date.now()}`;
+    await upsertUsuario({
+      id: testPatchUid,
+      name: "Requisitante Teste Patch",
+      document: "777.888.999-00",
+      phone: "(18) 99111-2222",
+      email: "patch.test@s1gestao.local",
+      address: "Rua Patch, 100",
+      notes: "Registro inicial de teste",
+      createdAt: new Date().toISOString(),
+      status: "ativo",
+      userType: "requisitante"
+    });
+    await upsertUser({
+      uid: testPatchUid,
+      email: "patch.test@s1gestao.local",
+      name: "Requisitante Teste Patch",
+      document: "777.888.999-00",
+      userType: "requisitante",
+      status: "ativo"
+    });
+    const patchUserToken = signServerSessionToken({
+      uid: testPatchUid,
+      email: "patch.test@s1gestao.local",
+      role: "requisitante",
+      document: "777.888.999-00"
+    });
+
+    const resPatchSelf = await fetch(`${baseUrl}/api/usuarios/${testPatchUid}`, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${patchUserToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        notes: "Observação atualizada via PATCH",
+        userType: "admin",           // Protegido
+        status: "inativo",           // Protegido
+        warehouseId: "wh-inválido",  // Protegido
+        password: "TentativaDeSenhaTextoPuro" // Protegido/Removido
+      })
+    });
+    assert(resPatchSelf.status === 200, "PATCH /api/usuarios/:id aceito para atualização parcial própria (200 OK)", "200", String(resPatchSelf.status));
+    const patchResult = await resPatchSelf.json();
+    assert(
+      patchResult.usuario?.notes === "Observação atualizada via PATCH",
+      "PATCH: Campo permitido 'notes' atualizado com sucesso",
+      "Observação atualizada via PATCH",
+      String(patchResult.usuario?.notes)
+    );
+    assert(
+      patchResult.usuario?.userType === "requisitante",
+      "PATCH: Campo protegido 'userType' blindado contra auto-elevação para 'admin'",
+      "requisitante",
+      String(patchResult.usuario?.userType)
+    );
+    assert(
+      patchResult.usuario?.status === "ativo",
+      "PATCH: Campo protegido 'status' blindado contra adulteração",
+      "ativo",
+      String(patchResult.usuario?.status)
+    );
+    assert(
+      !("password" in patchResult.usuario),
+      "PATCH: Senhas em texto puro não são aceitas nem retornadas pela API",
+      "true",
+      String(!("password" in patchResult.usuario))
+    );
+
+    await deleteUsuario(testPatchUid);
+    await deleteUser(testPatchUid);
+
+    // 10.12 Senhas em texto puro nunca são persistidas em 'usuarios.data' nem retornadas em POST ou GET
+    const testPwUid = `test-pw-strip-${Date.now()}`;
+    const resCreateWithPw = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: testPwUid,
+        name: "Cidadão Teste Sanitização de Senha",
+        document: "333.444.555-66",
+        password: "MinhaSenhaEmTextoPuroNuncaSalvaNoBanco"
+      })
+    });
+    assert(resCreateWithPw.status === 201, "POST /api/usuarios com tentativa de senha em texto puro criado (201 Created)", "201", String(resCreateWithPw.status));
+    const createWithPwData = await resCreateWithPw.json();
+    assert(
+      !("password" in (createWithPwData.usuario || {})),
+      "POST: Resposta da API não expõe campo de senha em texto puro",
+      "true",
+      String(!("password" in (createWithPwData.usuario || {})))
+    );
+
+    const resGetPw = await fetch(`${baseUrl}/api/usuarios/${testPwUid}`, {
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    const getPwData = await resGetPw.json();
+    assert(
+      !("password" in getPwData),
+      "GET /api/usuarios/:id não retorna campo de senha em texto puro",
+      "true",
+      String(!("password" in getPwData))
+    );
+
+    await deleteUsuario(testPwUid);
+
+    // 10.13 Resposta vazia legítima de GET /api/usuarios retorna array vazio [] sem gerar registros demo
+    const emptyUserUid = `test-empty-user-${Date.now()}`;
+    const emptyUserToken = signServerSessionToken({
+      uid: emptyUserUid,
+      email: "novo.usuario.sem.cadastro@s1gestao.local",
+      role: "requisitante"
+    });
+    const resEmptyList = await fetch(`${baseUrl}/api/usuarios`, {
+      headers: { "Authorization": `Bearer ${emptyUserToken}` }
+    });
+    assert(resEmptyList.status === 200, "GET /api/usuarios para usuário sem registros retorna 200 OK", "200", String(resEmptyList.status));
+    const emptyListData = await resEmptyList.json();
+    assert(
+      Array.isArray(emptyListData) && emptyListData.length === 0,
+      "GET /api/usuarios para usuário sem vínculos retorna array vazio [] legítimo sem gerar dados demo",
+      "[] (length 0)",
+      JSON.stringify(emptyListData)
+    );
+
+    // 10.14 Cadastro operacional municipal de cidadão no balcão sem conta de acesso (users) continua permitido
+    const testBalcaoUid = `cidadao-balcao-${Date.now()}`;
+    const resBalcao = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: testBalcaoUid,
+        name: "Dona Maria - Atendimento Presencial no Balcão",
+        document: "888.999.000-11",
+        phone: "(18) 3622-0000",
+        address: "Rua das Flores, 123 - Centro",
+        status: "ativo",
+        userType: "requisitante"
+      })
+    });
+    assert(resBalcao.status === 201, "Cadastro presencial de cidadão sem conta de login (users) aceito com sucesso (201 Created)", "201", String(resBalcao.status));
+    const balcaoData = await resBalcao.json();
+    assert(
+      balcaoData.usuario?.name === "Dona Maria - Atendimento Presencial no Balcão",
+      "Registro operacional de cidadão gravado e recuperável com dados cadastrais completos",
+      "Dona Maria - Atendimento Presencial no Balcão",
+      String(balcaoData.usuario?.name)
+    );
+
+    await deleteUsuario(testBalcaoUid);
+
+    // 10.15 Distinção clara e robusta entre códigos de status HTTP (401, 403, 404, 200)
+    // 401: Token ausente
+    const resStatus401 = await fetch(`${baseUrl}/api/usuarios`);
+    assert(resStatus401.status === 401, "Distinção HTTP: Sem token retorna estritamente 401 Unauthorized", "401", String(resStatus401.status));
+
+    // 403: Requisitante tentando acessar ID que não lhe pertence
+    const resStatus403 = await fetch(`${baseUrl}/api/usuarios/outro-usuario-qualquer`, {
+      headers: { "Authorization": `Bearer ${emptyUserToken}` }
+    });
+    assert(resStatus403.status === 403, "Distinção HTTP: Requisitante acessando fora de escopo retorna estritamente 403 Forbidden", "403", String(resStatus403.status));
+
+    // 404: Administrador acessando ID que comprovadamente não existe
+    const resStatus404 = await fetch(`${baseUrl}/api/usuarios/usuario-inexistente-123456`, {
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(resStatus404.status === 404, "Distinção HTTP: Administrador consultando ID inexistente retorna estritamente 404 Not Found", "404", String(resStatus404.status));
   } finally {
     // Encerra servidor de teste
     await new Promise<void>((resolve) => server.close(() => resolve()));

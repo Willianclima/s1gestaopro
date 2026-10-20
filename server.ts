@@ -776,9 +776,12 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
       return res.status(400).json({ error: "O campo 'name' (nome do usuário) é obrigatório." });
     }
 
+    // Sanitização de segurança: senhas nunca são aceitas, persistidas em texto puro ou retornadas pela API operacional
+    const { password: _p, senha: _s, ...cleanBody } = body;
+
     const isPrivileged = req.user && ["admin", "gestor", "gestor_servicos"].includes(req.user.role);
-    let finalStatus = body.status || "ativo";
-    let finalUserType = body.userType || "requisitante";
+    let finalStatus = cleanBody.status || "ativo";
+    let finalUserType = cleanBody.userType || "requisitante";
 
     // Se a criação for feita por auto-cadastro anônimo ou usuário comum, força pendente e requisitante
     if (!isPrivileged) {
@@ -787,8 +790,8 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
     }
 
     const usuarioData = {
-      ...body,
-      id: body.id || (req.user ? req.user.uid : `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`),
+      ...cleanBody,
+      id: cleanBody.id || (req.user ? req.user.uid : `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`),
       status: finalStatus,
       userType: finalUserType
     };

@@ -135,6 +135,7 @@ export async function getAllUsuarios(): Promise<Client[]> {
     const rows = await db.select().from(usuarios);
     return rows.map((r) => {
       const extraData = (r.data as Record<string, any>) || {};
+      const { password, senha, ...safeExtra } = extraData;
       return {
         id: r.id,
         name: r.name,
@@ -142,15 +143,15 @@ export async function getAllUsuarios(): Promise<Client[]> {
         phone: r.phone || "",
         email: r.email || "",
         address: r.address || "",
-        lat: r.lat ?? extraData.lat ?? undefined,
-        lng: r.lng ?? extraData.lng ?? undefined,
-        formattedAddress: r.formattedAddress || extraData.formattedAddress || undefined,
-        isAddressValidated: r.isAddressValidated ?? extraData.isAddressValidated ?? false,
-        notes: r.notes || extraData.notes || "",
-        status: (r.status || extraData.status || "ativo") as any,
-        userType: (r.userType || extraData.userType || "requisitante") as any,
-        createdAt: (extraData.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
-        ...extraData,
+        lat: r.lat ?? safeExtra.lat ?? undefined,
+        lng: r.lng ?? safeExtra.lng ?? undefined,
+        formattedAddress: r.formattedAddress || safeExtra.formattedAddress || undefined,
+        isAddressValidated: r.isAddressValidated ?? safeExtra.isAddressValidated ?? false,
+        notes: r.notes || safeExtra.notes || "",
+        status: (r.status || safeExtra.status || "ativo") as any,
+        userType: (r.userType || safeExtra.userType || "requisitante") as any,
+        createdAt: (safeExtra.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
+        ...safeExtra,
       };
     });
   } catch (error) {
@@ -161,7 +162,7 @@ export async function getAllUsuarios(): Promise<Client[]> {
 
 export async function upsertUsuario(usuario: Client) {
   try {
-    const { id, name, document, phone, email, address, status, userType, lat, lng, formattedAddress, isAddressValidated, notes, ...extraData } = usuario;
+    const { id, name, document, phone, email, address, status, userType, lat, lng, formattedAddress, isAddressValidated, notes, password, senha, ...extraData } = usuario as any;
     const finalStatus = status || "ativo";
     const finalUserType = userType || "requisitante";
 
@@ -241,6 +242,7 @@ export async function getUsuarioById(id: string): Promise<Client | null> {
     if (!rows.length) return null;
     const r = rows[0];
     const extraData = (r.data as Record<string, any>) || {};
+    const { password, senha, ...safeExtra } = extraData;
     return {
       id: r.id,
       name: r.name,
@@ -248,15 +250,15 @@ export async function getUsuarioById(id: string): Promise<Client | null> {
       phone: r.phone || "",
       email: r.email || "",
       address: r.address || "",
-      lat: r.lat ?? extraData.lat ?? undefined,
-      lng: r.lng ?? extraData.lng ?? undefined,
-      formattedAddress: r.formattedAddress || extraData.formattedAddress || undefined,
-      isAddressValidated: r.isAddressValidated ?? extraData.isAddressValidated ?? false,
-      notes: r.notes || extraData.notes || "",
-      status: (r.status || extraData.status || "ativo") as any,
-      userType: (r.userType || extraData.userType || "requisitante") as any,
-      createdAt: (extraData.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
-      ...extraData,
+      lat: r.lat ?? safeExtra.lat ?? undefined,
+      lng: r.lng ?? safeExtra.lng ?? undefined,
+      formattedAddress: r.formattedAddress || safeExtra.formattedAddress || undefined,
+      isAddressValidated: r.isAddressValidated ?? safeExtra.isAddressValidated ?? false,
+      notes: r.notes || safeExtra.notes || "",
+      status: (r.status || safeExtra.status || "ativo") as any,
+      userType: (r.userType || safeExtra.userType || "requisitante") as any,
+      createdAt: (safeExtra.createdAt || (r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString())),
+      ...safeExtra,
     };
   } catch (error) {
     console.error("Database error in getUsuarioById:", error);
