@@ -1,6 +1,6 @@
 import { db } from "./index.ts";
-import { users, usuarios, clients, professionals, serviceOrders, serviceCategories, systemLogs, loginAttempts, accessProfiles } from "./schema.ts";
-import { eq, desc } from "drizzle-orm";
+import { users, usuarios, clients, professionals, serviceOrders, serviceCategories, systemLogs, loginAttempts, accessProfiles, revokedSessions } from "./schema.ts";
+import { eq, desc, and, lt, sql } from "drizzle-orm";
 import type { Client, Professional, ServiceOrder, ServiceCategory, SystemLog, LoginAttempt, AccessProfile } from "../types.ts";
 
 /**
@@ -646,6 +646,115 @@ export async function deleteServiceCategory(id: string): Promise<boolean> {
   } catch (error) {
     console.error("Database error in deleteServiceCategory:", error);
     throw new Error("Erro ao remover categoria no PostgreSQL.", { cause: error });
+  }
+}
+
+// ============================================================================
+// Persistência de Revogações de Sessão no PostgreSQL (Sobrevive a reinício)
+// ============================================================================
+
+export async function recordRevocationInDb(
+  type: "jti" | "token_sig" | "user_all",
+  identifier: string,
+  expiresAt?: Date | null
+): Promise<void> {
+  try {
+    await db.insert(revokedSessions).values({
+      type,
+      identifier,
+      revokedAt: new Date(),
+      expiresAt: expiresAt || null
+    });
+  } catch (err) {
+    console.error("Database error in recordRevocationInDb:", err);
+  }
+}
+
+export async function isSessionRevokedInDb(
+  type: "jti" | "token_sig" | "user_all",
+  identifier: string,
+  issuedAtSeconds?: number
+): Promise<boolean> {
+  try {
+    if (type === "user_all") {
+      const rows = await db.select().from(revokedSessions).where(
+        and(eq(revokedSessions.type, "user_all"), eq(revokedSessions.identifier, identifier))
+      );
+      if (rows.length === 0) return false;
+      if (issuedAtSeconds === undefined) return true;
+      return rows.some(r => {
+        const revSeconds = Math.floor(new Date(r.revokedAt).getTime() / 1000);
+        return issuedAtSeconds <= revSeconds;
+      });
+    }
+
+    const rows = await db.select().from(revokedSessions).where(
+      and(eq(revokedSessions.type, type), eq(revokedSessions.identifier, identifier))
+    );
+    return rows.length > 0;
+  } catch (err) {
+    console.error("Database error in isSessionRevokedInDb:", err);
+    return false;
+  }
+}
+
+export async function pruneExpiredRevocations(): Promise<number> {
+  try {
+    const now = new Date();
+    const result = await db.delete(revokedSessions).where(
+      and(sql`${revokedSessions.expiresAt} IS NOT NULL`, lt(revokedSessions.expiresAt, now))
+    ).returning();
+    return result.length;
+  } catch (err) {
+    console.error("Database error in pruneExpiredRevocations:", err);
+    return 0;
+  }
+}
+
+// ============================================================================
+// Gerenciamento Seguro de Credenciais e Hashes (Argon2id)
+// ============================================================================
+
+export async function setUserPasswordHash(uid: string, passwordHash: string): Promise<boolean> {
+  try {
+    const result = await db.update(users).set({
+      passwordHash,
+      forcePasswordChange: false
+    }).where(eq(users.uid, uid)).returning();
+    return result.length > 0;
+  } catch (err) {
+    console.error("Database error in setUserPasswordHash:", err);
+    return false;
+  }
+}
+
+export async function getUserAuthByDocument(document: string): Promise<{
+  uid: string;
+  passwordHash: string | null;
+  role: string;
+  name: string;
+  email: string;
+  status: string;
+  forcePasswordChange: boolean;
+} | null> {
+  try {
+    const normalizedDoc = document.replace(/\D/g, "");
+    if (!normalizedDoc) return null;
+    const rows = await db.select().from(users);
+    const matched = rows.find(u => (u.document || "").replace(/\D/g, "") === normalizedDoc);
+    if (!matched) return null;
+    return {
+      uid: matched.uid,
+      passwordHash: matched.passwordHash || null,
+      role: matched.userType || "requisitante",
+      name: matched.name || "",
+      email: matched.email || "",
+      status: matched.status || "ativo",
+      forcePasswordChange: matched.forcePasswordChange ?? false
+    };
+  } catch (err) {
+    console.error("Database error in getUserAuthByDocument:", err);
+    return null;
   }
 }
 

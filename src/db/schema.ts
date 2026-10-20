@@ -33,6 +33,8 @@ export const users = pgTable("users", {
   warehouseId: text("warehouse_id"),              // Vínculo com almoxarifado (se aplicável)
   workLocation: text("work_location"),            // Local de trabalho / Unidade
   googleUid: text("google_uid"),                  // ID da conta Google (OAuth)
+  passwordHash: text("password_hash"),            // Hash seguro da senha (Argon2id)
+  forcePasswordChange: boolean("force_password_change").default(false), // Flag para exigir troca no primeiro acesso
   data: jsonb("data"),                            // Metadados dinâmicos (permissões customizadas, LGPD, etc.)
   createdAt: timestamp("created_at").defaultNow(),// Data de criação com valor default
 });
@@ -86,7 +88,7 @@ export const professionals = pgTable("professionals", {
 // ============================================================================
 export const serviceOrders = pgTable("service_orders", {
   id: text("id").primaryKey(),                     // ID único da OS (ex: req-1001)
-  clientId: text("client_id").references(() => usuarios.id, { onDelete: "set null", onUpdate: "cascade" }), // Foreign Key -> usuarios.id
+  clientId: text("client_id").references(() => usuarios.id, { onDelete: "restrict", onUpdate: "cascade" }), // Foreign Key -> usuarios.id (RESTRICT impede órfãos)
   title: text("title").notNull(),                 // Título resumido do chamado
   description: text("description"),               // Detalhamento do problema ou solicitação
   category: text("category"),                     // Categoria do serviço (Elétrica, Hidráulica, etc.)
@@ -169,6 +171,20 @@ export const accessProfiles = pgTable("access_profiles", {
 });
 
 // ============================================================================
+// Tabela: revoked_sessions (Persistência de Revogações que sobrevivem a reinício)
+// ============================================================================
+export const revokedSessions = pgTable("revoked_sessions", {
+  id: serial("id").primaryKey(),
+  type: text("type").notNull(),                    // 'jti' | 'token_sig' | 'user_all'
+  identifier: text("identifier").notNull(),        // JTI, assinatura do token ou UID
+  revokedAt: timestamp("revoked_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at"),              // Data de expiração para limpeza automática
+}, (table) => [
+  index("revoked_sessions_lookup_idx").on(table.type, table.identifier),
+  index("revoked_sessions_expires_idx").on(table.expiresAt),
+]);
+
+// ============================================================================
 // Drizzle ORM Relations (Integridade Referencial e Mapeamento Objetual)
 // ============================================================================
 
@@ -218,5 +234,8 @@ export type NewLoginAttemptDb = InferInsertModel<typeof loginAttempts>;
 
 export type AccessProfileDb = InferSelectModel<typeof accessProfiles>;
 export type NewAccessProfileDb = InferInsertModel<typeof accessProfiles>;
+
+export type RevokedSessionDb = InferSelectModel<typeof revokedSessions>;
+export type NewRevokedSessionDb = InferInsertModel<typeof revokedSessions>;
 
 
