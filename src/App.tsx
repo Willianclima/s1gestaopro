@@ -22,7 +22,7 @@ import { playNotificationSound } from "./utils/notificationSound";
 import { broadcastNotification } from "./utils/broadcastNotification";
 import { checkAndTriggerSlaReminders } from "./utils/slaUtils";
 import { googleSignIn, logoutUser, subscribeToAuthChanges, saveUserProfile } from "./services/firebaseAuth";
-import { getApiAuthHeaders } from "./services/apiAuth";
+import { setAuthToken, clearAuthToken, getApiAuthHeaders } from "./services/apiAuth";
 import { 
   fetchPostgresServiceCategories, 
   savePostgresServiceCategory, 
@@ -2447,229 +2447,45 @@ export default function App() {
     // Clear registration success messages upon attempting log in
     setRegSuccessMessage("");
 
-    // Look up in database lists first to see if a custom client/professional is registered with this CPF
-    const activeClients = clients.length > 0 ? clients : INITIAL_CLIENTS;
-    const activeProfs = professionals.length > 0 ? professionals : INITIAL_PROFESSIONALS;
+    // Autenticação oficial e unificada via Backend API com Argon2id
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document: normalizedInput, password: passwordValue })
+      });
+      const data = await res.json();
 
-    const matchedClient = activeClients.find(c => c.document.replace(/\D/g, "") === normalizedInput);
-    const matchedProf = activeProfs.find(p => p.document && p.document.replace(/\D/g, "") === normalizedInput);
-
-    const isAdminCPF = normalizedInput === "36911121884" || normalizedInput === "99999999999";
-
-    // 1. Admin/Gestor Authentication via Backend API or strict password verification
-    if (isAdminCPF) {
-      try {
-        const res = await fetch("/api/auth/verify-admin", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ document: normalizedInput, password: passwordValue })
-        });
-        const data = await res.json();
-        
-        if (res.ok && data.success && data.user) {
-          const adminUser: CurrentUser = data.user;
-          if (data.token) {
-            localStorage.setItem("service_mgt_auth_token", data.token);
-          }
-          setCurrentUser(adminUser);
-          localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
-          setLoginError("");
-          setActiveTab("dashboard");
-          setTypedDoc("");
-          setTypedPassword("");
-          addSystemLog("Login de Administrador", "Administrador do Sistema Willian C. Lima autenticado via API backend de alta segurança.", "sistema");
-          addLoginAttempt(normalizedInput, adminUser.id, "success", "admin", "Login bem-sucedido via credencial mestre administrador (Willian C. Lima).");
-          toastSuccess("Seja bem-vindo de volta, Willian C. Lima! Painel de Controle Raiz ativado.", "Acesso de Administrador");
-          return;
-        } else {
-          const errMsg = data.message || "Senha incorreta para o Gestor Administrador.";
-          setLoginError(`⚠️ ${errMsg}`);
-          toastError(errMsg, "Falha de Autenticação");
-          addLoginAttempt(normalizedInput, "gestor-admin", "failed", "gestor", `Tentativa mestre falhou: ${errMsg}`);
-          return;
+      if (res.ok && data.success && data.user) {
+        if (data.token) {
+          setAuthToken(data.token);
         }
-      } catch (err) {
-        // Fallback local caso o backend esteja temporariamente offline em modo standalone SPA
-        const adminSavedPass = localStorage.getItem("admin_custom_password");
-        if (adminSavedPass && passwordValue === adminSavedPass) {
-          const adminUser: CurrentUser = {
-            id: "gestor-admin",
-            name: "Willian C. Lima",
-            document: normalizedInput === "36911121884" ? "369.111.218-84" : "999.999.999-99",
-            userType: "admin"
-          };
-          setCurrentUser(adminUser);
-          localStorage.setItem("service_mgt_logged_user", JSON.stringify(adminUser));
-          setLoginError("");
-          setActiveTab("dashboard");
-          setTypedDoc("");
-          setTypedPassword("");
-          addSystemLog("Login de Administrador", "Administrador do Sistema Willian C. Lima autenticado.", "sistema");
-          addLoginAttempt(normalizedInput, adminUser.id, "success", "admin", "Login de administrador autenticado com sucesso.");
-          toastSuccess("Seja bem-vindo de volta, Willian C. Lima! Painel de Controle Raiz ativado.", "Acesso de Administrador");
-          return;
-        } else {
-          setLoginError("Senha incorreta para o Gestor Administrador.");
-          toastError("Senha incorreta para o canal de Gestor Administrador.", "Falha de Login");
-          addLoginAttempt(normalizedInput, "gestor-admin", "failed", "gestor", "Tentativa mestre falhou: Senha do Gestor Administrador incorreta.");
-          return;
-        }
+        const loggedUser: CurrentUser = data.user;
+        setCurrentUser(loggedUser);
+        localStorage.setItem("service_mgt_logged_user", JSON.stringify(loggedUser));
+        setLoginError("");
+        setTypedDoc("");
+        setTypedPassword("");
+
+        const isManagement = ["admin", "gestor", "gestor_servicos"].includes(loggedUser.userType);
+        setActiveTab(isManagement ? "dashboard" : "orders");
+        addSystemLog("Login Autorizado", `Usuário "${loggedUser.name}" autenticado com sucesso via API protegida.`, "sistema");
+        addLoginAttempt(normalizedInput, loggedUser.id, "success", loggedUser.userType, "Autenticação realizada com sucesso no backend.");
+        toastSuccess(`Seja bem-vindo, ${loggedUser.name}!`, "Acesso Autorizado");
+        return;
+      } else {
+        const errMsg = data.message || "CPF ou senha incorretos.";
+        setLoginError(`⚠️ ${errMsg}`);
+        toastError(errMsg, "Falha de Autenticação");
+        addLoginAttempt(normalizedInput, "desconhecido", "failed", "requisitante", `Falha de login: ${errMsg}`);
+        return;
       }
+    } catch (err: any) {
+      console.error("Erro de conexão no login:", err);
+      const errMsg = "Não foi possível conectar ao servidor de autenticação. Verifique sua conexão e tente novamente.";
+      setLoginError(`⚠️ ${errMsg}`);
+      toastError(errMsg, "Falha de Conexão");
     }
-
-    // 2. Check clients List
-    if (matchedClient) {
-      // Check status
-      if (matchedClient.status === "pendente_autorizacao") {
-        setLoginError("⚠️ Seu cadastro encontra-se PENDENTE de autorização pelo Gestor Administrador. Por favor, aguarde o deferimento da liberação de sua conta.");
-        toastInfo("Seu cadastro de requisitante está pendente de homologação pelo gestor.", "Aguardando Liberação");
-        addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", "Login recusado: cadastro pendente de autorização.");
-        return;
-      }
-
-      // Check if blocked first
-      if (matchedClient.blocked) {
-        setLoginError("⚠️ Esta conta foi BLOQUEADA por excesso de tentativas (3 erros). O Gestor Administrador foi notificado e pode resetar sua senha no Dashboard.");
-        toastError("Esta conta de requisitante encontra-se temporariamente bloqueada!", "Acesso Bloqueado");
-        addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", "Login recusado: conta temporariamente bloqueada.");
-        return;
-      }
-
-      // Check password (defaults to "123" for legacy keys)
-      const correctPass = matchedClient.password || "123";
-      if (passwordValue !== correctPass) {
-        const attempts = (matchedClient.failedAttempts || 0) + 1;
-        const isNowBlocked = attempts >= 3;
-        
-        const updatedClients = activeClients.map(c => 
-          c.id === matchedClient.id 
-            ? { ...c, failedAttempts: attempts, blocked: isNowBlocked } 
-            : c
-        );
-        updateClientsState(updatedClients);
-
-        if (isNowBlocked) {
-          addSystemLog(
-            "Conta Bloqueada", 
-            `A conta do requisitante "${matchedClient.name}" (${matchedClient.document}) foi bloqueada por excesso de erros consecutivas de login.`, 
-            "sistema"
-          );
-          addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", "Conta bloqueada: excesso de tentativas de senha incorreta (3 falhas).");
-          setLoginError("⚠️ Conta BLOQUEADA por excesso de tentativas (3 erros). O Gestor foi alertado e pode liberar o login redefinindo sua senha no Painel.");
-          toastError("Acesso suspenso por excesso de erros consecutivos!", "Segurança Ativada");
-        } else {
-          addLoginAttempt(normalizedInput, matchedClient.id, "failed", "requisitante", `Senha incorreta. Tentativa ${attempts} de 3.`);
-          setLoginError(`Senha incorreta. Tentativa ${attempts} de 3. Seu acesso será bloqueado após 3 erros consecutivos.`);
-          toastWarn(`Senha incorreta! Tentativa ${attempts}/3.`, "Falha de Autenticação");
-        }
-        return;
-      }
-
-      // Reset failed attempts if password is correct
-      if (matchedClient.failedAttempts) {
-        const updatedClients = activeClients.map(c => 
-          c.id === matchedClient.id 
-            ? { ...c, failedAttempts: 0 } 
-            : c
-        );
-        updateClientsState(updatedClients);
-      }
-
-      const resolvedUserType = matchedClient.userType || (matchedClient.id === "cli-2" ? "gestor" : "requisitante");
-      const clientUser: CurrentUser = {
-        id: matchedClient.id,
-        name: matchedClient.name,
-        document: matchedClient.document,
-        userType: resolvedUserType,
-        warehouseId: matchedClient.warehouseId,
-        workLocation: matchedClient.workLocation
-      };
-      setCurrentUser(clientUser);
-      localStorage.setItem("service_mgt_logged_user", JSON.stringify(clientUser));
-      setLoginError("");
-
-      // Lands on dashboard for administrative roles, orders for regular clients
-      const isManagement = resolvedUserType === "gestor" || resolvedUserType === "gestor_servicos" || resolvedUserType === "admin";
-      setActiveTab(isManagement ? "dashboard" : "orders");
-      setTypedDoc("");
-      setTypedPassword("");
-      addSystemLog("Login Autorizado", `Usuário "${matchedClient.name}" autenticado como ${resolvedUserType} via CPF.`, "sistema");
-      addLoginAttempt(normalizedInput, matchedClient.id, "success", resolvedUserType, `Login efetuado com sucesso como ${resolvedUserType}.`);
-      toastSuccess(`Seja bem-vindo, ${matchedClient.name}!`, "Acesso Autorizado");
-      return;
-    }
-
-    // 3. Check professionals List
-    if (matchedProf) {
-      // Check if blocked first
-      if (matchedProf.blocked) {
-        setLoginError("⚠️ Esta conta de Técnico foi BLOQUEADA por excesso de tentativas (3 erros). Entre em contato com o Gestor Administrador para desbloquear.");
-        toastError("Sua conta de suporte técnico encontra-se bloqueada!", "Acesso Bloqueado");
-        addLoginAttempt(normalizedInput, matchedProf.id, "failed", "profissional", "Login de técnico recusado: conta temporariamente bloqueada.");
-        return;
-      }
-
-      const correctPass = matchedProf.password || "123";
-      if (passwordValue !== correctPass) {
-        const attempts = (matchedProf.failedAttempts || 0) + 1;
-        const isNowBlocked = attempts >= 3;
-        
-        const updatedProfs = activeProfs.map(p => 
-          p.id === matchedProf.id 
-            ? { ...p, failedAttempts: attempts, blocked: isNowBlocked } 
-            : p
-        );
-        updateProfessionalsState(updatedProfs);
-
-        if (isNowBlocked) {
-          addSystemLog(
-            "Conta Bloqueada", 
-            `A conta do técnico de campo "${matchedProf.name}" foi bloqueada por excesso de erros de senha.`, 
-            "sistema"
-          );
-          addLoginAttempt(normalizedInput, matchedProf.id, "failed", "profissional", "Conta técnica bloqueada: excesso de tentativas de senha incorreta (3 falhas).");
-          setLoginError("⚠️ Conta BLOQUEADA por excesso de tentativas (3 erros). O Gestor foi alertado e pode liberar o login redefinindo sua senha no Painel.");
-          toastError("Acesso técnico suspenso por excesso de tentativas!", "Segurança Ativada");
-        } else {
-          addLoginAttempt(normalizedInput, matchedProf.id, "failed", "profissional", `Senha incorreta informada para conta de técnico. Tentativa ${attempts} de 3.`);
-          setLoginError(`Senha de técnico inválida. Tentativa ${attempts} de 3. Seu acesso será bloqueado após 3 erros consecutivos.`);
-          toastWarn(`Senha de técnico incorreta! Tentativa ${attempts}/3.`, "Falha de Autenticação");
-        }
-        return;
-      }
-
-      // Reset failed attempts if password is correct
-      if (matchedProf.failedAttempts) {
-        const updatedProfs = activeProfs.map(p => 
-          p.id === matchedProf.id 
-            ? { ...p, failedAttempts: 0 } 
-            : p
-        );
-        updateProfessionalsState(updatedProfs);
-      }
-
-      const profUser: CurrentUser = {
-        id: matchedProf.id,
-        name: matchedProf.name,
-        document: matchedProf.document || "",
-        userType: "profissional",
-        workLocation: matchedProf.workLocation
-      };
-      setCurrentUser(profUser);
-      localStorage.setItem("service_mgt_logged_user", JSON.stringify(profUser));
-      setLoginError("");
-      setActiveTab("dashboard");
-      setTypedDoc("");
-      setTypedPassword("");
-      addSystemLog("Login do Técnico", `Técnico de campo "${matchedProf.name}" autenticado no portal restrito.`, "sistema");
-      addLoginAttempt(normalizedInput, matchedProf.id, "success", "profissional", "Login técnico bem-sucedido.");
-      toastSuccess(`Olá, Técnico ${matchedProf.name}! Agenda de OS sincronizada.`, "Suporte Técnico Conectado");
-      return;
-    }
-
-    setLoginError("Documento (CPF) não encontrado nas bases do sistema. Revise os dados ou faça seu Auto-Cadastro logo abaixo.");
-    toastError("Identificador de acesso não cadastrado na base.", "Falha de Login");
-    addLoginAttempt(normalizedInput, "desconhecido", "failed", "desconhecido", "Tentativa de login de usuário não registrado no sistema.");
   };
 
   // Google Workspace Authentication & Account Provisioning Handler
@@ -2969,7 +2785,7 @@ export default function App() {
   };
 
   // self-change password handler
-  const handleChangePasswordSubmit = (e: React.FormEvent) => {
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     setChangePasswordError("");
@@ -2988,51 +2804,20 @@ export default function App() {
       return;
     }
 
-    // Determine current user password
-    let actualCurrentPassword = "123456"; // default fallback
-
-    if (currentUser.id === "gestor-admin") {
-      actualCurrentPassword = localStorage.getItem("admin_custom_password") || "123456";
-    } else {
-      // Look up in clients first
-      const clientRecord = clients.find(c => c.id === currentUser.id);
-      if (clientRecord) {
-        actualCurrentPassword = clientRecord.password || "123";
-      } else {
-        // Look up in professionals
-        const profRecord = professionals.find(p => p.id === currentUser.id);
-        if (profRecord) {
-          actualCurrentPassword = profRecord.password || "123";
-        }
+    try {
+      const res = await fetch("/api/auth/set-password", {
+        method: "POST",
+        headers: getApiAuthHeaders(),
+        body: JSON.stringify({ newPassword })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setChangePasswordError(data.error || "Não foi possível atualizar a senha no servidor.");
+        return;
       }
-    }
-
-    if (currentPassword !== actualCurrentPassword) {
-      setChangePasswordError("A senha atual digitada está incorreta.");
+    } catch {
+      setChangePasswordError("Erro de comunicação com o servidor ao salvar nova senha.");
       return;
-    }
-
-    // Success: update password!
-    if (currentUser.id === "gestor-admin") {
-      localStorage.setItem("admin_custom_password", newPassword);
-    } else {
-      const clientRecord = clients.find(c => c.id === currentUser.id);
-      if (clientRecord) {
-        // update in clients
-        const updatedClients = clients.map(c => 
-          c.id === currentUser.id ? { ...c, password: newPassword } : c
-        );
-        updateClientsState(updatedClients);
-      } else {
-        const profRecord = professionals.find(p => p.id === currentUser.id);
-        if (profRecord) {
-          // update in professionals
-          const updatedProfs = professionals.map(p => 
-            p.id === currentUser.id ? { ...p, password: newPassword } : p
-          );
-          updateProfessionalsState(updatedProfs);
-        }
-      }
     }
 
     // Record system log as required

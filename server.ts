@@ -30,8 +30,11 @@ import {
   getAllAccessProfiles, 
   upsertAccessProfile,
   getUserByUid,
-  upsertUser
+  upsertUser,
+  getUserAuthByDocument,
+  setUserPasswordHash
 } from "./src/db/repository.ts";
+import argon2 from "argon2";
 import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
 import { validateCPFAlgorithm } from "./src/utils/cpfValidator.ts";
 import type { Client } from "./src/types.ts";
@@ -142,6 +145,19 @@ const adminLoginRateLimiter = rateLimit({
   message: {
     success: false,
     message: "Muitas tentativas de login de administrador. Por segurança, tente novamente após 15 minutos."
+  },
+  validate: { xForwardedForHeader: false }
+});
+
+// Limitação para login unificado de usuários
+const userLoginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Muitas tentativas de login. Por segurança, tente novamente mais tarde."
   },
   validate: { xForwardedForHeader: false }
 });
@@ -670,6 +686,130 @@ app.post("/api/auth/verify-admin", adminLoginRateLimiter, (req, res) => {
   } catch (error: any) {
     console.error("Erro na autenticação de administrador:", error);
     return res.status(500).json({ success: false, message: "Erro interno no servidor ao processar autenticação." });
+  }
+});
+
+// Endpoint unificado de autenticação no backend (Argon2id + rate limiter + timing-safe)
+app.post("/api/auth/login", userLoginRateLimiter, async (req, res) => {
+  try {
+    const { document, password } = req.body || {};
+    const normalizedDoc = (document || "").toString().replace(/\D/g, "");
+
+    if (!normalizedDoc || normalizedDoc.length !== 11) {
+      return res.status(400).json({ success: false, message: "Por favor, informe um CPF válido com 11 dígitos." });
+    }
+    if (!password || typeof password !== "string" || password.trim() === "") {
+      return res.status(400).json({ success: false, message: "Por favor, informe sua senha de acesso." });
+    }
+
+    // 1. Canal de Administrador Mestre
+    const allowedAdminCpfs = ["36911121884", "99999999999"];
+    if (allowedAdminCpfs.includes(normalizedDoc)) {
+      const serverAdminPass = process.env.ADMIN_PASSWORD;
+      if (!serverAdminPass || serverAdminPass.trim() === "") {
+        return res.status(503).json({
+          success: false,
+          message: "Autenticação administrativa desativada temporariamente: credenciais não configuradas no servidor."
+        });
+      }
+      const passBuf = Buffer.from(password);
+      const expectedBuf = Buffer.from(serverAdminPass);
+      if (passBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(passBuf, expectedBuf)) {
+        return res.status(401).json({ success: false, message: "CPF ou senha incorretos." });
+      }
+
+      const adminUser = {
+        id: "gestor-admin",
+        name: "Willian C. Lima",
+        document: normalizedDoc === "36911121884" ? "369.111.218-84" : "999.999.999-99",
+        userType: "admin"
+      };
+      const token = signServerSessionToken({
+        uid: "gestor-admin",
+        email: "willianclima@gmail.com",
+        name: adminUser.name,
+        document: adminUser.document,
+        role: "admin"
+      });
+      return res.json({ success: true, token, user: adminUser });
+    }
+
+    // 2. Consulta de Usuário no PostgreSQL
+    const userAuth = await getUserAuthByDocument(normalizedDoc);
+    if (!userAuth) {
+      // Timing safe dummy hash comparison para evitar enumeração por análise de tempo
+      await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
+      return res.status(401).json({ success: false, message: "CPF ou senha incorretos." });
+    }
+
+    if (["bloqueado", "desativado", "inativo", "suspenso"].includes(userAuth.status)) {
+      return res.status(403).json({ success: false, message: "Acesso bloqueado: Esta conta está inativa ou suspensa pela administração." });
+    }
+
+    // 2.1 Caso o usuário ainda não possua hash Argon2id (conta legada pendente de transição)
+    if (!userAuth.passwordHash) {
+      return res.status(401).json({
+        success: false,
+        requiresTransition: true,
+        message: "Esta conta requer definição de senha segura de acesso. Utilize o canal de recuperação de senha ou solicite ativação ao gestor."
+      });
+    }
+
+    // 2.2 Verificação criptográfica com Argon2id
+    const isPasswordValid = await argon2.verify(userAuth.passwordHash, password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, message: "CPF ou senha incorretos." });
+    }
+
+    // 2.3 Emissão de token criptográfico assinado pelo servidor
+    const token = signServerSessionToken({
+      uid: userAuth.uid,
+      email: userAuth.email || undefined,
+      name: userAuth.name,
+      document: normalizedDoc,
+      role: userAuth.role
+    });
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: userAuth.uid,
+        name: userAuth.name,
+        document: normalizedDoc,
+        userType: userAuth.role
+      }
+    });
+  } catch (error: any) {
+    console.error("Erro na autenticação backend:", error);
+    return res.status(500).json({ success: false, message: "Erro interno no servidor ao processar autenticação." });
+  }
+});
+
+// Endpoint seguro para redefinição/atualização de senha no backend com Argon2id
+app.post("/api/auth/set-password", requireAuth as any, async (req: AuthRequest, res) => {
+  try {
+    const { newPassword } = req.body || {};
+    if (!newPassword || typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ error: "A nova senha deve ter no mínimo 6 caracteres." });
+    }
+
+    const hash = await argon2.hash(newPassword, {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1
+    });
+
+    const success = await setUserPasswordHash(req.user!.uid, hash);
+    if (!success) {
+      return res.status(404).json({ error: "Usuário não encontrado para atualização de credenciais." });
+    }
+
+    res.json({ success: true, message: "Senha criptografada com Argon2id atualizada com sucesso no PostgreSQL." });
+  } catch (error: any) {
+    console.error("Erro ao atualizar senha no PostgreSQL:", error);
+    res.status(500).json({ error: "Erro interno ao atualizar credenciais." });
   }
 });
 

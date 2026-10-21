@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { adminAuth } from "../lib/firebase-admin.ts";
-import { getUserByUid } from "../db/repository.ts";
+import { getUserByUid, recordRevocationInDb, isSessionRevokedInDb } from "../db/repository.ts";
 
 export interface AuthenticatedUser {
   uid: string;
@@ -10,6 +10,8 @@ export interface AuthenticatedUser {
   document?: string;
   role: "admin" | "gestor" | "gestor_servicos" | "profissional" | "requisitante" | string;
   authType: "firebase" | "server_session";
+  jti?: string;
+  iat?: number;
 }
 
 export interface AuthRequest extends Request {
@@ -80,35 +82,48 @@ export function validateSecretEntropy(secret: string): { valid: boolean; reason?
 /**
  * Revoga todas as sessões ativas de um usuário emitidas antes do momento da revogação.
  * Funciona para qualquer UID, incluindo a conta especial de administrador mestre ('gestor-admin').
+ * Persiste no PostgreSQL para sobreviver ao reinício da aplicação.
  */
 export function revokeUserSessions(uid: string): void {
   revokedUidsBeforeTimestamp.set(uid, Math.floor(Date.now() / 1000));
+  recordRevocationInDb("user_all", uid, null).catch(() => {});
 }
 
 /**
  * Revoga um token de sessão individual via assinatura criptográfica e JTI (se presente).
+ * Persiste no PostgreSQL para sobreviver ao reinício da aplicação.
  */
 export function revokeSessionToken(token: string): void {
   const parts = token.split(".");
   if (parts.length === 3) {
-    revokedTokenSignatures.add(parts[2]);
+    const signature = parts[2];
+    revokedTokenSignatures.add(signature);
+    let expDate: Date | null = null;
     try {
       const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+      if (payload?.exp && typeof payload.exp === "number") {
+        expDate = new Date(payload.exp * 1000);
+      }
       if (payload?.jti && typeof payload.jti === "string") {
         revokedJtis.add(payload.jti);
+        recordRevocationInDb("jti", payload.jti, expDate).catch(() => {});
       }
     } catch {
       // Ignora falha de parse
     }
+    recordRevocationInDb("token_sig", signature, expDate).catch(() => {});
   }
 }
 
 /**
  * Revoga um token de sessão diretamente pelo seu identificador único JTI.
+ * Persiste no PostgreSQL para sobreviver ao reinício da aplicação.
  */
-export function revokeTokenByJti(jti: string): void {
+export function revokeTokenByJti(jti: string, expiresAt?: Date): void {
   if (jti && typeof jti === "string") {
-    revokedJtis.add(jti.trim());
+    const cleanJti = jti.trim();
+    revokedJtis.add(cleanJti);
+    recordRevocationInDb("jti", cleanJti, expiresAt || null).catch(() => {});
   }
 }
 
@@ -285,7 +300,8 @@ export function verifyServerSessionToken(token: string): (AuthenticatedUser & { 
       document: typeof payload.document === "string" ? payload.document.trim() : undefined,
       role: payload.role as ValidRole,
       authType: "server_session",
-      jti: typeof payload.jti === "string" ? payload.jti : undefined
+      jti: typeof payload.jti === "string" ? payload.jti : undefined,
+      iat: typeof payload.iat === "number" ? payload.iat : undefined
     };
   } catch {
     return null;
@@ -321,6 +337,18 @@ export const requireAuth = async (
   // 1. Tenta verificar como token de sessão emitido pelo servidor
   const serverUser = verifyServerSessionToken(token);
   if (serverUser) {
+    // 1.0 Checagem de revogações persistentes no PostgreSQL (sobrevive ao reinício do servidor)
+    const tokenSig = token.split(".")[2];
+    const isDbRevoked =
+      (await isSessionRevokedInDb("token_sig", tokenSig)) ||
+      (serverUser.jti ? await isSessionRevokedInDb("jti", serverUser.jti) : false) ||
+      (serverUser.iat ? await isSessionRevokedInDb("user_all", serverUser.uid, serverUser.iat) : false);
+
+    if (isDbRevoked) {
+      return res.status(401).json({
+        error: "Não autorizado: Sessão de autenticação revogada no servidor."
+      });
+    }
     // 1.1 Para o administrador mestre especial, valida se ADMIN_PASSWORD ainda está configurada
     if (serverUser.uid === "gestor-admin") {
       const serverAdminPass = process.env.ADMIN_PASSWORD;

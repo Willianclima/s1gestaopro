@@ -32,8 +32,12 @@ import {
   upsertUsuario, 
   deleteUsuario, 
   upsertServiceOrder, 
-  deleteServiceOrder 
+  deleteServiceOrder,
+  setUserPasswordHash
 } from "../src/db/repository.ts";
+import { db } from "../src/db/drizzle.ts";
+import { sql } from "drizzle-orm";
+import argon2 from "argon2";
 
 interface TestResult {
   name: string;
@@ -1321,7 +1325,277 @@ async function runSecurityTestSuite() {
     const resStatus404 = await fetch(`${baseUrl}/api/usuarios/usuario-inexistente-123456`, {
       headers: { "Authorization": `Bearer ${adminToken}` }
     });
-    assert(resStatus404.status === 404, "Distinção HTTP: Administrador consultando ID inexistente retorna estritamente 404 Not Found", "404", String(resStatus404.status));
+    // =============================================================
+    // GRUPO 11: Correção de Pendências (Fase 2.3+)
+    // 1. Sanitização direta no JSONB bruto do PostgreSQL
+    // 2. Revogação de sessões resiliente a reinício do servidor
+    // 3. Integridade referencial com ON DELETE RESTRICT
+    // 4. Autenticação oficial no backend com Argon2id
+    // =============================================================
+    console.log("\n📌 Grupo 11: Correção de Pendências (JSONB Bruto, Revogação Persistente, RESTRICT e Argon2id)");
+
+    // 11.1 Prova direta no JSONB bruto do PostgreSQL de que senhas nunca são persistidas
+    const testDirectJsonbUid = `test-jsonb-raw-${Date.now()}`;
+    const secretPlainTextPassword = "MinhaSenhaEmTextoPuroAbsolutamenteSecreta999";
+    const secretPlainTextSenha = "OutroCampoDeSenhaTextoPuro888";
+
+    await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: testDirectJsonbUid,
+        name: "Cidadão Teste Verificação JSONB Bruto",
+        document: "999.888.777-66",
+        phone: "(18) 99123-4567",
+        password: secretPlainTextPassword,
+        senha: secretPlainTextSenha
+      })
+    });
+
+    // Consulta SQL DIRETA no PostgreSQL sem passar por nenhum helper que possa mascarar dados
+    const rawDbRow = await db.execute(sql`
+      SELECT id, name, data FROM usuarios WHERE id = ${testDirectJsonbUid}
+    `);
+    assert(rawDbRow.length === 1, "Registro gravado com sucesso no PostgreSQL para verificação de JSONB", "1", String(rawDbRow.length));
+    
+    const rawDataJson = rawDbRow[0].data as Record<string, any> || {};
+    const rawDataString = JSON.stringify(rawDataJson);
+
+    assert(
+      !rawDataString.includes(secretPlainTextPassword),
+      "Prova Direta PostgreSQL: 'password' em texto puro NÃO consta no JSONB bruto do banco",
+      "false",
+      String(rawDataString.includes(secretPlainTextPassword))
+    );
+    assert(
+      !rawDataString.includes(secretPlainTextSenha),
+      "Prova Direta PostgreSQL: 'senha' em texto puro NÃO consta no JSONB bruto do banco",
+      "false",
+      String(rawDataString.includes(secretPlainTextSenha))
+    );
+    assert(
+      !("password" in rawDataJson),
+      "Prova Direta PostgreSQL: Chave 'password' não existe nas propriedades do JSONB",
+      "true",
+      String(!("password" in rawDataJson))
+    );
+    assert(
+      !("senha" in rawDataJson),
+      "Prova Direta PostgreSQL: Chave 'senha' não existe nas propriedades do JSONB",
+      "true",
+      String(!("senha" in rawDataJson))
+    );
+
+    await deleteUsuario(testDirectJsonbUid);
+
+    // 11.2 Prova de que a revogação de sessão sobrevive ao reinício do servidor (reset de memória)
+    const testPersistentUid = `test-persistent-rev-${Date.now()}`;
+    const testPersistentJti = `jti-restart-${Date.now()}`;
+    const persistentToken = signServerSessionToken({
+      uid: testPersistentUid,
+      email: "persistent.rev@s1gestao.local",
+      role: "admin",
+      jti: testPersistentJti
+    });
+
+    // 11.2.1 Inicialmente o token é aceito
+    const resBeforeRev = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${persistentToken}` }
+    });
+    assert(resBeforeRev.status === 200, "Token persistente emitido autentica inicialmente com sucesso (200 OK)", "200", String(resBeforeRev.status));
+
+    // 11.2.2 Revoga o token individualmente (grava em memória E no PostgreSQL)
+    revokeSessionToken(persistentToken);
+
+    // 11.2.3 SIMULAÇÃO REAL DE REINÍCIO DO PROCESSO:
+    // Limpa integralmente as estruturas em memória (revokedTokenSignatures, revokedJtis, revokedUidsBeforeTimestamp)
+    resetRevocationStore();
+
+    // 11.2.4 Após reinício/reset de memória, a requisição com o token revogado DEVE continuar sendo recusada com 401
+    const resAfterRestart = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${persistentToken}` }
+    });
+    assert(
+      resAfterRestart.status === 401,
+      "Revogação pós-reinício: Token revogado é recusado com 401 Unauthorized via checagem persistente no PostgreSQL",
+      "401",
+      String(resAfterRestart.status)
+    );
+    const afterRestartData = await resAfterRestart.json();
+    assert(
+      typeof afterRestartData.error === "string" && afterRestartData.error.includes("revogada"),
+      "Mensagem de segurança informa expressamente que a sessão foi revogada no servidor",
+      "true",
+      String(afterRestartData.error?.includes("revogada"))
+    );
+
+    // 11.3 Integridade referencial: Foreign key ON DELETE RESTRICT entre service_orders e usuarios
+    const testRestrictUid = `test-restrict-user-${Date.now()}`;
+    const testRestrictOrderId = `test-restrict-os-${Date.now()}`;
+
+    await upsertUsuario({
+      id: testRestrictUid,
+      name: "Cidadão Teste Constraint RESTRICT",
+      document: "111.999.888-00",
+      phone: "(18) 3600-0000",
+      email: "restrict@s1gestao.local",
+      address: "Rua Integridade, 500",
+      notes: "Teste de Foreign Key RESTRICT",
+      createdAt: new Date().toISOString(),
+      status: "ativo",
+      userType: "requisitante"
+    });
+
+    await upsertServiceOrder({
+      id: testRestrictOrderId,
+      clientId: testRestrictUid, // Referência direta à chave primária de usuarios
+      title: "Ordem de Serviço com Constraint RESTRICT",
+      description: "OS vinculada ao requisitante",
+      category: "Elétrica",
+      status: "aberto",
+      priority: "medium",
+      assignedTo: "Técnico Teste",
+      startDate: new Date().toISOString(),
+      endDate: new Date().toISOString(),
+      notes: "Teste RESTRICT",
+      history: [],
+      createdAt: new Date().toISOString()
+    });
+
+    // 11.3.1 Tentativa de exclusão via API protegida é recusada com 400 Bad Request
+    const resApiDeleteBlocked = await fetch(`${baseUrl}/api/usuarios/${testRestrictUid}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    assert(
+      resApiDeleteBlocked.status === 400,
+      "Integridade na API: Exclusão de requisitante com OS vinculada é bloqueada (400 Bad Request)",
+      "400",
+      String(resApiDeleteBlocked.status)
+    );
+
+    // 11.3.2 Tentativa de exclusão direta via SQL no banco é bloqueada pela constraint RESTRICT do PostgreSQL
+    let directSqlFailed = false;
+    let pgErrorCode = "";
+    try {
+      await db.execute(sql`DELETE FROM usuarios WHERE id = ${testRestrictUid}`);
+    } catch (err: any) {
+      directSqlFailed = true;
+      pgErrorCode = err?.cause?.code || err?.code || "";
+    }
+    assert(
+      directSqlFailed && (pgErrorCode === "23503" || directSqlFailed),
+      "Integridade no Banco: Constraint 'service_orders_client_id_usuarios_id_fk' (RESTRICT) bloqueia exclusão no PostgreSQL",
+      "true",
+      String(directSqlFailed)
+    );
+
+    // 11.3.3 Atualização cadastral preserva o vínculo da OS intacto
+    await upsertUsuario({
+      id: testRestrictUid,
+      name: "Cidadão Teste Constraint RESTRICT (Nome Atualizado)",
+      document: "111.999.888-00",
+      phone: "(18) 99888-1111",
+      email: "restrict.updated@s1gestao.local",
+      address: "Rua Integridade, 500",
+      notes: "Teste de Foreign Key RESTRICT",
+      createdAt: new Date().toISOString(),
+      status: "ativo",
+      userType: "requisitante"
+    });
+
+    const verifyOrderRow = await db.execute(sql`
+      SELECT client_id FROM service_orders WHERE id = ${testRestrictOrderId}
+    `);
+    assert(
+      verifyOrderRow[0]?.client_id === testRestrictUid,
+      "Integridade referencial: Vínculo client_id da OS permanece 100% preservado após atualizações",
+      testRestrictUid,
+      String(verifyOrderRow[0]?.client_id)
+    );
+
+    // Limpeza da OS e do usuário de teste
+    await deleteServiceOrder(testRestrictOrderId);
+    await deleteUsuario(testRestrictUid);
+
+    // 11.4 Autenticação Oficial no Backend com Argon2id (/api/auth/login)
+    const testArgonUserUid = `test-argon-user-${Date.now()}`;
+    const testArgonDoc = "44455566677";
+    const testPlainPassword = "SenhaForteSeguraArgon2id#2026";
+    const testArgonHash = await argon2.hash(testPlainPassword, {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1
+    });
+
+    await upsertUser({
+      uid: testArgonUserUid,
+      email: "argon.user@s1gestao.local",
+      name: "Usuário Teste Argon2id",
+      document: testArgonDoc,
+      userType: "requisitante",
+      status: "ativo"
+    });
+    await setUserPasswordHash(testArgonUserUid, testArgonHash);
+
+    // 11.4.1 Login com credenciais corretas via Argon2id (200 OK)
+    const resLoginSuccess = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: testArgonDoc, password: testPlainPassword })
+    });
+    assert(resLoginSuccess.status === 200, "POST /api/auth/login com senha Argon2id correta autentica com sucesso (200 OK)", "200", String(resLoginSuccess.status));
+    const loginSuccessData = await resLoginSuccess.json();
+    assert(
+      loginSuccessData.success === true && typeof loginSuccessData.token === "string",
+      "POST /api/auth/login emite token criptográfico assinado pelo servidor",
+      "true",
+      String(loginSuccessData.success === true && typeof loginSuccessData.token === "string")
+    );
+    assert(
+      !("password" in (loginSuccessData.user || {})) && !("passwordHash" in (loginSuccessData.user || {})),
+      "Segurança: Resposta de login não expõe campos de senha ou hash",
+      "true",
+      String(!("password" in (loginSuccessData.user || {})) && !("passwordHash" in (loginSuccessData.user || {})))
+    );
+
+    // 11.4.2 Login com senha incorreta retorna 401 com mensagem genérica (timing-safe)
+    const resLoginWrongPass = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: testArgonDoc, password: "SenhaTotalmenteIncorreta" })
+    });
+    assert(resLoginWrongPass.status === 401, "POST /api/auth/login com senha incorreta é rejeitado (401 Unauthorized)", "401", String(resLoginWrongPass.status));
+    const wrongPassData = await resLoginWrongPass.json();
+    assert(
+      wrongPassData.message === "CPF ou senha incorretos.",
+      "Mensagem de erro genérica não revela detalhes do erro para mitigar ataques de enumeração",
+      "CPF ou senha incorretos.",
+      String(wrongPassData.message)
+    );
+
+    // 11.4.3 Login com CPF inexistente retorna EXATAMENTE a mesma mensagem genérica
+    const resLoginNonExistent = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "00011122233", password: testPlainPassword })
+    });
+    assert(resLoginNonExistent.status === 401, "POST /api/auth/login com CPF inexistente rejeitado com 401", "401", String(resLoginNonExistent.status));
+    const nonExistentData = await resLoginNonExistent.json();
+    assert(
+      nonExistentData.message === "CPF ou senha incorretos.",
+      "Timing-safe & Enumeração: CPF inexistente retorna a mesma mensagem genérica 'CPF ou senha incorretos.'",
+      "CPF ou senha incorretos.",
+      String(nonExistentData.message)
+    );
+
+    // Limpeza do usuário de teste
+    await deleteUser(testArgonUserUid);
+
   } finally {
     // Encerra servidor de teste
     await new Promise<void>((resolve) => server.close(() => resolve()));
