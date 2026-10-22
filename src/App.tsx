@@ -3072,22 +3072,50 @@ export default function App() {
 
   // Sign out handler
   const handleLogout = async () => {
+    let serverRevocationConfirmed = false;
+    let revocationFailureReason = "";
+
     try {
       const token = localStorage.getItem("service_mgt_auth_token");
       if (token) {
-        await fetch("/api/auth/logout", {
+        const res = await fetch("/api/auth/logout", {
           method: "POST",
           headers: getApiAuthHeaders()
         });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.success) {
+            serverRevocationConfirmed = true;
+          } else {
+            revocationFailureReason = data.message || `Resposta não confirmada (status ${res.status})`;
+          }
+        } else {
+          revocationFailureReason = `Servidor retornou erro HTTP ${res.status}`;
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn("Aviso ao revogar sessão no servidor:", err);
+      revocationFailureReason = "Falha de comunicação ou indisponibilidade com o servidor";
     }
 
     if (currentUser) {
-      addSystemLog("Sessão Encerrada", `Usuário "${currentUser.name}" desconectou-se do sistema em conformidade com o descarte seguro de cookies (LGPD).`, "sistema");
+      addSystemLog(
+        "Sessão Encerrada",
+        `Usuário "${currentUser.name}" desconectou-se do sistema. Revogação remota no PostgreSQL: ${serverRevocationConfirmed ? "Confirmada" : "Não confirmada"}.`,
+        "sistema"
+      );
     }
-    toastInfo("Sua sessão foi encerrada e revogada no servidor.", "Sessão Concluída");
+
+    // Comunicação transparente: só confirma revogação no servidor se a API confirmou
+    if (serverRevocationConfirmed) {
+      toastInfo("Sua sessão foi encerrada e revogada no servidor com sucesso.", "Sessão Revogada");
+    } else {
+      toastWarn(
+        `Atenção: A revogação da sessão no servidor não pôde ser confirmada (${revocationFailureReason || "servidor inacessível"}). A sessão foi encerrada neste dispositivo por segurança.`,
+        "Sessão Encerrada Localmente"
+      );
+    }
+
     await logoutUser();
     setCurrentUser(null);
     localStorage.removeItem("service_mgt_logged_user");

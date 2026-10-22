@@ -36,6 +36,8 @@ import {
   recordRevocationInDb,
   createPasswordResetToken,
   verifyAndConsumePasswordResetToken,
+  redeemPasswordResetTokenAndSetPassword,
+  findUsuariosByDocument,
   findUsuariosByDocumentOrEmail,
   createUserAccount
 } from "./src/db/repository.ts";
@@ -43,6 +45,7 @@ import argon2 from "argon2";
 import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
 import { validateCPFAlgorithm } from "./src/utils/cpfValidator.ts";
 import type { Client } from "./src/types.ts";
+import type { UsuarioDb } from "./src/db/schema.ts";
 import {
   requireAuth,
   optionalAuth,
@@ -868,7 +871,7 @@ app.post("/api/auth/request-activation", userLoginRateLimiter, async (req, res) 
       await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
       return res.json({
         success: true,
-        message: "Se os dados informados pertencerem a uma conta ativa e elegível, as instruções de ativação foram geradas com segurança."
+        message: "Solicitação de ativação registrada. Caso os dados pertençam a uma conta elegível, a ativação poderá ser concluída pelo canal oficial habilitado ou mediante atendimento presencial com a administração municipal."
       });
     }
 
@@ -886,7 +889,7 @@ app.post("/api/auth/request-activation", userLoginRateLimiter, async (req, res) 
 
     return res.json({
       success: true,
-      message: "Se os dados informados pertencerem a uma conta ativa e elegível, as instruções de ativação foram geradas com segurança."
+      message: "Solicitação de ativação registrada. Caso os dados pertençam a uma conta elegível, a ativação poderá ser concluída pelo canal oficial habilitado ou mediante atendimento presencial com a administração municipal."
     });
   } catch (error: any) {
     console.error("Erro em request-activation:", error);
@@ -935,6 +938,7 @@ app.post("/api/auth/admin/generate-activation-token", requireAuth as any, requir
 });
 
 // Resgate de token de ativação e definição de senha com Argon2id
+// Implementação transacional atômica: consome o token apenas se a conta for elegível e previne concorrência
 app.post("/api/auth/redeem-activation-token", userLoginRateLimiter, async (req, res) => {
   try {
     const { token, newPassword } = req.body || {};
@@ -945,21 +949,7 @@ app.post("/api/auth/redeem-activation-token", userLoginRateLimiter, async (req, 
       return res.status(400).json({ success: false, message: "A nova senha deve possuir pelo menos 6 caracteres." });
     }
 
-    const verification = await verifyAndConsumePasswordResetToken(token);
-    if (!verification.valid || !verification.userId) {
-      return res.status(400).json({ success: false, message: verification.error || "Token inválido, expirado ou já utilizado." });
-    }
-
-    const userProfile = await getUserByUid(verification.userId);
-    if (!userProfile) {
-      return res.status(404).json({ success: false, message: "Conta de usuário associada ao token não encontrada." });
-    }
-
-    if (["bloqueado", "desativado", "inativo", "suspenso"].includes(userProfile.status)) {
-      return res.status(403).json({ success: false, message: "Esta conta está suspensa ou inativa. Ativação bloqueada." });
-    }
-
-    // Gera hash forte com Argon2id
+    // Gera hash forte com Argon2id antes da transação de banco
     const hash = await argon2.hash(newPassword, {
       type: argon2.argon2id,
       memoryCost: 19456,
@@ -967,20 +957,26 @@ app.post("/api/auth/redeem-activation-token", userLoginRateLimiter, async (req, 
       parallelism: 1
     });
 
-    await setUserPasswordHash(verification.userId, hash);
-    revokeUserSessions(verification.userId);
+    // Operação atômica transacional no PostgreSQL
+    const result = await redeemPasswordResetTokenAndSetPassword(token, hash);
+    if (!result.success) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
 
-    await insertSystemLog({
-      id: `log-redeem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: new Date().toISOString(),
-      action: "Ativação de Senha Concluída",
-      details: `Senha de acesso definida com sucesso via token para o usuário ID: ${verification.userId}.`,
-      category: "sistema"
-    });
+    if (result.userId) {
+      revokeUserSessions(result.userId);
+      await insertSystemLog({
+        id: `log-redeem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: new Date().toISOString(),
+        action: "Ativação de Senha Concluída",
+        details: `Senha de acesso definida com sucesso via token para o usuário ID: ${result.userId}.`,
+        category: "sistema"
+      });
+    }
 
     return res.json({
       success: true,
-      message: "Senha cadastrada com sucesso. Você já pode efetuar login no sistema."
+      message: result.message
     });
   } catch (error: any) {
     console.error("Erro ao resgatar token de ativação:", error);
@@ -1110,6 +1106,7 @@ app.get(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
 // Permite:
 // A) Cadastro operacional municipal de cidadão em 'usuarios' sem conta de login (users)
 // B) Provisionamento de conta de login com hash Argon2id quando senha fornecida, com prevenção de ambiguidade
+// C) Reutilização do identificador de cadastro operacional único, preservando dados e vínculos com OS
 app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], optionalAuth as any, async (req: AuthRequest, res) => {
   try {
     const body = req.body;
@@ -1124,7 +1121,7 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
     const rawPassword = body.password || body.senha;
     const wantsAccount = body.createAccount === true || (!isPrivileged && rawPassword !== undefined && rawPassword !== null && String(rawPassword).trim() !== "");
 
-    // Se senha foi enviada, valida tamanho: NUNCA silencia senha inválida
+    // 1. Se senha foi enviada, valida tamanho: NUNCA silencia senha inválida
     if (rawPassword !== undefined && rawPassword !== null && String(rawPassword).trim() !== "") {
       if (typeof rawPassword !== "string" || rawPassword.length < 6) {
         return res.status(400).json({ error: "A senha informada para criação da conta de acesso deve possuir pelo menos 6 caracteres." });
@@ -1143,30 +1140,82 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
       finalUserType = "requisitante";
     }
 
-    // Checagem de ambiguidade cadastral antes de provisionamento de conta
-    if (wantsAccount && (cleanBody.document || cleanBody.email)) {
-      const ambiguous = await findUsuariosByDocumentOrEmail(cleanBody.document, cleanBody.email);
-      if (ambiguous.length > 1) {
+    const cleanDocument = cleanBody.document ? cleanBody.document.replace(/\D/g, "") : "";
+
+    // 2. Validação estrita do CPF via algoritmo do Módulo 11 da Receita Federal no provisionamento de conta
+    if (wantsAccount && cleanDocument && body.createAccount === true) {
+      const isAlgoValid = validateCPFAlgorithm(cleanDocument);
+      if (!isAlgoValid.isValid) {
         return res.status(400).json({
-          error: "Não foi possível concluir o provisionamento automático por ambiguidade cadastral. Por favor, procure atendimento para revisão."
+          error: `CPF informado é inválido: ${isAlgoValid.reason || "falha na validação do Módulo 11 da Receita Federal."}`
         });
-      }
-      if (cleanBody.document) {
-        const existingAuth = await getUserAuthByDocument(cleanBody.document);
-        if (existingAuth && (!cleanBody.id || existingAuth.uid !== cleanBody.id)) {
-          return res.status(409).json({ error: "Já existe uma conta de acesso associada a este documento." });
-        }
       }
     }
 
-    // UID gerado com segurança no servidor para não aceitar IDs privilegiados do cliente
-    const assignedId = cleanBody.id && isPrivileged 
-      ? cleanBody.id 
-      : (req.user ? req.user.uid : `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`);
+    // 3. Caso A: Munícipe / Cidadão presencial sem login (wantsAccount === false)
+    if (!wantsAccount) {
+      const assignedId = cleanBody.id && isPrivileged 
+        ? cleanBody.id 
+        : `USR-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
+      const usuarioData = {
+        ...cleanBody,
+        id: assignedId,
+        document: cleanDocument || cleanBody.document || "",
+        status: finalStatus,
+        userType: finalUserType
+      };
+
+      const usuario = await upsertUsuario(usuarioData);
+      return res.status(201).json({
+        success: true,
+        usuario,
+        client: usuario,
+        accountProvisioned: false,
+        status: finalStatus
+      });
+    }
+
+    // 4. Caso B: Provisionamento de Conta de Acesso (wantsAccount === true)
+    // 4.1 Impedir contas duplicadas: verifica se já existe uma conta em 'users' com este CPF
+    if (cleanDocument) {
+      const existingAuth = await getUserAuthByDocument(cleanDocument);
+      if (existingAuth) {
+        return res.status(409).json({ error: "Já existe uma conta de acesso associada a este documento." });
+      }
+    }
+
+    // 4.2 Buscar cadastros operacionais em 'usuarios' compatíveis por documento
+    let matchingUsuarios: UsuarioDb[] = [];
+    if (cleanDocument) {
+      matchingUsuarios = await findUsuariosByDocument(cleanDocument);
+    }
+
+    let assignedId: string;
+    let existingUsuarioToPreserve: UsuarioDb | null = null;
+
+    if (matchingUsuarios.length > 1) {
+      // AMBIGUIDADE CADASTRAL: Mais de um cadastro operacional com o mesmo documento!
+      return res.status(400).json({
+        error: "Não foi possível concluir o provisionamento automático por ambiguidade cadastral (múltiplos cadastros operacionais encontrados). Por favor, procure atendimento administrativo para revisão dos registros."
+      });
+    } else if (matchingUsuarios.length === 1) {
+      // CADASTRO OPERACIONAL ÚNICO: Reutiliza o identificador existente e preserva dados e vínculos com OS!
+      existingUsuarioToPreserve = matchingUsuarios[0];
+      assignedId = existingUsuarioToPreserve.id;
+    } else {
+      // NENHUM CADASTRO ENCONTRADO: Aplica fluxo de negócio normal gerando novo ID sem criar vínculos artificiais
+      assignedId = cleanBody.id && isPrivileged 
+        ? cleanBody.id 
+        : (req.user ? req.user.uid : `USR-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`);
+    }
+
+    // Gravação segura em 'usuarios' preservando dados prévios se existentes
     const usuarioData = {
+      ...(existingUsuarioToPreserve ? ((existingUsuarioToPreserve.data as any) || {}) : {}),
       ...cleanBody,
       id: assignedId,
+      document: cleanDocument || cleanBody.document || "",
       status: finalStatus,
       userType: finalUserType
     };
@@ -1174,7 +1223,7 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
     const usuario = await upsertUsuario(usuarioData);
 
     let accountProvisioned = false;
-    if (wantsAccount && rawPassword) {
+    if (rawPassword) {
       const passwordHash = await argon2.hash(String(rawPassword), {
         type: argon2.argon2id,
         memoryCost: 19456,
@@ -1186,7 +1235,7 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
         uid: assignedId,
         email: cleanBody.email || `${assignedId}@s1gestaopro.local`,
         name: cleanBody.name,
-        document: cleanBody.document,
+        document: cleanDocument || undefined,
         userType: finalUserType,
         status: finalStatus,
         passwordHash
@@ -1194,11 +1243,12 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
       accountProvisioned = true;
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       usuario,
       client: usuario,
       accountProvisioned,
+      linkedExistingUsuario: !!existingUsuarioToPreserve,
       status: finalStatus
     });
   } catch (error: any) {
@@ -1225,6 +1275,30 @@ app.put(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
     }
 
     const safeBody = pickUsuarioUpdateFields(body, isPrivileged);
+
+    // Validação de alteração de documento
+    const rawNewDocument = body.document;
+    if (rawNewDocument !== undefined && rawNewDocument !== null && rawNewDocument !== existing.document) {
+      const newCleanDoc = String(rawNewDocument).replace(/\D/g, "");
+      if (newCleanDoc) {
+        const algoCheck = validateCPFAlgorithm(newCleanDoc);
+        if (!algoCheck.isValid) {
+          return res.status(400).json({
+            error: `O novo CPF informado é inválido: ${algoCheck.reason || "falha na validação do Módulo 11."}`
+          });
+        }
+        const otherUsuarios = await findUsuariosByDocument(newCleanDoc);
+        const hasOtherUsuario = otherUsuarios.some(u => u.id !== id);
+        if (hasOtherUsuario) {
+          return res.status(409).json({ error: "Já existe outro cadastro operacional com este CPF." });
+        }
+        const existingAuth = await getUserAuthByDocument(newCleanDoc);
+        if (existingAuth && existingAuth.uid !== id) {
+          return res.status(409).json({ error: "Já existe uma conta de acesso associada a este CPF." });
+        }
+        safeBody.document = newCleanDoc;
+      }
+    }
 
     const updatedData = {
       ...existing,
@@ -1258,6 +1332,30 @@ app.patch(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/cli
     }
 
     const safeBody = pickUsuarioUpdateFields(body, isPrivileged);
+
+    // Validação de alteração de documento
+    const rawPatchDocument = body.document;
+    if (rawPatchDocument !== undefined && rawPatchDocument !== null && rawPatchDocument !== existing.document) {
+      const newCleanDoc = String(rawPatchDocument).replace(/\D/g, "");
+      if (newCleanDoc) {
+        const algoCheck = validateCPFAlgorithm(newCleanDoc);
+        if (!algoCheck.isValid) {
+          return res.status(400).json({
+            error: `O novo CPF informado é inválido: ${algoCheck.reason || "falha na validação do Módulo 11."}`
+          });
+        }
+        const otherUsuarios = await findUsuariosByDocument(newCleanDoc);
+        const hasOtherUsuario = otherUsuarios.some(u => u.id !== id);
+        if (hasOtherUsuario) {
+          return res.status(409).json({ error: "Já existe outro cadastro operacional com este CPF." });
+        }
+        const existingAuth = await getUserAuthByDocument(newCleanDoc);
+        if (existingAuth && existingAuth.uid !== id) {
+          return res.status(409).json({ error: "Já existe uma conta de acesso associada a este CPF." });
+        }
+        safeBody.document = newCleanDoc;
+      }
+    }
 
     const updatedData = {
       ...existing,

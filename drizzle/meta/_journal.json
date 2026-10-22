@@ -15,6 +15,20 @@
       "when": 1786467016552,
       "tag": "0001_talented_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792587600000,
+      "tag": "0002_security_sessions_and_foreign_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792674000000,
+      "tag": "0003_password_reset_tokens",
+      "breakpoints": true
     }
   ]
 }

@@ -34,7 +34,11 @@ import {
   deleteUsuario, 
   upsertServiceOrder, 
   deleteServiceOrder,
-  setUserPasswordHash
+  setUserPasswordHash,
+  deletePasswordResetTokensByUserId,
+  deletePasswordResetTokenByHash,
+  deleteRevokedSessionsByIdentifier,
+  deleteSystemLog
 } from "../src/db/repository.ts";
 import { db } from "../src/db/drizzle.ts";
 import { sql } from "drizzle-orm";
@@ -77,6 +81,19 @@ async function runSecurityTestSuite() {
   const baseUrl = `http://127.0.0.1:${address.port}`;
   console.log(`Servidor de teste operacional em: ${baseUrl}\n`);
 
+  let baseline: any = null;
+  let initialMaxRevokedId = 0;
+  let initialMaxTokenId = 0;
+  let initialLogIds = new Set<string>();
+
+  const testCleanupRegistry = {
+    users: new Set<string>(),
+    usuarios: new Set<string>(),
+    serviceOrders: new Set<string>(),
+    revokedSessionIdentifiers: new Set<string>(),
+    resetTokenUserIds: new Set<string>()
+  };
+
   try {
     // -------------------------------------------------------------
     // Preflight Somente-Leitura: Integridade e Vínculos Órfãos
@@ -98,6 +115,30 @@ async function runSecurityTestSuite() {
     if (orphanCount > 0) {
       throw new Error(`ABORTANDO: Detectadas ${orphanCount} ordens de serviço órfãs no banco de teste.`);
     }
+
+    // Registro do Baseline Inicial do banco isolado de testes
+    const baselineCountsRes = await db.execute(sql`
+      SELECT 
+        (SELECT count(*) FROM users)::int as users_count,
+        (SELECT count(*) FROM usuarios)::int as usuarios_count,
+        (SELECT count(*) FROM service_orders)::int as service_orders_count,
+        (SELECT count(*) FROM system_logs)::int as system_logs_count,
+        (SELECT count(*) FROM revoked_sessions)::int as revoked_sessions_count,
+        (SELECT count(*) FROM password_reset_tokens)::int as reset_tokens_count;
+    `);
+    baseline = baselineCountsRes[0] as any;
+
+    const initialRevokedRes = await db.execute(sql`SELECT COALESCE(MAX(id), 0)::int as max_id FROM revoked_sessions`);
+    initialMaxRevokedId = Number((initialRevokedRes[0] as any)?.max_id || 0);
+
+    const initialTokensRes = await db.execute(sql`SELECT COALESCE(MAX(id), 0)::int as max_id FROM password_reset_tokens`);
+    initialMaxTokenId = Number((initialTokensRes[0] as any)?.max_id || 0);
+
+    const initialLogsRes = await db.execute(sql`SELECT id FROM system_logs`);
+    initialLogIds = new Set((initialLogsRes as any[]).map(r => r.id));
+
+    console.log(`📊 Baseline inicial do banco PostgreSQL de teste:`);
+    console.log(`   users: ${baseline.users_count}, usuarios: ${baseline.usuarios_count}, service_orders: ${baseline.service_orders_count}, system_logs: ${baseline.system_logs_count}, revoked_sessions: ${baseline.revoked_sessions_count}, reset_tokens: ${baseline.reset_tokens_count}\n`);
 
     // -------------------------------------------------------------
     // Geração de Tokens de Teste (Criptograficamente assinados)
@@ -1628,6 +1669,8 @@ async function runSecurityTestSuite() {
 
     const testLegacyUid = `legacy-user-${Date.now()}`;
     const testLegacyDoc = "55566677788";
+    testCleanupRegistry.users.add(testLegacyUid);
+    testCleanupRegistry.resetTokenUserIds.add(testLegacyUid);
     await upsertUser({
       uid: testLegacyUid,
       email: "legacy@s1gestao.local",
@@ -1672,10 +1715,10 @@ async function runSecurityTestSuite() {
     );
     const reqActData = await resReqActivation.json();
     assert(
-      reqActData.success === true && reqActData.message.includes("instruções"),
+      reqActData.success === true && reqActData.message.includes("ativação registrada"),
       "Mensagem genérica informa processamento seguro sem revelar existência de conta",
       "true",
-      String(reqActData.success === true && reqActData.message.includes("instruções"))
+      String(reqActData.success === true && reqActData.message.includes("ativação registrada"))
     );
 
     // 12.3 Solicitação pública com CPF inexistente retorna EXATAMENTE a mesma mensagem genérica
@@ -1782,8 +1825,10 @@ async function runSecurityTestSuite() {
       String(resRedeemReplay.status)
     );
 
-    // 12.9 Conta bloqueada ou inativa tem ativação rejeitada com 403
+    // 12.9 Conta bloqueada ou inativa tem ativação rejeitada com 403 e preserva o token
     const testBlockedUid = `blocked-act-${Date.now()}`;
+    testCleanupRegistry.users.add(testBlockedUid);
+    testCleanupRegistry.resetTokenUserIds.add(testBlockedUid);
     await upsertUser({
       uid: testBlockedUid,
       email: "blocked.act@s1gestao.local",
@@ -1812,7 +1857,16 @@ async function runSecurityTestSuite() {
       "403",
       String(resRedeemBlocked.status)
     );
-    await deleteUser(testBlockedUid);
+
+    // Valida que falha intermediária NÃO consome o token (preservação do token para correção operacional)
+    const tokenHashBlocked = crypto.createHash("sha256").update(blockedToken).digest("hex");
+    const checkTokenUnconsumed = await db.execute(sql`SELECT used_at FROM password_reset_tokens WHERE token_hash = ${tokenHashBlocked}`);
+    assert(
+      (checkTokenUnconsumed[0] as any)?.used_at === null,
+      "Falha intermediária na ativação preserva o token sem consumi-lo (used_at permanece NULL)",
+      "null",
+      String((checkTokenUnconsumed[0] as any)?.used_at)
+    );
 
     // 12.10 Login oficial com a senha recém-ativada autentica com sucesso (200 OK)
     const resLoginAfterActivation = await fetch(`${baseUrl}/api/auth/login`, {
@@ -1826,7 +1880,51 @@ async function runSecurityTestSuite() {
       "200",
       String(resLoginAfterActivation.status)
     );
-    await deleteUser(testLegacyUid);
+
+    // 12.11 Concorrência no Resgate: Duas requisições simultâneas com o mesmo token (Race Condition)
+    const testConcurrentUid = `concurrent-user-${Date.now()}`;
+    const testConcurrentDoc = "11144477735";
+    testCleanupRegistry.users.add(testConcurrentUid);
+    testCleanupRegistry.resetTokenUserIds.add(testConcurrentUid);
+    await upsertUser({
+      uid: testConcurrentUid,
+      email: "concurrent@s1gestao.local",
+      name: "Cidadão Teste Concorrência",
+      document: testConcurrentDoc,
+      userType: "requisitante",
+      status: "ativo"
+    });
+    const resGenConcurrent = await fetch(`${baseUrl}/api/auth/admin/generate-activation-token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ targetUid: testConcurrentUid, document: testConcurrentDoc })
+    });
+    const concurrentToken = (await resGenConcurrent.json()).token;
+
+    // Dispara duas requisições simultâneas concorrentes com o mesmo token
+    const [resConc1, resConc2] = await Promise.all([
+      fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: concurrentToken, newPassword: "SenhaConcorrenteA#1" })
+      }),
+      fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: concurrentToken, newPassword: "SenhaConcorrenteB#2" })
+      })
+    ]);
+
+    const statuses = [resConc1.status, resConc2.status].sort();
+    assert(
+      statuses[0] === 200 && statuses[1] === 400,
+      "Concorrência: Exatamente uma requisição de ativação é aceita (200) e a concorrente simultânea é rejeitada (400)",
+      "200 e 400",
+      `${resConc1.status} e ${resConc2.status}`
+    );
 
     // =========================================================================
     // Grupo 13: Logout com Revogação Persistente no PostgreSQL e Fail-Secure
@@ -1835,6 +1933,8 @@ async function runSecurityTestSuite() {
 
     const testLogoutUid = `logout-user-${Date.now()}`;
     const testLogoutJti = `logout-jti-${Date.now()}`;
+    testCleanupRegistry.users.add(testLogoutUid);
+    testCleanupRegistry.revokedSessionIdentifiers.add(testLogoutJti);
     const logoutToken = signServerSessionToken({
       uid: testLogoutUid,
       role: "admin",
@@ -1878,10 +1978,12 @@ async function runSecurityTestSuite() {
     );
 
     // 13.5 Comportamento Fail-Secure: Falha de conexão com PostgreSQL retorna HTTP 503
+    const failSecureJti = `fail-secure-jti-${Date.now()}`;
+    testCleanupRegistry.revokedSessionIdentifiers.add(failSecureJti);
     const validFailSecureToken = signServerSessionToken({
       uid: "fail-secure-user",
       role: "admin",
-      jti: `fail-secure-jti-${Date.now()}`
+      jti: failSecureJti
     });
     setDbFailureSimulationForTest(true);
     const resFailSecure = await fetch(`${baseUrl}/api/postgres/system-logs`, {
@@ -1895,6 +1997,16 @@ async function runSecurityTestSuite() {
     );
     setDbFailureSimulationForTest(false);
 
+    // 13.6 Tratamento de erro no logout com token ausente ou inválido
+    const resLogoutNoAuth = await fetch(`${baseUrl}/api/auth/logout`, { method: "POST" });
+    assert(resLogoutNoAuth.status === 401, "POST /api/auth/logout sem header Authorization retorna 401 Unauthorized", "401", String(resLogoutNoAuth.status));
+
+    const resLogoutBadToken = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer token-malformado-invalido" }
+    });
+    assert(resLogoutBadToken.status === 401, "POST /api/auth/logout com token inválido retorna 401 Unauthorized", "401", String(resLogoutBadToken.status));
+
     // =========================================================================
     // Grupo 14: Provisionamento de Novas Contas e Ambiguidade Cadastral
     // =========================================================================
@@ -1902,19 +2014,23 @@ async function runSecurityTestSuite() {
 
     // 14.1 Cadastro municipal sem senha: cria apenas em 'usuarios' (sem login)
     const testMunicipePureUid = `municipe-pure-${Date.now()}`;
+    testCleanupRegistry.usuarios.add(testMunicipePureUid);
     const resMunicipePure = await fetch(`${baseUrl}/api/usuarios`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: testMunicipePureUid,
         name: "Cidadão Presencial Sem Login",
-        document: "22233344455",
+        document: "11144477735",
         phone: "(18) 3333-2222",
         email: "cidade.presencial@s1gestao.local"
       })
     });
     assert(resMunicipePure.status === 201, "Cadastro presencial de munícipe sem senha aceito (201 Created)", "201", String(resMunicipePure.status));
     const pureData = await resMunicipePure.json();
+    if (pureData?.usuario?.id) {
+      testCleanupRegistry.usuarios.add(pureData.usuario.id);
+    }
     assert(
       pureData.accountProvisioned === false,
       "Cadastro presencial registra munícipe em 'usuarios' sem provisionar conta em 'users' (accountProvisioned: false)",
@@ -1928,7 +2044,7 @@ async function runSecurityTestSuite() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "Cidadão Tentando Senha Curta",
-        document: "33344455566",
+        document: "23456789092",
         password: "123"
       })
     });
@@ -1940,7 +2056,7 @@ async function runSecurityTestSuite() {
     );
 
     // 14.3 Cadastro público com senha válida provisiona conta em 'users' com status 'pendente_autorizacao'
-    const testProvisionDoc = "66677788899";
+    const testProvisionDoc = "34567890175";
     const testProvisionPass = "SenhaValidaProvisionada#2026";
     const resProvision = await fetch(`${baseUrl}/api/usuarios`, {
       method: "POST",
@@ -1955,6 +2071,9 @@ async function runSecurityTestSuite() {
     });
     assert(resProvision.status === 201, "Cadastro com senha válida provisiona conta (201 Created)", "201", String(resProvision.status));
     const provData = await resProvision.json();
+    testCleanupRegistry.usuarios.add(provData.usuario.id);
+    testCleanupRegistry.users.add(provData.usuario.id);
+
     assert(
       provData.accountProvisioned === true,
       "Conta de login provisionada no banco com sucesso (accountProvisioned: true)",
@@ -1985,9 +2104,12 @@ async function runSecurityTestSuite() {
     );
 
     // 14.5 Detecção de ambiguidade cadastral: rejeita provisionamento se houver duplicidade em 'usuarios'
-    const ambiguousDoc = "77766655544";
+    const ambiguousDoc = "45678901249";
     const ambigUid1 = `ambig-1-${Date.now()}`;
     const ambigUid2 = `ambig-2-${Date.now()}`;
+    testCleanupRegistry.usuarios.add(ambigUid1);
+    testCleanupRegistry.usuarios.add(ambigUid2);
+
     await upsertUsuario({
       id: ambigUid1,
       name: "Munícipe Duplicado 1",
@@ -2029,17 +2151,225 @@ async function runSecurityTestSuite() {
       String(resAmbig.status)
     );
 
-    // Limpeza de registros de teste
-    await deleteUsuario(testMunicipePureUid);
-    await deleteUsuario(provData.usuario.id);
-    await deleteUser(provData.usuario.id);
-    await deleteUsuario(ambigUid1);
-    await deleteUsuario(ambigUid2);
+    // 14.6 Associação com cadastro operacional único existente e preservação de vínculos com OS
+    const opSingleUid = `cli-op-link-${Date.now()}`;
+    const opSingleDoc = "56789012303";
+    const opOrderId = `so-link-${Date.now()}`;
+    testCleanupRegistry.usuarios.add(opSingleUid);
+    testCleanupRegistry.users.add(opSingleUid);
+    testCleanupRegistry.serviceOrders.add(opOrderId);
+
+    // 1. Cadastra munícipe operacional prévio em usuarios
+    await upsertUsuario({
+      id: opSingleUid,
+      name: "Munícipe Operacional Com Histórico",
+      document: opSingleDoc,
+      phone: "(18) 3644-1234",
+      email: "operacional.historico@s1gestao.local",
+      address: "Av. Brasil, 100",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString(),
+      notes: "Cadastro presencial prévio"
+    });
+
+    // 2. Cria ordem de serviço vinculada a este munícipe
+    await upsertServiceOrder({
+      id: opOrderId,
+      title: "Reparo de Iluminação Pública Pré-existente",
+      clientId: opSingleUid,
+      assignedTo: "Carlos Henrique",
+      category: "Elétrica",
+      status: "aberto",
+      priority: "high",
+      startDate: new Date().toISOString(),
+      endDate: new Date().toISOString(),
+      notes: "Atendimento pré-existente",
+      description: "Lâmpada queimada em frente à residência",
+      location: "Av. Brasil, 100",
+      history: [],
+      images: [],
+      completedImages: [],
+      createdAt: new Date().toISOString()
+    });
+
+    // 3. Munícipe realiza auto-cadastro com o mesmo CPF
+    const resLinkExisting = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Munícipe Operacional Com Histórico",
+        document: opSingleDoc,
+        email: "operacional.historico@s1gestao.local",
+        password: "SenhaForteVinculo#2026",
+        createAccount: true
+      })
+    });
+    assert(
+      resLinkExisting.status === 201,
+      "Auto-cadastro de cidadão com cadastro prévio único responde 201 Created",
+      "201",
+      String(resLinkExisting.status)
+    );
+    const linkExistingData = await resLinkExisting.json();
+    assert(
+      linkExistingData.linkedExistingUsuario === true && linkExistingData.usuario.id === opSingleUid,
+      "Identificador operacional reutilizado com sucesso (mesmo ID em usuarios e users)",
+      `${opSingleUid}|true`,
+      `${linkExistingData.usuario.id}|${linkExistingData.linkedExistingUsuario}`
+    );
+
+    // 4. Confirma que a ordem de serviço continua vinculada a este usuário
+    const linkedUserToken = signServerSessionToken({
+      uid: opSingleUid,
+      role: "requisitante",
+      name: "Munícipe Operacional Com Histórico",
+      document: opSingleDoc
+    });
+    const resLinkedOrders = await fetch(`${baseUrl}/api/postgres/service-orders`, {
+      headers: { "Authorization": `Bearer ${linkedUserToken}` }
+    });
+    const linkedOrdersList = await resLinkedOrders.json();
+    const hasLinkedOrder = Array.isArray(linkedOrdersList) && linkedOrdersList.some(o => o.id === opOrderId);
+    assert(
+      hasLinkedOrder,
+      "Preservação de Vínculos: Ordem de serviço prévia permanece vinculada e acessível à conta recém-provisionada",
+      "true",
+      String(hasLinkedOrder)
+    );
+
+    // 14.7 Validação de alteração de documento com CPF matematicamente inválido (400)
+    const resInvalidDocUpdate = await fetch(`${baseUrl}/api/usuarios/${opSingleUid}`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${linkedUserToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        document: "11111111111" // Sequência repetida inválida
+      })
+    });
+    assert(
+      resInvalidDocUpdate.status === 400,
+      "Alteração de documento com CPF matematicamente inválido é rejeitada com 400 Bad Request",
+      "400",
+      String(resInvalidDocUpdate.status)
+    );
+
+    // 14.8 Validação de alteração de documento para CPF já em uso por outro usuário (409 Conflict)
+    const otherCitizenUid = `other-cit-${Date.now()}`;
+    const otherCitizenDoc = "12345678909"; // CPF matematicamente válido
+    testCleanupRegistry.usuarios.add(otherCitizenUid);
+    await upsertUsuario({
+      id: otherCitizenUid,
+      name: "Outro Cidadão Existente",
+      document: otherCitizenDoc,
+      phone: "(18) 3644-9999",
+      email: "outro.cidadao@s1gestao.local",
+      address: "Rua Teste, 200",
+      notes: "Munícipe teste",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString()
+    });
+
+    const resConflictDocUpdate = await fetch(`${baseUrl}/api/usuarios/${opSingleUid}`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${linkedUserToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        document: otherCitizenDoc
+      })
+    });
+    assert(
+      resConflictDocUpdate.status === 409,
+      "Alteração de documento para CPF já cadastrado em outro munícipe é rejeitada com 409 Conflict",
+      "409",
+      String(resConflictDocUpdate.status)
+    );
 
   } finally {
+    console.log("\n🧹 Executando Limpeza Rigorosa e Isolamento de Artefatos de Teste...");
+
+    // 1. Limpeza de Ordens de Serviço criadas nos testes
+    for (const soId of testCleanupRegistry.serviceOrders) {
+      try { await deleteServiceOrder(soId); } catch (e) {}
+    }
+
+    // 2. Limpeza de Usuários e Munícipes criados nos testes
+    for (const uid of testCleanupRegistry.users) {
+      try { await deleteUser(uid); } catch (e) {}
+    }
+    for (const id of testCleanupRegistry.usuarios) {
+      try { await deleteUsuario(id); } catch (e) {}
+    }
+
+    // 3. Limpeza de Tokens de Redefinição gerados nos testes
+    for (const uid of testCleanupRegistry.resetTokenUserIds) {
+      try { await deletePasswordResetTokensByUserId(uid); } catch (e) {}
+    }
+
+    // 4. Limpeza de Revogações de Sessão geradas nos testes
+    for (const ident of testCleanupRegistry.revokedSessionIdentifiers) {
+      try { await deleteRevokedSessionsByIdentifier(ident); } catch (e) {}
+    }
+
+    // 5. Limpeza de Logs de Auditoria gerados pelas rotas durante a execução do teste
+    if (initialLogIds.size > 0) {
+      const allowedIds = Array.from(initialLogIds).map(id => `'${id.replace(/'/g, "''")}'`).join(", ");
+      await db.execute(sql.raw(`DELETE FROM system_logs WHERE id NOT IN (${allowedIds})`));
+    } else {
+      await db.execute(sql`DELETE FROM system_logs WHERE id LIKE 'log-act-%' OR id LIKE 'log-admin-act-%' OR id LIKE 'log-redeem-%' OR id LIKE 'test-%'`);
+    }
+
+    // Limpeza de revogações e tokens gerados estritamente durante a suíte
+    if (baseline.revoked_sessions_count === 0) {
+      await db.execute(sql`DELETE FROM revoked_sessions`);
+    } else {
+      await db.execute(sql`DELETE FROM revoked_sessions WHERE id > ${initialMaxRevokedId}`);
+    }
+
+    if (baseline.reset_tokens_count === 0) {
+      await db.execute(sql`DELETE FROM password_reset_tokens`);
+    } else {
+      await db.execute(sql`DELETE FROM password_reset_tokens WHERE id > ${initialMaxTokenId}`);
+    }
+
+    if (baseline.users_count === 0) {
+      await db.execute(sql`DELETE FROM users`);
+    }
+
+    // 6. Verificação de Restauração Estrita do Baseline Inicial
+    const finalCountsRes = await db.execute(sql`
+      SELECT 
+        (SELECT count(*) FROM users)::int as users_count,
+        (SELECT count(*) FROM usuarios)::int as usuarios_count,
+        (SELECT count(*) FROM service_orders)::int as service_orders_count,
+        (SELECT count(*) FROM system_logs)::int as system_logs_count,
+        (SELECT count(*) FROM revoked_sessions)::int as revoked_sessions_count,
+        (SELECT count(*) FROM password_reset_tokens)::int as reset_tokens_count;
+    `);
+    const finalCounts = finalCountsRes[0] as any;
+    console.log(`📊 Contagens finais do banco PostgreSQL após limpeza completa:`);
+    console.log(`   users: ${finalCounts.users_count}, usuarios: ${finalCounts.usuarios_count}, service_orders: ${finalCounts.service_orders_count}, system_logs: ${finalCounts.system_logs_count}, revoked_sessions: ${finalCounts.revoked_sessions_count}, reset_tokens: ${finalCounts.reset_tokens_count}\n`);
+
+    assert(
+      Number(finalCounts.users_count) === Number(baseline.users_count) &&
+      Number(finalCounts.usuarios_count) === Number(baseline.usuarios_count) &&
+      Number(finalCounts.service_orders_count) === Number(baseline.service_orders_count) &&
+      Number(finalCounts.system_logs_count) === Number(baseline.system_logs_count) &&
+      Number(finalCounts.revoked_sessions_count) === Number(baseline.revoked_sessions_count) &&
+      Number(finalCounts.reset_tokens_count) === Number(baseline.reset_tokens_count),
+      "Isolamento e Limpeza de Testes: Zero dados órfãos residuais e contagens restauradas ao baseline",
+      `users:${baseline.users_count}, usuarios:${baseline.usuarios_count}, orders:${baseline.service_orders_count}, logs:${baseline.system_logs_count}, revoked:${baseline.revoked_sessions_count}, tokens:${baseline.reset_tokens_count}`,
+      `users:${finalCounts.users_count}, usuarios:${finalCounts.usuarios_count}, orders:${finalCounts.service_orders_count}, logs:${finalCounts.system_logs_count}, revoked:${finalCounts.revoked_sessions_count}, tokens:${finalCounts.reset_tokens_count}`
+    );
+
     // Encerra servidor de teste
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    console.log("\nServidor de testes encerrado com sucesso.");
+    console.log("Servidor de testes encerrado com sucesso.");
   }
 
   // -------------------------------------------------------------

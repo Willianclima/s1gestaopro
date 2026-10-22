@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { db } from "./index.ts";
 import { users, usuarios, clients, professionals, serviceOrders, serviceCategories, systemLogs, loginAttempts, accessProfiles, revokedSessions, passwordResetTokens, type UserDb, type UsuarioDb } from "./schema.ts";
-import { eq, desc, and, lt, gt, sql } from "drizzle-orm";
+import { eq, desc, and, lt, gt, isNull, sql } from "drizzle-orm";
 import type { Client, Professional, ServiceOrder, ServiceCategory, SystemLog, LoginAttempt, AccessProfile } from "../types.ts";
 
 /**
@@ -801,23 +801,25 @@ export async function verifyAndConsumePasswordResetToken(
     }
 
     const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
-    const rows = await db.select().from(passwordResetTokens).where(
-      and(
-        eq(passwordResetTokens.tokenHash, tokenHash),
-        sql`${passwordResetTokens.usedAt} IS NULL`,
-        gt(passwordResetTokens.expiresAt, new Date())
-      )
-    );
+    const now = new Date();
 
-    if (rows.length === 0) {
+    // Atualização condicional atômica no PostgreSQL (single atomic statement)
+    const updated = await db.update(passwordResetTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(passwordResetTokens.tokenHash, tokenHash),
+          isNull(passwordResetTokens.usedAt),
+          gt(passwordResetTokens.expiresAt, now)
+        )
+      )
+      .returning();
+
+    if (!updated || updated.length === 0) {
       return { valid: false, error: "Token de ativação/redefinição inválido, expirado ou já utilizado." };
     }
 
-    const target = rows[0];
-    await db.update(passwordResetTokens)
-      .set({ usedAt: new Date() })
-      .where(eq(passwordResetTokens.id, target.id));
-
+    const target = updated[0];
     return { valid: true, userId: target.userId, document: target.document || undefined };
   } catch (err) {
     console.error("Database error in verifyAndConsumePasswordResetToken:", err);
@@ -825,9 +827,128 @@ export async function verifyAndConsumePasswordResetToken(
   }
 }
 
+/**
+ * Resgate Atômico de Token e Definição de Senha (Transacional):
+ * - Valida integridade e elegibilidade da conta ANTES de consumir o token
+ * - Consome o token condicionalmente de forma estritamente atômica (concorrência segura)
+ * - Persiste a nova credencial com Argon2id
+ * - Garante que duas requisições simultâneas não possam resgatar o mesmo token
+ */
+export async function redeemPasswordResetTokenAndSetPassword(
+  rawToken: string,
+  newPasswordHash: string
+): Promise<{ success: boolean; status: number; message: string; userId?: string }> {
+  if (!rawToken || typeof rawToken !== "string" || rawToken.length !== 64) {
+    return { success: false, status: 400, message: "Token de ativação/redefinição inválido ou formato incorreto." };
+  }
+
+  const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+  const now = new Date();
+
+  try {
+    return await db.transaction(async (tx) => {
+      // 1. Localizar o token para checagem de integridade preliminar
+      const tokenRows = await tx.select().from(passwordResetTokens).where(
+        eq(passwordResetTokens.tokenHash, tokenHash)
+      );
+
+      if (tokenRows.length === 0) {
+        return { success: false, status: 400, message: "Token de ativação/redefinição inválido, expirado ou inexistente." };
+      }
+
+      const tokenRecord = tokenRows[0];
+
+      if (tokenRecord.usedAt) {
+        return { success: false, status: 400, message: "Este token de ativação já foi utilizado anteriormente." };
+      }
+
+      if (new Date(tokenRecord.expiresAt) <= now) {
+        return { success: false, status: 400, message: "Token de ativação expirado. Solicite um novo token." };
+      }
+
+      // 2. Verificar existência e elegibilidade da conta ANTES do consumo
+      const userRows = await tx.select().from(users).where(eq(users.uid, tokenRecord.userId));
+      if (userRows.length === 0) {
+        return { success: false, status: 404, message: "Conta de usuário associada ao token não encontrada." };
+      }
+
+      const userProfile = userRows[0];
+      if (["bloqueado", "desativado", "inativo", "suspenso"].includes(userProfile.status)) {
+        return { success: false, status: 403, message: "Esta conta está suspensa ou inativa. Ativação bloqueada." };
+      }
+
+      // 3. Consumo condicional atômico na transação: Se outra requisição simultânea consumiu, 0 linhas retornam
+      const updatedTokens = await tx.update(passwordResetTokens)
+        .set({ usedAt: now })
+        .where(
+          and(
+            eq(passwordResetTokens.id, tokenRecord.id),
+            isNull(passwordResetTokens.usedAt),
+            gt(passwordResetTokens.expiresAt, now)
+          )
+        )
+        .returning();
+
+      if (updatedTokens.length === 0) {
+        return { success: false, status: 400, message: "Token já resgatado por outra requisição concorrente." };
+      }
+
+      // 4. Gravação da nova credencial com Argon2id
+      await tx.update(users)
+        .set({
+          passwordHash: newPasswordHash,
+          forcePasswordChange: false
+        })
+        .where(eq(users.uid, tokenRecord.userId));
+
+      return {
+        success: true,
+        status: 200,
+        message: "Senha cadastrada com sucesso. Você já pode efetuar login no sistema.",
+        userId: tokenRecord.userId
+      };
+    });
+  } catch (error: any) {
+    console.error("Erro na transação de ativação de token:", error);
+    return { success: false, status: 500, message: "Erro interno no servidor ao processar ativação de senha." };
+  }
+}
+
 // ============================================================================
 // Provisionamento e Verificação de Ambiguidade de Cadastros
 // ============================================================================
+
+export function isValidCPFAlgorithm(cpf: string): boolean {
+  const clean = (cpf || "").replace(/\D/g, "");
+  if (clean.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(clean)) return false;
+
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(clean.charAt(i), 10) * (10 - i);
+  let rev = (sum * 10) % 11;
+  if (rev === 10 || rev === 11) rev = 0;
+  if (rev !== parseInt(clean.charAt(9), 10)) return false;
+
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(clean.charAt(10), 10) * (11 - i);
+  rev = (sum * 10) % 11;
+  if (rev === 10 || rev === 11) rev = 0;
+  if (rev !== parseInt(clean.charAt(10), 10)) return false;
+
+  return true;
+}
+
+export async function findUsuariosByDocument(document: string): Promise<UsuarioDb[]> {
+  try {
+    const normalizedDoc = (document || "").replace(/\D/g, "");
+    if (!normalizedDoc) return [];
+    const all = await db.select().from(usuarios);
+    return all.filter(u => (u.document || "").replace(/\D/g, "") === normalizedDoc);
+  } catch (err) {
+    console.error("Database error in findUsuariosByDocument:", err);
+    return [];
+  }
+}
 
 export async function findUsuariosByDocumentOrEmail(
   document?: string,
@@ -871,6 +992,50 @@ export async function createUserAccount(data: {
     forcePasswordChange: false
   }).returning();
   return result[0];
+}
+
+// ============================================================================
+// Helpers de Limpeza Segura e Isolamento de Testes
+// ============================================================================
+
+export async function deletePasswordResetTokensByUserId(userId: string): Promise<number> {
+  try {
+    const res = await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId)).returning();
+    return res.length;
+  } catch (err) {
+    console.error("Erro ao deletar tokens de teste por userId:", err);
+    return 0;
+  }
+}
+
+export async function deletePasswordResetTokenByHash(tokenHash: string): Promise<number> {
+  try {
+    const res = await db.delete(passwordResetTokens).where(eq(passwordResetTokens.tokenHash, tokenHash)).returning();
+    return res.length;
+  } catch (err) {
+    console.error("Erro ao deletar token de teste por hash:", err);
+    return 0;
+  }
+}
+
+export async function deleteRevokedSessionsByIdentifier(identifier: string): Promise<number> {
+  try {
+    const res = await db.delete(revokedSessions).where(eq(revokedSessions.identifier, identifier)).returning();
+    return res.length;
+  } catch (err) {
+    console.error("Erro ao deletar revogação de teste por identifier:", err);
+    return 0;
+  }
+}
+
+export async function deleteSystemLog(id: string): Promise<boolean> {
+  try {
+    const res = await db.delete(systemLogs).where(eq(systemLogs.id, id)).returning();
+    return res.length > 0;
+  } catch (err) {
+    console.error("Erro ao deletar system log de teste:", err);
+    return false;
+  }
 }
 
 
