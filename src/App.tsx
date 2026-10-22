@@ -3072,10 +3072,22 @@ export default function App() {
 
   // Sign out handler
   const handleLogout = async () => {
+    try {
+      const token = localStorage.getItem("service_mgt_auth_token");
+      if (token) {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          headers: getApiAuthHeaders()
+        });
+      }
+    } catch (err) {
+      console.warn("Aviso ao revogar sessão no servidor:", err);
+    }
+
     if (currentUser) {
       addSystemLog("Sessão Encerrada", `Usuário "${currentUser.name}" desconectou-se do sistema em conformidade com o descarte seguro de cookies (LGPD).`, "sistema");
     }
-    toastInfo("Sua sessão foi encerrada de maneira segura via Firebase Auth.", "Sessão Concluída");
+    toastInfo("Sua sessão foi encerrada e revogada no servidor.", "Sessão Concluída");
     await logoutUser();
     setCurrentUser(null);
     localStorage.removeItem("service_mgt_logged_user");

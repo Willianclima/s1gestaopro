@@ -24,7 +24,8 @@ import {
   revokeUserSessions,
   resetRevocationStore,
   validateSecretEntropy,
-  calculateShannonEntropy
+  calculateShannonEntropy,
+  setDbFailureSimulationForTest
 } from "../src/middleware/auth.ts";
 import { 
   upsertUser, 
@@ -77,6 +78,27 @@ async function runSecurityTestSuite() {
   console.log(`Servidor de teste operacional em: ${baseUrl}\n`);
 
   try {
+    // -------------------------------------------------------------
+    // Preflight Somente-Leitura: Integridade e Vínculos Órfãos
+    // -------------------------------------------------------------
+    console.log("📌 Preflight: Verificando integridade e vínculos órfãos entre service_orders e usuarios...");
+    const orphanCheckResult = await db.execute(sql`
+      SELECT COUNT(*)::int as orphan_count 
+      FROM service_orders so 
+      LEFT JOIN usuarios u ON so.client_id = u.id 
+      WHERE so.client_id IS NOT NULL AND u.id IS NULL;
+    `);
+    const orphanCount = Number((orphanCheckResult[0] as any)?.orphan_count || 0);
+    assert(
+      orphanCount === 0,
+      "Preflight Somente-Leitura: Zero ordens de serviço órfãs detectadas no banco isolado de desenvolvimento/teste",
+      "0",
+      String(orphanCount)
+    );
+    if (orphanCount > 0) {
+      throw new Error(`ABORTANDO: Detectadas ${orphanCount} ordens de serviço órfãs no banco de teste.`);
+    }
+
     // -------------------------------------------------------------
     // Geração de Tokens de Teste (Criptograficamente assinados)
     // -------------------------------------------------------------
@@ -1261,6 +1283,7 @@ async function runSecurityTestSuite() {
     );
 
     await deleteUsuario(testPwUid);
+    await deleteUser(testPwUid);
 
     // 10.13 Resposta vazia legítima de GET /api/usuarios retorna array vazio [] sem gerar registros demo
     const emptyUserUid = `test-empty-user-${Date.now()}`;
@@ -1390,6 +1413,7 @@ async function runSecurityTestSuite() {
     );
 
     await deleteUsuario(testDirectJsonbUid);
+    await deleteUser(testDirectJsonbUid);
 
     // 11.2 Prova de que a revogação de sessão sobrevive ao reinício do servidor (reset de memória)
     const testPersistentUid = `test-persistent-rev-${Date.now()}`;
@@ -1486,11 +1510,12 @@ async function runSecurityTestSuite() {
       directSqlFailed = true;
       pgErrorCode = err?.cause?.code || err?.code || "";
     }
+    const isStrictForeignKeyViolation = directSqlFailed && (pgErrorCode === "23503" || pgErrorCode === "23001");
     assert(
-      directSqlFailed && (pgErrorCode === "23503" || directSqlFailed),
-      "Integridade no Banco: Constraint 'service_orders_client_id_usuarios_id_fk' (RESTRICT) bloqueia exclusão no PostgreSQL",
-      "true",
-      String(directSqlFailed)
+      isStrictForeignKeyViolation,
+      "Integridade no Banco: Constraint 'service_orders_client_id_usuarios_id_fk' (RESTRICT) bloqueia exclusão no PostgreSQL com código estrito 23503",
+      "23503",
+      isStrictForeignKeyViolation ? "23503" : pgErrorCode
     );
 
     // 11.3.3 Atualização cadastral preserva o vínculo da OS intacto
@@ -1595,6 +1620,421 @@ async function runSecurityTestSuite() {
 
     // Limpeza do usuário de teste
     await deleteUser(testArgonUserUid);
+
+    // =========================================================================
+    // Grupo 12: Acesso Seguro e Transição de Contas Legadas sem Hash
+    // =========================================================================
+    console.log("\n📌 Grupo 12: Transição Segura de Contas Legadas (Sem Hash / Ativação)");
+
+    const testLegacyUid = `legacy-user-${Date.now()}`;
+    const testLegacyDoc = "55566677788";
+    await upsertUser({
+      uid: testLegacyUid,
+      email: "legacy@s1gestao.local",
+      name: "Cidadão Legado Sem Hash",
+      document: testLegacyDoc,
+      userType: "requisitante",
+      status: "ativo"
+    });
+    await db.execute(sql`UPDATE users SET password_hash = NULL WHERE uid = ${testLegacyUid}`);
+
+    // 12.1 Conta legada sem hash: login com CPF existente retorna 401 com mensagem genérica (anti-enumeração)
+    const resLegacyLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: testLegacyDoc, password: "QualquerSenha" })
+    });
+    assert(
+      resLegacyLogin.status === 401,
+      "Conta legada sem hash: login rejeitado com 401 Unauthorized",
+      "401",
+      String(resLegacyLogin.status)
+    );
+    const legacyLoginData = await resLegacyLogin.json();
+    assert(
+      legacyLoginData.message === "CPF ou senha incorretos.",
+      "Anti-enumeração: Login em conta sem hash retorna exatamente a mensagem genérica 'CPF ou senha incorretos.'",
+      "CPF ou senha incorretos.",
+      String(legacyLoginData.message)
+    );
+
+    // 12.2 Solicitação pública de ativação: CPF existente retorna mensagem genérica segura
+    const resReqActivation = await fetch(`${baseUrl}/api/auth/request-activation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: testLegacyDoc })
+    });
+    assert(
+      resReqActivation.status === 200,
+      "POST /api/auth/request-activation com CPF existente retorna 200 OK",
+      "200",
+      String(resReqActivation.status)
+    );
+    const reqActData = await resReqActivation.json();
+    assert(
+      reqActData.success === true && reqActData.message.includes("instruções"),
+      "Mensagem genérica informa processamento seguro sem revelar existência de conta",
+      "true",
+      String(reqActData.success === true && reqActData.message.includes("instruções"))
+    );
+
+    // 12.3 Solicitação pública com CPF inexistente retorna EXATAMENTE a mesma mensagem genérica
+    const resReqNonExistent = await fetch(`${baseUrl}/api/auth/request-activation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: "99988877700" })
+    });
+    assert(
+      resReqNonExistent.status === 200,
+      "POST /api/auth/request-activation com CPF inexistente retorna 200 OK",
+      "200",
+      String(resReqNonExistent.status)
+    );
+    const reqNonExistentData = await resReqNonExistent.json();
+    assert(
+      reqNonExistentData.message === reqActData.message,
+      "Timing-safe & Anti-enumeração: CPF inexistente recebe idêntica resposta neutra",
+      reqActData.message,
+      String(reqNonExistentData.message)
+    );
+
+    // 12.4 Geração assistida de token de ativação por Administrador no balcão municipal
+    const resAdminGenToken = await fetch(`${baseUrl}/api/auth/admin/generate-activation-token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ targetUid: testLegacyUid, document: testLegacyDoc })
+    });
+    assert(
+      resAdminGenToken.status === 200,
+      "Administrador autorizado gera token de ativação assistida (200 OK)",
+      "200",
+      String(resAdminGenToken.status)
+    );
+    const adminGenData = await resAdminGenToken.json();
+    const rawActivationToken = adminGenData.token;
+    assert(
+      typeof rawActivationToken === "string" && rawActivationToken.length === 64,
+      "Token de ativação emitido é um hash aleatório de alta entropia (64 caracteres hexadecimais = 32 bytes)",
+      "64",
+      String(rawActivationToken?.length)
+    );
+
+    // 12.5 Requisitante comum sem privilégios é impedido de emitir token assistido (403 Forbidden)
+    const commonUserToken = signServerSessionToken({
+      uid: "common-tester-token",
+      role: "requisitante"
+    });
+    const resForbiddenGenToken = await fetch(`${baseUrl}/api/auth/admin/generate-activation-token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${commonUserToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ targetUid: testLegacyUid })
+    });
+    assert(
+      resForbiddenGenToken.status === 403,
+      "Requisitante comum impedido de emitir token de ativação assistida (403 Forbidden)",
+      "403",
+      String(resForbiddenGenToken.status)
+    );
+
+    // 12.6 Tentativa de resgate com senha fraca (< 6 caracteres) falha com 400
+    const resRedeemWeakPass = await fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: rawActivationToken, newPassword: "123" })
+    });
+    assert(
+      resRedeemWeakPass.status === 400,
+      "Resgate de token com senha fraca (< 6 caracteres) é rejeitado com 400 Bad Request",
+      "400",
+      String(resRedeemWeakPass.status)
+    );
+
+    // 12.7 Resgate bem-sucedido com senha forte (Argon2id)
+    const newLegacyPassword = "SenhaAtivadaForteArgon2id#2026";
+    const resRedeemSuccess = await fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: rawActivationToken, newPassword: newLegacyPassword })
+    });
+    assert(
+      resRedeemSuccess.status === 200,
+      "Resgate de token válido define nova credencial com sucesso (200 OK)",
+      "200",
+      String(resRedeemSuccess.status)
+    );
+
+    // 12.8 Uso único: tentar reutilizar o mesmo token falha (400 Bad Request)
+    const resRedeemReplay = await fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: rawActivationToken, newPassword: "OutraSenhaValida123" })
+    });
+    assert(
+      resRedeemReplay.status === 400,
+      "Token de uso único: Reutilização do mesmo token é bloqueada com 400 Bad Request",
+      "400",
+      String(resRedeemReplay.status)
+    );
+
+    // 12.9 Conta bloqueada ou inativa tem ativação rejeitada com 403
+    const testBlockedUid = `blocked-act-${Date.now()}`;
+    await upsertUser({
+      uid: testBlockedUid,
+      email: "blocked.act@s1gestao.local",
+      name: "Cidadão Bloqueado Teste",
+      document: "77788899900",
+      userType: "requisitante",
+      status: "bloqueado"
+    });
+    const resAdminGenBlocked = await fetch(`${baseUrl}/api/auth/admin/generate-activation-token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${adminToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ targetUid: testBlockedUid })
+    });
+    const blockedToken = (await resAdminGenBlocked.json()).token;
+    const resRedeemBlocked = await fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: blockedToken, newPassword: "SenhaValida123" })
+    });
+    assert(
+      resRedeemBlocked.status === 403,
+      "Conta bloqueada tem resgate de ativação rejeitado com 403 Forbidden",
+      "403",
+      String(resRedeemBlocked.status)
+    );
+    await deleteUser(testBlockedUid);
+
+    // 12.10 Login oficial com a senha recém-ativada autentica com sucesso (200 OK)
+    const resLoginAfterActivation = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: testLegacyDoc, password: newLegacyPassword })
+    });
+    assert(
+      resLoginAfterActivation.status === 200,
+      "Login pós-ativação autentica com sucesso via Argon2id (200 OK)",
+      "200",
+      String(resLoginAfterActivation.status)
+    );
+    await deleteUser(testLegacyUid);
+
+    // =========================================================================
+    // Grupo 13: Logout com Revogação Persistente no PostgreSQL e Fail-Secure
+    // =========================================================================
+    console.log("\n📌 Grupo 13: Logout com Revogação Persistente e Comportamento Fail-Secure");
+
+    const testLogoutUid = `logout-user-${Date.now()}`;
+    const testLogoutJti = `logout-jti-${Date.now()}`;
+    const logoutToken = signServerSessionToken({
+      uid: testLogoutUid,
+      role: "admin",
+      jti: testLogoutJti
+    });
+
+    // 13.1 Token autentica antes do logout
+    const resBeforeLogout = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${logoutToken}` }
+    });
+    assert(resBeforeLogout.status === 200, "Token de sessão autentica rota protegida antes do logout (200 OK)", "200", String(resBeforeLogout.status));
+
+    // 13.2 Chamada de POST /api/auth/logout revoga o token no PostgreSQL
+    const resLogout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${logoutToken}` }
+    });
+    assert(resLogout.status === 200, "POST /api/auth/logout responde 200 OK com confirmação de revogação", "200", String(resLogout.status));
+
+    // 13.3 Reutilização do token é rejeitada imediatamente com 401
+    const resAfterLogout = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${logoutToken}` }
+    });
+    assert(
+      resAfterLogout.status === 401,
+      "Token revogado via logout é recusado com 401 Unauthorized",
+      "401",
+      String(resAfterLogout.status)
+    );
+
+    // 13.4 Sobrevivência pós-reinício do servidor (reset de memória)
+    resetRevocationStore();
+    const resAfterResetMemory = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${logoutToken}` }
+    });
+    assert(
+      resAfterResetMemory.status === 401,
+      "Revogação via logout persiste no PostgreSQL após reinício/reset de memória (401 Unauthorized)",
+      "401",
+      String(resAfterResetMemory.status)
+    );
+
+    // 13.5 Comportamento Fail-Secure: Falha de conexão com PostgreSQL retorna HTTP 503
+    const validFailSecureToken = signServerSessionToken({
+      uid: "fail-secure-user",
+      role: "admin",
+      jti: `fail-secure-jti-${Date.now()}`
+    });
+    setDbFailureSimulationForTest(true);
+    const resFailSecure = await fetch(`${baseUrl}/api/postgres/system-logs`, {
+      headers: { "Authorization": `Bearer ${validFailSecureToken}` }
+    });
+    assert(
+      resFailSecure.status === 503,
+      "Fail-Secure: Falha/indisponibilidade do PostgreSQL na checagem de revogação retorna 503 Service Unavailable",
+      "503",
+      String(resFailSecure.status)
+    );
+    setDbFailureSimulationForTest(false);
+
+    // =========================================================================
+    // Grupo 14: Provisionamento de Novas Contas e Ambiguidade Cadastral
+    // =========================================================================
+    console.log("\n📌 Grupo 14: Provisionamento de Contas e Ambiguidade Cadastral");
+
+    // 14.1 Cadastro municipal sem senha: cria apenas em 'usuarios' (sem login)
+    const testMunicipePureUid = `municipe-pure-${Date.now()}`;
+    const resMunicipePure = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: testMunicipePureUid,
+        name: "Cidadão Presencial Sem Login",
+        document: "22233344455",
+        phone: "(18) 3333-2222",
+        email: "cidade.presencial@s1gestao.local"
+      })
+    });
+    assert(resMunicipePure.status === 201, "Cadastro presencial de munícipe sem senha aceito (201 Created)", "201", String(resMunicipePure.status));
+    const pureData = await resMunicipePure.json();
+    assert(
+      pureData.accountProvisioned === false,
+      "Cadastro presencial registra munícipe em 'usuarios' sem provisionar conta em 'users' (accountProvisioned: false)",
+      "false",
+      String(pureData.accountProvisioned)
+    );
+
+    // 14.2 Senha curta (< 6 chars) enviada no cadastro NÃO é silenciada, retornando erro claro 400
+    const resShortPass = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Cidadão Tentando Senha Curta",
+        document: "33344455566",
+        password: "123"
+      })
+    });
+    assert(
+      resShortPass.status === 400,
+      "Senha informada com menos de 6 caracteres retorna erro claro (400 Bad Request) sem silenciamento",
+      "400",
+      String(resShortPass.status)
+    );
+
+    // 14.3 Cadastro público com senha válida provisiona conta em 'users' com status 'pendente_autorizacao'
+    const testProvisionDoc = "66677788899";
+    const testProvisionPass = "SenhaValidaProvisionada#2026";
+    const resProvision = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Cidadão Com Conta Provisionada",
+        document: testProvisionDoc,
+        email: "provisionado@s1gestao.local",
+        password: testProvisionPass,
+        userType: "admin"
+      })
+    });
+    assert(resProvision.status === 201, "Cadastro com senha válida provisiona conta (201 Created)", "201", String(resProvision.status));
+    const provData = await resProvision.json();
+    assert(
+      provData.accountProvisioned === true,
+      "Conta de login provisionada no banco com sucesso (accountProvisioned: true)",
+      "true",
+      String(provData.accountProvisioned)
+    );
+    assert(
+      provData.usuario.userType === "requisitante" && provData.status === "pendente_autorizacao",
+      "Auto-cadastro público força estritamente papel 'requisitante' e status 'pendente_autorizacao'",
+      "requisitante|pendente_autorizacao",
+      `${provData.usuario.userType}|${provData.status}`
+    );
+
+    // 14.4 Tentativa de login com conta em 'pendente_autorizacao' é bloqueada com 403 Forbidden
+    const resLoginPending = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document: testProvisionDoc,
+        password: testProvisionPass
+      })
+    });
+    assert(
+      resLoginPending.status === 403,
+      "Conta em status 'pendente_autorizacao' tem login bloqueado com 403 Forbidden",
+      "403",
+      String(resLoginPending.status)
+    );
+
+    // 14.5 Detecção de ambiguidade cadastral: rejeita provisionamento se houver duplicidade em 'usuarios'
+    const ambiguousDoc = "77766655544";
+    const ambigUid1 = `ambig-1-${Date.now()}`;
+    const ambigUid2 = `ambig-2-${Date.now()}`;
+    await upsertUsuario({
+      id: ambigUid1,
+      name: "Munícipe Duplicado 1",
+      document: ambiguousDoc,
+      phone: "(18) 3333-0001",
+      email: "ambig1@s1gestao.local",
+      address: "Rua Ambígua 1",
+      notes: "Ambíguo 1",
+      createdAt: new Date().toISOString(),
+      status: "ativo",
+      userType: "requisitante"
+    });
+    await upsertUsuario({
+      id: ambigUid2,
+      name: "Munícipe Duplicado 2",
+      document: ambiguousDoc,
+      phone: "(18) 3333-0002",
+      email: "ambig2@s1gestao.local",
+      address: "Rua Ambígua 2",
+      notes: "Ambíguo 2",
+      createdAt: new Date().toISOString(),
+      status: "ativo",
+      userType: "requisitante"
+    });
+
+    const resAmbig = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Tentativa de Conta com Cadastro Ambíguo",
+        document: ambiguousDoc,
+        password: "SenhaParaAmbiguo123"
+      })
+    });
+    assert(
+      resAmbig.status === 400,
+      "Prevenção de Ambiguidade: Provisionamento rejeitado (400 Bad Request) quando existem múltiplos cadastros prévios",
+      "400",
+      String(resAmbig.status)
+    );
+
+    // Limpeza de registros de teste
+    await deleteUsuario(testMunicipePureUid);
+    await deleteUsuario(provData.usuario.id);
+    await deleteUser(provData.usuario.id);
+    await deleteUsuario(ambigUid1);
+    await deleteUsuario(ambigUid2);
 
   } finally {
     // Encerra servidor de teste

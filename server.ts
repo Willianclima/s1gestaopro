@@ -32,7 +32,12 @@ import {
   getUserByUid,
   upsertUser,
   getUserAuthByDocument,
-  setUserPasswordHash
+  setUserPasswordHash,
+  recordRevocationInDb,
+  createPasswordResetToken,
+  verifyAndConsumePasswordResetToken,
+  findUsuariosByDocumentOrEmail,
+  createUserAccount
 } from "./src/db/repository.ts";
 import argon2 from "argon2";
 import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
@@ -45,6 +50,9 @@ import {
   requireAdmin,
   requireGestorOrAdmin,
   signServerSessionToken,
+  verifyServerSessionToken,
+  revokeTokenByJti,
+  revokeUserSessions,
   AuthRequest
 } from "./src/middleware/auth.ts";
 
@@ -127,7 +135,7 @@ const apiRateLimiter = rateLimit({
 
 const authRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // Janela de 15 minutos
-  max: 20, // Máximo de 20 tentativas de autenticação por IP
+  max: process.env.NODE_ENV === "test" ? 1000 : 30, // Elevado em ambiente de teste para suportar a suíte
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -152,7 +160,7 @@ const adminLoginRateLimiter = rateLimit({
 // Limitação para login unificado de usuários
 const userLoginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: process.env.NODE_ENV === "test" ? 1000 : 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -742,17 +750,18 @@ app.post("/api/auth/login", userLoginRateLimiter, async (req, res) => {
       return res.status(401).json({ success: false, message: "CPF ou senha incorretos." });
     }
 
+    if (userAuth.status === "pendente_autorizacao") {
+      return res.status(403).json({ success: false, message: "Acesso pendente: Seu cadastro encontra-se em análise pelo Gestor Administrador." });
+    }
     if (["bloqueado", "desativado", "inativo", "suspenso"].includes(userAuth.status)) {
       return res.status(403).json({ success: false, message: "Acesso bloqueado: Esta conta está inativa ou suspensa pela administração." });
     }
 
-    // 2.1 Caso o usuário ainda não possua hash Argon2id (conta legada pendente de transição)
+    // 2.1 Caso o usuário ainda não possua hash Argon2id (conta legada sem credencial definida)
+    // Previne enumeração: executa hash dummy e retorna a mesma mensagem genérica
     if (!userAuth.passwordHash) {
-      return res.status(401).json({
-        success: false,
-        requiresTransition: true,
-        message: "Esta conta requer definição de senha segura de acesso. Utilize o canal de recuperação de senha ou solicite ativação ao gestor."
-      });
+      await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
+      return res.status(401).json({ success: false, message: "CPF ou senha incorretos." });
     }
 
     // 2.2 Verificação criptográfica com Argon2id
@@ -783,6 +792,199 @@ app.post("/api/auth/login", userLoginRateLimiter, async (req, res) => {
   } catch (error: any) {
     console.error("Erro na autenticação backend:", error);
     return res.status(500).json({ success: false, message: "Erro interno no servidor ao processar autenticação." });
+  }
+});
+
+// Endpoint autenticado de logout com revogação persistente no PostgreSQL
+app.post("/api/auth/logout", requireAuth as any, async (req: AuthRequest, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(400).json({ success: false, message: "Token de sessão ausente." });
+    }
+    const token = authHeader.substring(7).trim();
+    const decoded = verifyServerSessionToken(token);
+
+    let expiresAt: Date | null = null;
+    let jti: string | undefined = undefined;
+
+    if (decoded) {
+      jti = decoded.jti;
+      const exp = (decoded as any).exp;
+      if (typeof exp === "number") {
+        expiresAt = new Date(exp * 1000);
+      }
+    }
+    if (!expiresAt) {
+      expiresAt = new Date(Date.now() + 24 * 3600 * 1000);
+    }
+
+    let persisted = false;
+    if (jti) {
+      persisted = await recordRevocationInDb("jti", jti, expiresAt);
+      if (persisted) {
+        revokeTokenByJti(jti, expiresAt);
+      }
+    } else {
+      const sig = token.split(".")[2];
+      if (sig) {
+        persisted = await recordRevocationInDb("token_sig", sig, expiresAt);
+      }
+    }
+
+    if (!persisted) {
+      return res.status(500).json({
+        success: false,
+        message: "Falha ao registrar revogação persistente no banco de dados. A sessão não foi revogada."
+      });
+    }
+
+    return res.json({ success: true, message: "Sessão encerrada e revogada com sucesso no servidor." });
+  } catch (error: any) {
+    console.error("Erro no processamento do logout:", error);
+    return res.status(500).json({ success: false, message: "Erro interno no servidor ao processar logout." });
+  }
+});
+
+// Endpoint público para solicitação de ativação de conta / redefinição de senha
+// Mitigação rigorosa de enumeração de contas: sempre retorna resposta genérica idêntica
+app.post("/api/auth/request-activation", userLoginRateLimiter, async (req, res) => {
+  try {
+    const { document, email } = req.body || {};
+    const normalizedDoc = (document || "").toString().replace(/\D/g, "");
+    const normalizedEmail = (email || "").toString().trim().toLowerCase();
+
+    if (!normalizedDoc && !normalizedEmail) {
+      return res.status(400).json({ success: false, message: "Por favor, informe seu CPF ou e-mail cadastrado." });
+    }
+
+    let userAuth = null;
+    if (normalizedDoc) {
+      userAuth = await getUserAuthByDocument(normalizedDoc);
+    }
+
+    if (!userAuth || ["bloqueado", "desativado", "inativo", "suspenso"].includes(userAuth.status)) {
+      // Timing-safe: calcula dummy hash para manter tempo de resposta constante
+      await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
+      return res.json({
+        success: true,
+        message: "Se os dados informados pertencerem a uma conta ativa e elegível, as instruções de ativação foram geradas com segurança."
+      });
+    }
+
+    // Gera token de uso único (hash SHA-256 no banco de dados)
+    await createPasswordResetToken(userAuth.uid, normalizedDoc || undefined, "activation", 15);
+
+    // Auditoria sem dados secretos
+    await insertSystemLog({
+      id: `log-act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      action: "Solicitação de Ativação de Acesso",
+      details: `Solicitação de ativação processada para a conta ID: ${userAuth.uid}. Token temporário de uso único registrado.`,
+      category: "sistema"
+    });
+
+    return res.json({
+      success: true,
+      message: "Se os dados informados pertencerem a uma conta ativa e elegível, as instruções de ativação foram geradas com segurança."
+    });
+  } catch (error: any) {
+    console.error("Erro em request-activation:", error);
+    return res.status(500).json({ success: false, message: "Erro interno ao processar solicitação de ativação." });
+  }
+});
+
+// Geração assistida de token de ativação por Gestor/Administrador (atendimento presencial)
+app.post("/api/auth/admin/generate-activation-token", requireAuth as any, requireGestorOrAdmin as any, async (req: AuthRequest, res) => {
+  try {
+    const { targetUid, document } = req.body || {};
+    let uid = targetUid;
+    let doc = document ? document.toString().replace(/\D/g, "") : undefined;
+
+    if (!uid && doc) {
+      const userAuth = await getUserAuthByDocument(doc);
+      if (userAuth) {
+        uid = userAuth.uid;
+      }
+    }
+
+    if (!uid) {
+      return res.status(404).json({ success: false, message: "Conta de usuário não encontrada para o documento informado." });
+    }
+
+    const { rawToken, expiresAt } = await createPasswordResetToken(uid, doc, "activation", 15);
+
+    await insertSystemLog({
+      id: `log-admin-act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      action: "Emissão de Token de Ativação Assistida",
+      details: `Gestor/Administrador "${req.user?.name || req.user?.uid}" emitiu token de ativação presencial para usuário ${uid}.`,
+      category: "sistema"
+    });
+
+    return res.json({
+      success: true,
+      token: rawToken,
+      expiresAt: expiresAt.toISOString(),
+      message: "Token de ativação de uso único gerado com validade de 15 minutos."
+    });
+  } catch (error: any) {
+    console.error("Erro ao gerar token assistido:", error);
+    return res.status(500).json({ success: false, message: "Erro interno ao gerar token de ativação." });
+  }
+});
+
+// Resgate de token de ativação e definição de senha com Argon2id
+app.post("/api/auth/redeem-activation-token", userLoginRateLimiter, async (req, res) => {
+  try {
+    const { token, newPassword } = req.body || {};
+    if (!token || typeof token !== "string" || token.length !== 64) {
+      return res.status(400).json({ success: false, message: "Token de ativação/redefinição inválido ou formato incorreto." });
+    }
+    if (!newPassword || typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: "A nova senha deve possuir pelo menos 6 caracteres." });
+    }
+
+    const verification = await verifyAndConsumePasswordResetToken(token);
+    if (!verification.valid || !verification.userId) {
+      return res.status(400).json({ success: false, message: verification.error || "Token inválido, expirado ou já utilizado." });
+    }
+
+    const userProfile = await getUserByUid(verification.userId);
+    if (!userProfile) {
+      return res.status(404).json({ success: false, message: "Conta de usuário associada ao token não encontrada." });
+    }
+
+    if (["bloqueado", "desativado", "inativo", "suspenso"].includes(userProfile.status)) {
+      return res.status(403).json({ success: false, message: "Esta conta está suspensa ou inativa. Ativação bloqueada." });
+    }
+
+    // Gera hash forte com Argon2id
+    const hash = await argon2.hash(newPassword, {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1
+    });
+
+    await setUserPasswordHash(verification.userId, hash);
+    revokeUserSessions(verification.userId);
+
+    await insertSystemLog({
+      id: `log-redeem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      action: "Ativação de Senha Concluída",
+      details: `Senha de acesso definida com sucesso via token para o usuário ID: ${verification.userId}.`,
+      category: "sistema"
+    });
+
+    return res.json({
+      success: true,
+      message: "Senha cadastrada com sucesso. Você já pode efetuar login no sistema."
+    });
+  } catch (error: any) {
+    console.error("Erro ao resgatar token de ativação:", error);
+    return res.status(500).json({ success: false, message: "Erro interno no servidor ao processar ativação de senha." });
   }
 });
 
@@ -905,7 +1107,9 @@ app.get(["/api/usuarios/:id", "/api/postgres/usuarios/:id", "/api/postgres/clien
 });
 
 // 3. CREATE (POST /api/usuarios, /api/postgres/usuarios, /api/postgres/clients)
-// Permite auto-cadastro público (optionalAuth) com regras estritas: status sempre "pendente_autorizacao" e papel "requisitante"
+// Permite:
+// A) Cadastro operacional municipal de cidadão em 'usuarios' sem conta de login (users)
+// B) Provisionamento de conta de login com hash Argon2id quando senha fornecida, com prevenção de ambiguidade
 app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], optionalAuth as any, async (req: AuthRequest, res) => {
   try {
     const body = req.body;
@@ -916,10 +1120,20 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
       return res.status(400).json({ error: "O campo 'name' (nome do usuário) é obrigatório." });
     }
 
-    // Sanitização de segurança: senhas nunca são aceitas, persistidas em texto puro ou retornadas pela API operacional
+    const isPrivileged = !!(req.user && ["admin", "gestor", "gestor_servicos"].includes(req.user.role));
+    const rawPassword = body.password || body.senha;
+    const wantsAccount = body.createAccount === true || (!isPrivileged && rawPassword !== undefined && rawPassword !== null && String(rawPassword).trim() !== "");
+
+    // Se senha foi enviada, valida tamanho: NUNCA silencia senha inválida
+    if (rawPassword !== undefined && rawPassword !== null && String(rawPassword).trim() !== "") {
+      if (typeof rawPassword !== "string" || rawPassword.length < 6) {
+        return res.status(400).json({ error: "A senha informada para criação da conta de acesso deve possuir pelo menos 6 caracteres." });
+      }
+    }
+
+    // Sanitização de segurança: senhas nunca são salvas no objeto de 'usuarios'
     const { password: _p, senha: _s, ...cleanBody } = body;
 
-    const isPrivileged = req.user && ["admin", "gestor", "gestor_servicos"].includes(req.user.role);
     let finalStatus = cleanBody.status || "ativo";
     let finalUserType = cleanBody.userType || "requisitante";
 
@@ -929,15 +1143,64 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
       finalUserType = "requisitante";
     }
 
+    // Checagem de ambiguidade cadastral antes de provisionamento de conta
+    if (wantsAccount && (cleanBody.document || cleanBody.email)) {
+      const ambiguous = await findUsuariosByDocumentOrEmail(cleanBody.document, cleanBody.email);
+      if (ambiguous.length > 1) {
+        return res.status(400).json({
+          error: "Não foi possível concluir o provisionamento automático por ambiguidade cadastral. Por favor, procure atendimento para revisão."
+        });
+      }
+      if (cleanBody.document) {
+        const existingAuth = await getUserAuthByDocument(cleanBody.document);
+        if (existingAuth && (!cleanBody.id || existingAuth.uid !== cleanBody.id)) {
+          return res.status(409).json({ error: "Já existe uma conta de acesso associada a este documento." });
+        }
+      }
+    }
+
+    // UID gerado com segurança no servidor para não aceitar IDs privilegiados do cliente
+    const assignedId = cleanBody.id && isPrivileged 
+      ? cleanBody.id 
+      : (req.user ? req.user.uid : `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`);
+
     const usuarioData = {
       ...cleanBody,
-      id: cleanBody.id || (req.user ? req.user.uid : `USR-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`),
+      id: assignedId,
       status: finalStatus,
       userType: finalUserType
     };
 
     const usuario = await upsertUsuario(usuarioData);
-    res.status(201).json({ success: true, usuario, client: usuario });
+
+    let accountProvisioned = false;
+    if (wantsAccount && rawPassword) {
+      const passwordHash = await argon2.hash(String(rawPassword), {
+        type: argon2.argon2id,
+        memoryCost: 19456,
+        timeCost: 2,
+        parallelism: 1
+      });
+
+      await createUserAccount({
+        uid: assignedId,
+        email: cleanBody.email || `${assignedId}@s1gestaopro.local`,
+        name: cleanBody.name,
+        document: cleanBody.document,
+        userType: finalUserType,
+        status: finalStatus,
+        passwordHash
+      });
+      accountProvisioned = true;
+    }
+
+    res.status(201).json({
+      success: true,
+      usuario,
+      client: usuario,
+      accountProvisioned,
+      status: finalStatus
+    });
   } catch (error: any) {
     console.error("Erro ao criar usuário no PostgreSQL:", error);
     res.status(500).json({ error: "Erro interno no servidor ao criar usuário." });

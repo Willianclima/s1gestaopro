@@ -185,6 +185,24 @@ export const revokedSessions = pgTable("revoked_sessions", {
 ]);
 
 // ============================================================================
+// Tabela: password_reset_tokens (Tokens de ativação e redefinição temporários e de uso único)
+// ============================================================================
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: serial("id").primaryKey(),
+  tokenHash: text("token_hash").notNull().unique(), // Hash SHA-256 do token (nunca texto puro)
+  userId: text("user_id").notNull(),               // UID da conta em users
+  document: text("document"),                      // CPF associado
+  purpose: text("purpose").default("activation").notNull(), // 'activation' | 'password_reset'
+  expiresAt: timestamp("expires_at").notNull(),    // Expiração curta (15 minutos)
+  usedAt: timestamp("used_at"),                    // Carimbo de uso único (null = ainda disponível)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_pwd_reset_token_hash").on(table.tokenHash),
+  index("idx_pwd_reset_user_id").on(table.userId),
+  index("idx_pwd_reset_expires_at").on(table.expiresAt),
+]);
+
+// ============================================================================
 // Drizzle ORM Relations (Integridade Referencial e Mapeamento Objetual)
 // ============================================================================
 
@@ -237,5 +255,9 @@ export type NewAccessProfileDb = InferInsertModel<typeof accessProfiles>;
 
 export type RevokedSessionDb = InferSelectModel<typeof revokedSessions>;
 export type NewRevokedSessionDb = InferInsertModel<typeof revokedSessions>;
+
+export type PasswordResetTokenDb = InferSelectModel<typeof passwordResetTokens>;
+export type NewPasswordResetTokenDb = InferInsertModel<typeof passwordResetTokens>;
+
 
 

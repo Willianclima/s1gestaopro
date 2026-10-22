@@ -1,6 +1,7 @@
+import crypto from "crypto";
 import { db } from "./index.ts";
-import { users, usuarios, clients, professionals, serviceOrders, serviceCategories, systemLogs, loginAttempts, accessProfiles, revokedSessions } from "./schema.ts";
-import { eq, desc, and, lt, sql } from "drizzle-orm";
+import { users, usuarios, clients, professionals, serviceOrders, serviceCategories, systemLogs, loginAttempts, accessProfiles, revokedSessions, passwordResetTokens, type UserDb, type UsuarioDb } from "./schema.ts";
+import { eq, desc, and, lt, gt, sql } from "drizzle-orm";
 import type { Client, Professional, ServiceOrder, ServiceCategory, SystemLog, LoginAttempt, AccessProfile } from "../types.ts";
 
 /**
@@ -657,7 +658,7 @@ export async function recordRevocationInDb(
   type: "jti" | "token_sig" | "user_all",
   identifier: string,
   expiresAt?: Date | null
-): Promise<void> {
+): Promise<boolean> {
   try {
     await db.insert(revokedSessions).values({
       type,
@@ -665,8 +666,10 @@ export async function recordRevocationInDb(
       revokedAt: new Date(),
       expiresAt: expiresAt || null
     });
+    return true;
   } catch (err) {
     console.error("Database error in recordRevocationInDb:", err);
+    return false;
   }
 }
 
@@ -694,7 +697,7 @@ export async function isSessionRevokedInDb(
     return rows.length > 0;
   } catch (err) {
     console.error("Database error in isSessionRevokedInDb:", err);
-    return false;
+    throw new Error("Falha ao consultar revogações no PostgreSQL.", { cause: err });
   }
 }
 
@@ -757,4 +760,117 @@ export async function getUserAuthByDocument(document: string): Promise<{
     return null;
   }
 }
+
+// ============================================================================
+// Gerenciamento de Tokens de Ativação e Redefinição de Senha
+// ============================================================================
+
+export async function createPasswordResetToken(
+  userId: string,
+  document?: string,
+  purpose: "activation" | "password_reset" = "activation",
+  expiresInMinutes = 15
+): Promise<{ rawToken: string; tokenHash: string; expiresAt: Date }> {
+  try {
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+
+    await db.insert(passwordResetTokens).values({
+      tokenHash,
+      userId,
+      document: document || null,
+      purpose,
+      expiresAt,
+      usedAt: null
+    });
+
+    return { rawToken, tokenHash, expiresAt };
+  } catch (err) {
+    console.error("Database error in createPasswordResetToken:", err);
+    throw new Error("Falha ao gerar token de ativação no PostgreSQL.", { cause: err });
+  }
+}
+
+export async function verifyAndConsumePasswordResetToken(
+  rawToken: string
+): Promise<{ valid: boolean; userId?: string; document?: string; error?: string }> {
+  try {
+    if (!rawToken || typeof rawToken !== "string" || rawToken.length !== 64) {
+      return { valid: false, error: "Formato de token inválido." };
+    }
+
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const rows = await db.select().from(passwordResetTokens).where(
+      and(
+        eq(passwordResetTokens.tokenHash, tokenHash),
+        sql`${passwordResetTokens.usedAt} IS NULL`,
+        gt(passwordResetTokens.expiresAt, new Date())
+      )
+    );
+
+    if (rows.length === 0) {
+      return { valid: false, error: "Token de ativação/redefinição inválido, expirado ou já utilizado." };
+    }
+
+    const target = rows[0];
+    await db.update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(passwordResetTokens.id, target.id));
+
+    return { valid: true, userId: target.userId, document: target.document || undefined };
+  } catch (err) {
+    console.error("Database error in verifyAndConsumePasswordResetToken:", err);
+    return { valid: false, error: "Erro de banco de dados ao verificar token." };
+  }
+}
+
+// ============================================================================
+// Provisionamento e Verificação de Ambiguidade de Cadastros
+// ============================================================================
+
+export async function findUsuariosByDocumentOrEmail(
+  document?: string,
+  email?: string
+): Promise<UsuarioDb[]> {
+  try {
+    const normalizedDoc = document ? document.replace(/\D/g, "") : null;
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+
+    const all = await db.select().from(usuarios);
+    return all.filter(u => {
+      const uDoc = (u.document || "").replace(/\D/g, "");
+      const uEmail = (u.email || "").trim().toLowerCase();
+      if (normalizedDoc && uDoc && uDoc === normalizedDoc) return true;
+      if (normalizedEmail && uEmail && uEmail === normalizedEmail) return true;
+      return false;
+    });
+  } catch (err) {
+    console.error("Database error in findUsuariosByDocumentOrEmail:", err);
+    return [];
+  }
+}
+
+export async function createUserAccount(data: {
+  uid: string;
+  email: string;
+  name: string;
+  document?: string;
+  userType: string;
+  status: string;
+  passwordHash?: string;
+}): Promise<UserDb> {
+  const result = await db.insert(users).values({
+    uid: data.uid,
+    email: data.email,
+    name: data.name,
+    document: data.document || null,
+    userType: data.userType,
+    status: data.status,
+    passwordHash: data.passwordHash || null,
+    forcePasswordChange: false
+  }).returning();
+  return result[0];
+}
+
 

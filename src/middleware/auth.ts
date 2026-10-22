@@ -136,6 +136,11 @@ export function resetRevocationStore(): void {
   revokedJtis.clear();
 }
 
+let simulateDbFailureInTest = false;
+export function setDbFailureSimulationForTest(enabled: boolean): void {
+  simulateDbFailureInTest = enabled;
+}
+
 /**
  * Obtém a chave secreta para assinatura criptográfica de tokens de sessão.
  * NUNCA utiliza chaves padrão estáticas hardcoded no código.
@@ -339,14 +344,25 @@ export const requireAuth = async (
   if (serverUser) {
     // 1.0 Checagem de revogações persistentes no PostgreSQL (sobrevive ao reinício do servidor)
     const tokenSig = token.split(".")[2];
-    const isDbRevoked =
-      (await isSessionRevokedInDb("token_sig", tokenSig)) ||
-      (serverUser.jti ? await isSessionRevokedInDb("jti", serverUser.jti) : false) ||
-      (serverUser.iat ? await isSessionRevokedInDb("user_all", serverUser.uid, serverUser.iat) : false);
+    try {
+      if (simulateDbFailureInTest) {
+        throw new Error("Simulação controlada de indisponibilidade do banco PostgreSQL");
+      }
+      const isDbRevoked =
+        (await isSessionRevokedInDb("token_sig", tokenSig)) ||
+        (serverUser.jti ? await isSessionRevokedInDb("jti", serverUser.jti) : false) ||
+        (serverUser.iat ? await isSessionRevokedInDb("user_all", serverUser.uid, serverUser.iat) : false);
 
-    if (isDbRevoked) {
-      return res.status(401).json({
-        error: "Não autorizado: Sessão de autenticação revogada no servidor."
+      if (isDbRevoked) {
+        return res.status(401).json({
+          error: "Não autorizado: Sessão de autenticação revogada no servidor."
+        });
+      }
+    } catch (dbErr) {
+      console.error("Falha ao validar revogação persistente no PostgreSQL:", dbErr);
+      // FAIL-SECURE: Se o PostgreSQL estiver indisponível, rejeita a requisição com 503
+      return res.status(503).json({
+        error: "Serviço de autenticação temporariamente indisponível. Por favor, tente novamente em instantes."
       });
     }
     // 1.1 Para o administrador mestre especial, valida se ADMIN_PASSWORD ainda está configurada
