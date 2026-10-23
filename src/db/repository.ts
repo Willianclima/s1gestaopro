@@ -20,6 +20,8 @@ import type { Client, Professional, ServiceOrder, ServiceCategory, SystemLog, Lo
  *   * .orderBy(desc(coluna)): Ordenação decrescente
  */
 
+export type ServiceOrderDb = typeof serviceOrders.$inferSelect;
+
 // Helper: Users
 
 export async function getUserByUid(uid: string) {
@@ -368,6 +370,16 @@ export async function deleteServiceOrder(id: string): Promise<boolean> {
   } catch (error) {
     console.error("Database error in deleteServiceOrder:", error);
     return false;
+  }
+}
+
+export async function getServiceOrderById(id: string): Promise<ServiceOrderDb | null> {
+  try {
+    const rows = await db.select().from(serviceOrders).where(eq(serviceOrders.id, id));
+    return rows.length > 0 ? rows[0] : null;
+  } catch (error) {
+    console.error("Database error in getServiceOrderById:", error);
+    return null;
   }
 }
 
@@ -994,6 +1006,133 @@ export async function createUserAccount(data: {
   return result[0];
 }
 
+export async function findUsersByDocumentOrEmail(
+  document?: string,
+  email?: string
+): Promise<UserDb[]> {
+  try {
+    const normalizedDoc = document ? document.replace(/\D/g, "") : null;
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+
+    const all = await db.select().from(users);
+    return all.filter(u => {
+      const uDoc = (u.document || "").replace(/\D/g, "");
+      const uEmail = (u.email || "").trim().toLowerCase();
+      if (normalizedDoc && uDoc && uDoc === normalizedDoc) return true;
+      if (normalizedEmail && uEmail && uEmail === normalizedEmail) return true;
+      return false;
+    });
+  } catch (err) {
+    console.error("Database error in findUsersByDocumentOrEmail:", err);
+    return [];
+  }
+}
+
+/**
+ * Provisionamento atômico transacional no PostgreSQL:
+ * Realiza a gravação do munícipe em 'usuarios' e da credencial em 'users'
+ * dentro da mesma transação. Se a criação da conta em 'users' falhar,
+ * o cadastro em 'usuarios' é revertido integralmente (rollback),
+ * prevenindo cadastros órfãos ou parcialmente provisionados.
+ */
+export async function provisionUsuarioWithAccountTx(params: {
+  usuarioData: any;
+  accountData: {
+    uid: string;
+    email: string;
+    name: string;
+    document?: string;
+    userType: string;
+    status: string;
+    passwordHash: string;
+  };
+}): Promise<{ usuario: Client; account: UserDb }> {
+  return await db.transaction(async (tx) => {
+    const { id, name, document, phone, email, address, status, userType, lat, lng, formattedAddress, isAddressValidated, notes, password, senha, ...extraData } = params.usuarioData;
+    const finalStatus = status || "ativo";
+    const finalUserType = userType || "requisitante";
+
+    // 1. Gravação / Upsert em 'usuarios' dentro da transação
+    const [savedUsuario] = await tx.insert(usuarios)
+      .values({
+        id,
+        name,
+        document: document || "",
+        phone: phone || "",
+        email: email || "",
+        address: address || "",
+        lat: lat ?? null,
+        lng: lng ?? null,
+        formattedAddress: formattedAddress ?? null,
+        isAddressValidated: isAddressValidated ?? false,
+        notes: notes || "",
+        status: finalStatus,
+        userType: finalUserType,
+        data: {
+          ...extraData,
+          status: finalStatus,
+          userType: finalUserType
+        },
+      })
+      .onConflictDoUpdate({
+        target: usuarios.id,
+        set: {
+          name,
+          document: document || "",
+          phone: phone || "",
+          email: email || "",
+          address: address || "",
+          lat: lat ?? null,
+          lng: lng ?? null,
+          formattedAddress: formattedAddress ?? null,
+          isAddressValidated: isAddressValidated ?? false,
+          notes: notes || "",
+          status: finalStatus,
+          userType: finalUserType,
+          data: {
+            ...extraData,
+            status: finalStatus,
+            userType: finalUserType
+          },
+        },
+      })
+      .returning();
+
+    // 2. Gravação de conta em 'users' dentro da MESMA transação
+    const [savedAccount] = await tx.insert(users).values({
+      uid: params.accountData.uid,
+      email: params.accountData.email,
+      name: params.accountData.name,
+      document: params.accountData.document || null,
+      userType: params.accountData.userType,
+      status: params.accountData.status,
+      passwordHash: params.accountData.passwordHash,
+      forcePasswordChange: false
+    }).returning();
+
+    const rExtra = (savedUsuario.data as Record<string, any>) || {};
+    const finalClient: Client = {
+      id: savedUsuario.id,
+      name: savedUsuario.name,
+      document: savedUsuario.document || "",
+      phone: savedUsuario.phone || "",
+      email: savedUsuario.email || "",
+      address: savedUsuario.address || "",
+      lat: savedUsuario.lat ?? rExtra.lat ?? undefined,
+      lng: savedUsuario.lng ?? rExtra.lng ?? undefined,
+      formattedAddress: savedUsuario.formattedAddress || rExtra.formattedAddress || undefined,
+      isAddressValidated: savedUsuario.isAddressValidated ?? rExtra.isAddressValidated ?? false,
+      status: (savedUsuario.status || rExtra.status || finalStatus) as any,
+      userType: (savedUsuario.userType || rExtra.userType || finalUserType) as any,
+      notes: savedUsuario.notes || rExtra.notes || "",
+      createdAt: (rExtra.createdAt || (savedUsuario.createdAt ? new Date(savedUsuario.createdAt).toISOString() : new Date().toISOString())),
+      ...rExtra,
+    };
+
+    return { usuario: finalClient, account: savedAccount };
+  });
+}
+
 // ============================================================================
 // Helpers de Limpeza Segura e Isolamento de Testes
 // ============================================================================
@@ -1037,5 +1176,6 @@ export async function deleteSystemLog(id: string): Promise<boolean> {
     return false;
   }
 }
+
 
 

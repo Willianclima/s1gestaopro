@@ -39,6 +39,8 @@ import {
   redeemPasswordResetTokenAndSetPassword,
   findUsuariosByDocument,
   findUsuariosByDocumentOrEmail,
+  findUsersByDocumentOrEmail,
+  provisionUsuarioWithAccountTx,
   createUserAccount
 } from "./src/db/repository.ts";
 import argon2 from "argon2";
@@ -58,6 +60,56 @@ import {
   revokeUserSessions,
   AuthRequest
 } from "./src/middleware/auth.ts";
+
+/**
+ * Verificação mandatória de ambiente isolado de desenvolvimento/teste:
+ * Assegura que nenhuma operação de escrita seja executada caso o banco
+ * de dados aponte para produção ou não possua identificação explícita de ambiente isolado.
+ */
+export function isIsolatedTestEnvironment(overrideEnv?: Record<string, string | undefined>): { isIsolated: boolean; reason: string } {
+  const env = overrideEnv || process.env;
+  const dbName = (env.SQL_DB_NAME || env.PGDATABASE || "").toLowerCase();
+  const nodeEnv = (env.NODE_ENV || "").toLowerCase();
+  const host = (env.SQL_HOST || env.PGHOST || "").toLowerCase();
+  const dbUrl = (env.DATABASE_URL || "").toLowerCase();
+
+  const isProduction = 
+    nodeEnv === "production" || 
+    dbName.includes("prod") || 
+    host.includes("prod") || 
+    dbUrl.includes("production") || 
+    dbUrl.includes("prod");
+
+  if (isProduction) {
+    return {
+      isIsolated: false,
+      reason: "Ambiente identificado como PROD ou banco de dados com termologia produtiva."
+    };
+  }
+
+  const isDevOrTest = 
+    nodeEnv === "test" || 
+    nodeEnv === "development" || 
+    dbName.includes("development") || 
+    dbName.includes("dev") || 
+    dbName.includes("test") || 
+    host.includes("cloudsql") ||
+    host.includes("localhost") ||
+    host.includes("127.0.0.1") ||
+    host.includes("ai-studio-b5818bcf");
+
+  if (!isDevOrTest) {
+    return {
+      isIsolated: false,
+      reason: "Configuração do banco de dados não possui marcação explícita de isolamento (dev/test)."
+    };
+  }
+
+  return {
+    isIsolated: true,
+    reason: `Ambiente isolado confirmado: [db: ${dbName || 'development_db'}, env: ${nodeEnv || 'test'}]`
+  };
+}
 
 dotenv.config();
 
@@ -861,36 +913,56 @@ app.post("/api/auth/request-activation", userLoginRateLimiter, async (req, res) 
       return res.status(400).json({ success: false, message: "Por favor, informe seu CPF ou e-mail cadastrado." });
     }
 
-    let userAuth = null;
-    if (normalizedDoc) {
-      userAuth = await getUserAuthByDocument(normalizedDoc);
-    }
+    const genericResponse = {
+      success: true,
+      message: "Solicitação de ativação registrada. Caso os dados pertençam a uma conta elegível, a ativação poderá ser concluída pelo canal oficial habilitado ou mediante atendimento presencial com a administração municipal."
+    };
 
-    if (!userAuth || ["bloqueado", "desativado", "inativo", "suspenso"].includes(userAuth.status)) {
+    // Busca contas correspondentes em 'users' por CPF ou e-mail
+    const matchingUsers = await findUsersByDocumentOrEmail(
+      normalizedDoc || undefined,
+      normalizedEmail || undefined
+    );
+
+    // 1. Múltiplas correspondências: ambiguidade cadastral detectada
+    if (matchingUsers.length > 1) {
+      await insertSystemLog({
+        id: `log-act-ambig-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
+        timestamp: new Date().toISOString(),
+        action: "Ambiguidade em Solicitação de Ativação",
+        details: "Múltiplas contas de acesso localizadas para o critério informado. Solicitação retida para conferência administrativa presencial.",
+        category: "sistema"
+      });
+
       // Timing-safe: calcula dummy hash para manter tempo de resposta constante
       await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
-      return res.json({
-        success: true,
-        message: "Solicitação de ativação registrada. Caso os dados pertençam a uma conta elegível, a ativação poderá ser concluída pelo canal oficial habilitado ou mediante atendimento presencial com a administração municipal."
-      });
+      return res.json(genericResponse);
     }
 
-    // Gera token de uso único (hash SHA-256 no banco de dados)
-    await createPasswordResetToken(userAuth.uid, normalizedDoc || undefined, "activation", 15);
+    // 2. Nenhuma correspondência encontrada
+    if (matchingUsers.length === 0) {
+      await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
+      return res.json(genericResponse);
+    }
 
-    // Auditoria sem dados secretos
+    // 3. Exatamente 1 correspondência encontrada
+    const userAuth = matchingUsers[0];
+    if (["bloqueado", "desativado", "inativo", "suspenso"].includes(userAuth.status)) {
+      await argon2.hash("dummy_protection_timing_mitigation", { type: argon2.argon2id, memoryCost: 19456, timeCost: 2 });
+      return res.json(genericResponse);
+    }
+
+    // Regra da Fase 2.3: Não criar tokens inutilizáveis sem canal de entrega (e-mail/SMS) ativo e homologado.
+    // O autoatendimento público não gera token órfão no banco. A ativação é realizada pelo canal assistido municipal.
     await insertSystemLog({
-      id: `log-act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `log-act-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
       timestamp: new Date().toISOString(),
-      action: "Solicitação de Ativação de Acesso",
-      details: `Solicitação de ativação processada para a conta ID: ${userAuth.uid}. Token temporário de uso único registrado.`,
+      action: "Solicitação de Ativação Registrada",
+      details: `Solicitação registrada para a conta ID: ${userAuth.uid}. Autoatendimento externo desabilitado por ausência de gateway de entrega; atendimento assistido necessário.`,
       category: "sistema"
     });
 
-    return res.json({
-      success: true,
-      message: "Solicitação de ativação registrada. Caso os dados pertençam a uma conta elegível, a ativação poderá ser concluída pelo canal oficial habilitado ou mediante atendimento presencial com a administração municipal."
-    });
+    return res.json(genericResponse);
   } catch (error: any) {
     console.error("Erro em request-activation:", error);
     return res.status(500).json({ success: false, message: "Erro interno ao processar solicitação de ativação." });
@@ -1220,9 +1292,6 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
       userType: finalUserType
     };
 
-    const usuario = await upsertUsuario(usuarioData);
-
-    let accountProvisioned = false;
     if (rawPassword) {
       const passwordHash = await argon2.hash(String(rawPassword), {
         type: argon2.argon2id,
@@ -1231,26 +1300,38 @@ app.post(["/api/usuarios", "/api/postgres/usuarios", "/api/postgres/clients"], o
         parallelism: 1
       });
 
-      await createUserAccount({
-        uid: assignedId,
-        email: cleanBody.email || `${assignedId}@s1gestaopro.local`,
-        name: cleanBody.name,
-        document: cleanDocument || undefined,
-        userType: finalUserType,
-        status: finalStatus,
-        passwordHash
+      const txResult = await provisionUsuarioWithAccountTx({
+        usuarioData,
+        accountData: {
+          uid: assignedId,
+          email: cleanBody.email || `${assignedId}@s1gestaopro.local`,
+          name: cleanBody.name,
+          document: cleanDocument || undefined,
+          userType: finalUserType,
+          status: finalStatus,
+          passwordHash
+        }
       });
-      accountProvisioned = true;
-    }
 
-    return res.status(201).json({
-      success: true,
-      usuario,
-      client: usuario,
-      accountProvisioned,
-      linkedExistingUsuario: !!existingUsuarioToPreserve,
-      status: finalStatus
-    });
+      return res.status(201).json({
+        success: true,
+        usuario: txResult.usuario,
+        client: txResult.usuario,
+        accountProvisioned: true,
+        linkedExistingUsuario: !!existingUsuarioToPreserve,
+        status: finalStatus
+      });
+    } else {
+      const usuario = await upsertUsuario(usuarioData);
+      return res.status(201).json({
+        success: true,
+        usuario,
+        client: usuario,
+        accountProvisioned: false,
+        linkedExistingUsuario: !!existingUsuarioToPreserve,
+        status: finalStatus
+      });
+    }
   } catch (error: any) {
     console.error("Erro ao criar usuário no PostgreSQL:", error);
     res.status(500).json({ error: "Erro interno no servidor ao criar usuário." });

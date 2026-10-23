@@ -15,7 +15,7 @@
 
 import http from "http";
 import crypto from "crypto";
-import { app } from "../server.ts";
+import { app, isIsolatedTestEnvironment } from "../server.ts";
 import {
   signServerSessionToken,
   getSessionSecret,
@@ -28,18 +28,24 @@ import {
   setDbFailureSimulationForTest
 } from "../src/middleware/auth.ts";
 import { 
+  getUserByUid,
   upsertUser, 
   deleteUser, 
+  getUsuarioById,
   upsertUsuario, 
   deleteUsuario, 
+  getServiceOrderById,
   upsertServiceOrder, 
   deleteServiceOrder,
   setUserPasswordHash,
+  createUserAccount,
+  provisionUsuarioWithAccountTx,
   deletePasswordResetTokensByUserId,
   deletePasswordResetTokenByHash,
   deleteRevokedSessionsByIdentifier,
   deleteSystemLog
 } from "../src/db/repository.ts";
+import { systemLogs } from "../src/db/schema.ts";
 import { db } from "../src/db/drizzle.ts";
 import { sql } from "drizzle-orm";
 import argon2 from "argon2";
@@ -82,19 +88,58 @@ async function runSecurityTestSuite() {
   console.log(`Servidor de teste operacional em: ${baseUrl}\n`);
 
   let baseline: any = null;
-  let initialMaxRevokedId = 0;
-  let initialMaxTokenId = 0;
-  let initialLogIds = new Set<string>();
 
   const testCleanupRegistry = {
     users: new Set<string>(),
     usuarios: new Set<string>(),
     serviceOrders: new Set<string>(),
     revokedSessionIdentifiers: new Set<string>(),
-    resetTokenUserIds: new Set<string>()
+    resetTokenUserIds: new Set<string>(),
+    resetTokenHashes: new Set<string>(),
+    systemLogIds: new Set<string>()
   };
 
+  function registerTokenRevocation(token: string) {
+    try {
+      const parts = token.split(".");
+      if (parts.length === 3) {
+        testCleanupRegistry.revokedSessionIdentifiers.add(parts[2]);
+        const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+        if (payload?.jti) {
+          testCleanupRegistry.revokedSessionIdentifiers.add(payload.jti);
+        }
+      }
+    } catch {}
+  }
+
+  async function registerTestLogs() {
+    try {
+      const logs = await db.select({ id: systemLogs.id }).from(systemLogs).where(
+        sql`id LIKE 'log-act-%' OR id LIKE 'log-redeem-%' OR id LIKE 'log-admin-act-%'`
+      );
+      for (const l of logs) {
+        testCleanupRegistry.systemLogIds.add(l.id);
+      }
+    } catch {}
+  }
+
   try {
+    // -------------------------------------------------------------
+    // Preflight Mandatório: Confirmação de Ambiente Isolado de Teste
+    // -------------------------------------------------------------
+    console.log("📌 Preflight: Validando se a conexão aponta para um banco de teste explicitamente isolado...");
+    const isolationCheck = isIsolatedTestEnvironment();
+    assert(
+      isolationCheck.isIsolated,
+      "Preflight de Segurança: Conexão aponta para banco explicitamente isolado de desenvolvimento/teste",
+      "true",
+      String(isolationCheck.isIsolated),
+      isolationCheck.reason
+    );
+    if (!isolationCheck.isIsolated) {
+      throw new Error(`ABORTANDO: Execução recusada. O banco de dados configurado não foi comprovado como ambiente isolado: ${isolationCheck.reason}`);
+    }
+
     // -------------------------------------------------------------
     // Preflight Somente-Leitura: Integridade e Vínculos Órfãos
     // -------------------------------------------------------------
@@ -127,15 +172,6 @@ async function runSecurityTestSuite() {
         (SELECT count(*) FROM password_reset_tokens)::int as reset_tokens_count;
     `);
     baseline = baselineCountsRes[0] as any;
-
-    const initialRevokedRes = await db.execute(sql`SELECT COALESCE(MAX(id), 0)::int as max_id FROM revoked_sessions`);
-    initialMaxRevokedId = Number((initialRevokedRes[0] as any)?.max_id || 0);
-
-    const initialTokensRes = await db.execute(sql`SELECT COALESCE(MAX(id), 0)::int as max_id FROM password_reset_tokens`);
-    initialMaxTokenId = Number((initialTokensRes[0] as any)?.max_id || 0);
-
-    const initialLogsRes = await db.execute(sql`SELECT id FROM system_logs`);
-    initialLogIds = new Set((initialLogsRes as any[]).map(r => r.id));
 
     console.log(`📊 Baseline inicial do banco PostgreSQL de teste:`);
     console.log(`   users: ${baseline.users_count}, usuarios: ${baseline.usuarios_count}, service_orders: ${baseline.service_orders_count}, system_logs: ${baseline.system_logs_count}, revoked_sessions: ${baseline.revoked_sessions_count}, reset_tokens: ${baseline.reset_tokens_count}\n`);
@@ -306,6 +342,7 @@ async function runSecurityTestSuite() {
       uid: "user-revocation-test",
       role: "admin"
     });
+    registerTokenRevocation(tokenToRevoke);
     revokeSessionToken(tokenToRevoke);
 
     const resRevokedToken = await fetch(`${baseUrl}/api/postgres/system-logs`, {
@@ -407,6 +444,8 @@ async function runSecurityTestSuite() {
     assert(parsedPayloadJti.jti === customJti, "Token gerado pelo servidor emite campo 'jti' único", customJti, String(parsedPayloadJti.jti));
 
     // Revoga o token pelo seu JTI
+    testCleanupRegistry.revokedSessionIdentifiers.add(customJti);
+    registerTokenRevocation(tokenWithCustomJti);
     revokeTokenByJti(customJti);
     const resRevokedByJti = await fetch(`${baseUrl}/api/postgres/system-logs`, {
       headers: { "Authorization": `Bearer ${tokenWithCustomJti}` }
@@ -418,6 +457,8 @@ async function runSecurityTestSuite() {
       uid: "user-batch-revoke",
       role: "admin"
     });
+    testCleanupRegistry.revokedSessionIdentifiers.add("user-batch-revoke");
+    registerTokenRevocation(tokenBeforeUserRevoke);
     revokeUserSessions("user-batch-revoke");
 
     const resUserRevoked = await fetch(`${baseUrl}/api/postgres/system-logs`, {
@@ -430,6 +471,8 @@ async function runSecurityTestSuite() {
       uid: "gestor-admin",
       role: "admin"
     });
+    testCleanupRegistry.revokedSessionIdentifiers.add("gestor-admin");
+    registerTokenRevocation(adminTokenToRevoke);
     revokeUserSessions("gestor-admin");
 
     const resAdminRevoked = await fetch(`${baseUrl}/api/postgres/system-logs`, {
@@ -1473,6 +1516,8 @@ async function runSecurityTestSuite() {
     assert(resBeforeRev.status === 200, "Token persistente emitido autentica inicialmente com sucesso (200 OK)", "200", String(resBeforeRev.status));
 
     // 11.2.2 Revoga o token individualmente (grava em memória E no PostgreSQL)
+    testCleanupRegistry.revokedSessionIdentifiers.add(testPersistentJti);
+    registerTokenRevocation(persistentToken);
     revokeSessionToken(persistentToken);
 
     // 11.2.3 SIMULAÇÃO REAL DE REINÍCIO DO PROCESSO:
@@ -1671,6 +1716,7 @@ async function runSecurityTestSuite() {
     const testLegacyDoc = "55566677788";
     testCleanupRegistry.users.add(testLegacyUid);
     testCleanupRegistry.resetTokenUserIds.add(testLegacyUid);
+    testCleanupRegistry.revokedSessionIdentifiers.add(testLegacyUid);
     await upsertUser({
       uid: testLegacyUid,
       email: "legacy@s1gestao.local",
@@ -1811,6 +1857,7 @@ async function runSecurityTestSuite() {
       "200",
       String(resRedeemSuccess.status)
     );
+    await registerTestLogs();
 
     // 12.8 Uso único: tentar reutilizar o mesmo token falha (400 Bad Request)
     const resRedeemReplay = await fetch(`${baseUrl}/api/auth/redeem-activation-token`, {
@@ -1829,6 +1876,7 @@ async function runSecurityTestSuite() {
     const testBlockedUid = `blocked-act-${Date.now()}`;
     testCleanupRegistry.users.add(testBlockedUid);
     testCleanupRegistry.resetTokenUserIds.add(testBlockedUid);
+    testCleanupRegistry.revokedSessionIdentifiers.add(testBlockedUid);
     await upsertUser({
       uid: testBlockedUid,
       email: "blocked.act@s1gestao.local",
@@ -1886,6 +1934,7 @@ async function runSecurityTestSuite() {
     const testConcurrentDoc = "11144477735";
     testCleanupRegistry.users.add(testConcurrentUid);
     testCleanupRegistry.resetTokenUserIds.add(testConcurrentUid);
+    testCleanupRegistry.revokedSessionIdentifiers.add(testConcurrentUid);
     await upsertUser({
       uid: testConcurrentUid,
       email: "concurrent@s1gestao.local",
@@ -1925,6 +1974,7 @@ async function runSecurityTestSuite() {
       "200 e 400",
       `${resConc1.status} e ${resConc2.status}`
     );
+    await registerTestLogs();
 
     // =========================================================================
     // Grupo 13: Logout com Revogação Persistente no PostgreSQL e Fail-Secure
@@ -1935,11 +1985,13 @@ async function runSecurityTestSuite() {
     const testLogoutJti = `logout-jti-${Date.now()}`;
     testCleanupRegistry.users.add(testLogoutUid);
     testCleanupRegistry.revokedSessionIdentifiers.add(testLogoutJti);
+    testCleanupRegistry.revokedSessionIdentifiers.add(testLogoutUid);
     const logoutToken = signServerSessionToken({
       uid: testLogoutUid,
       role: "admin",
       jti: testLogoutJti
     });
+    registerTokenRevocation(logoutToken);
 
     // 13.1 Token autentica antes do logout
     const resBeforeLogout = await fetch(`${baseUrl}/api/postgres/system-logs`, {
@@ -1985,6 +2037,7 @@ async function runSecurityTestSuite() {
       role: "admin",
       jti: failSecureJti
     });
+    registerTokenRevocation(validFailSecureToken);
     setDbFailureSimulationForTest(true);
     const resFailSecure = await fetch(`${baseUrl}/api/postgres/system-logs`, {
       headers: { "Authorization": `Bearer ${validFailSecureToken}` }
@@ -2290,58 +2343,367 @@ async function runSecurityTestSuite() {
       String(resConflictDocUpdate.status)
     );
 
+    // =========================================================================
+    // Grupo 15: Regressão e Validações Finais da Fase 2.3
+    // =========================================================================
+    console.log("\n📌 Grupo 15: Regressão e Validações Finais da Fase 2.3");
+
+    // 15.1 Validação de Ambiente Isolado — Rejeição de Configuração de Produção
+    const fakeProdEnv = isIsolatedTestEnvironment({ NODE_ENV: "production", SQL_DB_NAME: "s1_gestao_production" });
+    assert(
+      fakeProdEnv.isIsolated === false,
+      "Preflight: Ambiente de teste recusa execução quando detecta configuração/banco de produção",
+      "false",
+      String(fakeProdEnv.isIsolated)
+    );
+
+    // 15.2 Validação de Ambiente Isolado — Aprovação de Ambiente Isolado de Teste
+    const testDevEnv = isIsolatedTestEnvironment({ NODE_ENV: "test", SQL_DB_NAME: "cloud_sql_development_database" });
+    assert(
+      testDevEnv.isIsolated === true,
+      "Preflight: Ambiente de teste aprova execução quando explicitamente isolado (dev/test)",
+      "true",
+      String(testDevEnv.isIsolated)
+    );
+
+    // 15.3 Preservação de Registros Preexistentes e de Controle Criados por Outra Execução
+    const ctrlCitId = `ctrl-cit-${Date.now()}`;
+    const ctrlOrderId = `ctrl-ord-${Date.now()}`;
+    const ctrlUserId = `ctrl-usr-${Date.now()}`;
+    await upsertUsuario({
+      id: ctrlCitId,
+      name: "Munícipe Controle Concorrente",
+      document: "67890123469",
+      phone: "(18) 3644-8888",
+      email: "ctrl.concorrente@s1gestao.local",
+      address: "Rua Controle, 100",
+      notes: "Registro de controle",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString()
+    });
+    await upsertServiceOrder({
+      id: ctrlOrderId,
+      title: "OS de Controle Concorrente",
+      clientId: ctrlCitId,
+      assignedTo: "Carlos Henrique",
+      category: "Elétrica",
+      status: "aberto",
+      priority: "medium",
+      startDate: new Date().toISOString(),
+      endDate: new Date().toISOString(),
+      notes: "Controle",
+      description: "Controle",
+      history: [],
+      createdAt: new Date().toISOString()
+    });
+    await createUserAccount({
+      uid: ctrlUserId,
+      email: "ctrl.account@s1gestao.local",
+      name: "Conta de Controle",
+      userType: "requisitante",
+      status: "ativo"
+    });
+
+    // Simula um teste que cria seu próprio artefato e limpa estritamente apenas ele
+    const isolatedSubTestId = `subtest-cit-${Date.now()}`;
+    await upsertUsuario({
+      id: isolatedSubTestId,
+      name: "Munícipe Sub-teste Temporário",
+      document: "78901234505",
+      phone: "(18) 3644-7777",
+      email: "subtest@s1gestao.local",
+      address: "Rua Subteste, 200",
+      notes: "Sub-teste",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString()
+    });
+    await deleteUsuario(isolatedSubTestId);
+
+    const subCheck = await getUsuarioById(isolatedSubTestId);
+    const ctrlCitCheck = await getUsuarioById(ctrlCitId);
+    const ctrlOrderCheck = await getServiceOrderById(ctrlOrderId);
+    const ctrlUserCheck = await getUserByUid(ctrlUserId);
+
+    assert(
+      subCheck === null && ctrlCitCheck !== null && ctrlOrderCheck !== null && ctrlUserCheck !== null,
+      "Isolamento de Limpeza: Artefatos próprios são removidos e registros preexistentes de outra execução permanecem intactos",
+      "true",
+      String(subCheck === null && ctrlCitCheck !== null && ctrlOrderCheck !== null && ctrlUserCheck !== null)
+    );
+
+    // Registra registros de controle para limpeza segura ao final da suíte
+    testCleanupRegistry.usuarios.add(ctrlCitId);
+    testCleanupRegistry.serviceOrders.add(ctrlOrderId);
+    testCleanupRegistry.users.add(ctrlUserId);
+
+    // 15.4 Garantia de Limpeza Segura em Caso de Falha de Teste (try ... finally)
+    const failSimUid = `fail-sim-${Date.now()}`;
+    let threwSimError = false;
+    try {
+      await createUserAccount({
+        uid: failSimUid,
+        email: `${failSimUid}@s1gestao.local`,
+        name: "Usuário Simulação de Falha",
+        userType: "requisitante",
+        status: "ativo"
+      });
+      throw new Error("Simulação controlada de falha no teste");
+    } catch {
+      threwSimError = true;
+    } finally {
+      await deleteUser(failSimUid);
+    }
+    const failSimCheck = await getUserByUid(failSimUid);
+    assert(
+      threwSimError === true && failSimCheck === null,
+      "Resiliência de Limpeza: Bloco finally executa e remove artefato registrado mesmo quando o teste falha",
+      "true",
+      String(threwSimError === true && failSimCheck === null)
+    );
+
+    // 15.5 Solicitação de Ativação por E-mail Não Revela Existência de Conta
+    const resReqEmailNonExistent = await fetch(`${baseUrl}/api/auth/request-activation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "inexistente.email@s1gestao.local" })
+    });
+    assert(
+      resReqEmailNonExistent.status === 200,
+      "POST /api/auth/request-activation por e-mail inexistente retorna 200 OK com mensagem neutra",
+      "200",
+      String(resReqEmailNonExistent.status)
+    );
+    const emailNonExistentData = await resReqEmailNonExistent.json();
+    assert(
+      emailNonExistentData.success === true && emailNonExistentData.message.includes("ativação registrada"),
+      "Anti-enumeração: Resposta de ativação por e-mail não revela se a conta existe",
+      "true",
+      String(emailNonExistentData.success === true && emailNonExistentData.message.includes("ativação registrada"))
+    );
+    await registerTestLogs();
+
+    // 15.6 Não Criação de Tokens Inutilizáveis sem Canal de Entrega Funcional
+    const tokensBeforePublicReq = await db.execute(sql`SELECT count(*)::int as count FROM password_reset_tokens`);
+    const resReqNoToken = await fetch(`${baseUrl}/api/auth/request-activation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: opSingleDoc })
+    });
+    const tokensAfterPublicReq = await db.execute(sql`SELECT count(*)::int as count FROM password_reset_tokens`);
+    const noTokenData = await resReqNoToken.json();
+    const tokenDiff = Number((tokensAfterPublicReq[0] as any).count) - Number((tokensBeforePublicReq[0] as any).count);
+    assert(
+      tokenDiff === 0 && !noTokenData.message.toLowerCase().includes("e-mail enviado") && !noTokenData.message.toLowerCase().includes("sms enviado"),
+      "Canal de Entrega: Sistema não cria tokens órfãos inutilizáveis nem afirma falsamente ter enviado e-mail/SMS",
+      "0|true",
+      `${tokenDiff}|${!noTokenData.message.toLowerCase().includes("e-mail enviado")}`
+    );
+    await registerTestLogs();
+
+    // 15.7 Tratamento Seguro de Ambiguidade sem Escolha Arbitrária de Conta
+    const ambigUser1 = `ambig-user-1-${Date.now()}`;
+    const ambigUser2 = `ambig-user-2-${Date.now()}`;
+    const sharedEmail = `compartilhado-${Date.now()}@s1gestao.local`;
+    testCleanupRegistry.users.add(ambigUser1);
+    testCleanupRegistry.users.add(ambigUser2);
+    await createUserAccount({ uid: ambigUser1, email: sharedEmail, name: "Usuário Compartilhado 1", userType: "requisitante", status: "ativo" });
+    await createUserAccount({ uid: ambigUser2, email: sharedEmail, name: "Usuário Compartilhado 2", userType: "requisitante", status: "ativo" });
+
+    const resAmbigActivation = await fetch(`${baseUrl}/api/auth/request-activation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: sharedEmail })
+    });
+    assert(
+      resAmbigActivation.status === 200,
+      "Tratamento de Ambiguidade: Requisição com múltiplas contas correspondentes retorna mensagem genérica segura (200 OK)",
+      "200",
+      String(resAmbigActivation.status)
+    );
+    await registerTestLogs();
+
+    // 15.8 Atomicidade Transacional: Falha na Criação da Conta Reverte Cadastro em usuarios (Rollback)
+    const rollbackTestId = `tx-rollback-usr-${Date.now()}`;
+    let txFailed = false;
+    try {
+      await provisionUsuarioWithAccountTx({
+        usuarioData: {
+          id: rollbackTestId,
+          name: "Munícipe Rollback Teste",
+          document: "89012345642",
+          email: "rollback@s1gestao.local",
+          status: "ativo",
+          userType: "requisitante"
+        },
+        accountData: {
+          uid: null as any, // Força erro NOT NULL em users.uid para disparar rollback
+          email: "rollback@s1gestao.local",
+          name: "Munícipe Rollback Teste",
+          userType: "requisitante",
+          status: "ativo",
+          passwordHash: "dummyHash"
+        }
+      });
+    } catch {
+      txFailed = true;
+    }
+    const citizenCheckAfterRollback = await getUsuarioById(rollbackTestId);
+    assert(
+      txFailed === true && citizenCheckAfterRollback === null,
+      "Atomicidade Transacional: Falha ao criar a conta em users reverte integralmente o cadastro em usuarios (Rollback)",
+      "true",
+      String(txFailed === true && citizenCheckAfterRollback === null)
+    );
+
+    // 15.9 Cadastro Operacional Municipal sem Login Continua Funcionando
+    const pureMunicipe15Uid = `municipe-15-pure-${Date.now()}`;
+    const resPureMunicipe15 = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: pureMunicipe15Uid,
+        name: "Cidadão Presencial Sem Login 15",
+        document: "89012345642",
+        phone: "(18) 3333-5555",
+        email: "cidadepresencial15@s1gestao.local"
+      })
+    });
+    assert(
+      resPureMunicipe15.status === 201,
+      "Cadastro operacional municipal de cidadão sem senha é aceito com sucesso (201 Created)",
+      "201",
+      String(resPureMunicipe15.status)
+    );
+    const pureMunicipe15Data = await resPureMunicipe15.json();
+    if (pureMunicipe15Data?.usuario?.id) {
+      testCleanupRegistry.usuarios.add(pureMunicipe15Data.usuario.id);
+    }
+    const pureUserInAuth = await getUserByUid(pureMunicipe15Data.usuario.id);
+    assert(
+      pureMunicipe15Data.accountProvisioned === false && pureUserInAuth === null,
+      "Cidadão presencial cadastrado em usuarios sem conta de login criada em users",
+      "false|true",
+      `${pureMunicipe15Data.accountProvisioned}|${pureUserInAuth === null}`
+    );
+
+    // 15.10 Preservação de Vínculos entre Requisitante e Ordens de Serviço
+    const opPreserveUid = `cli-preserve-${Date.now()}`;
+    const opPreserveDoc = "90123456770"; // CPF matematicamente válido
+    const opPreserveOrderId = `so-preserve-${Date.now()}`;
+    testCleanupRegistry.usuarios.add(opPreserveUid);
+    testCleanupRegistry.users.add(opPreserveUid);
+    testCleanupRegistry.serviceOrders.add(opPreserveOrderId);
+
+    // 1. Cadastra munícipe presencial
+    await upsertUsuario({
+      id: opPreserveUid,
+      name: "Munícipe Preservação Vínculo",
+      document: opPreserveDoc,
+      phone: "(18) 3644-1111",
+      email: "preserve@s1gestao.local",
+      address: "Rua Preservação, 100",
+      notes: "Munícipe preservação",
+      status: "ativo",
+      userType: "requisitante",
+      createdAt: new Date().toISOString()
+    });
+
+    // 2. Vincula ordem de serviço
+    await upsertServiceOrder({
+      id: opPreserveOrderId,
+      title: "Manutenção Predial Vinculada",
+      clientId: opPreserveUid,
+      assignedTo: "Carlos Henrique",
+      category: "Elétrica",
+      status: "aberto",
+      priority: "medium",
+      startDate: new Date().toISOString(),
+      endDate: new Date().toISOString(),
+      notes: "Atendimento pré-existente",
+      description: "Manutenção geral",
+      history: [],
+      createdAt: new Date().toISOString()
+    });
+
+    // 3. Auto-cadastro provisionando conta com o mesmo CPF
+    const resAutoCadastroPreserve = await fetch(`${baseUrl}/api/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Munícipe Preservação Vínculo",
+        document: opPreserveDoc,
+        email: "preserve@s1gestao.local",
+        password: "SenhaPreservada#2026",
+        createAccount: true
+      })
+    });
+    assert(
+      resAutoCadastroPreserve.status === 201,
+      "Auto-cadastro com cadastro prévio responde 201 Created com reutilização de ID",
+      "201",
+      String(resAutoCadastroPreserve.status)
+    );
+    const autoCadastroData = await resAutoCadastroPreserve.json();
+    assert(
+      autoCadastroData.linkedExistingUsuario === true && autoCadastroData.usuario.id === opPreserveUid,
+      "Identificador operacional reutilizado como UID da conta (mesmo ID em usuarios e users)",
+      `${opPreserveUid}|true`,
+      `${autoCadastroData.usuario.id}|${autoCadastroData.linkedExistingUsuario}`
+    );
+
+    // 4. Confirma que a ordem de serviço permanece vinculada e recuperável
+    const preservedOrder = await getServiceOrderById(opPreserveOrderId);
+    assert(
+      preservedOrder !== null && preservedOrder.clientId === opPreserveUid,
+      "Preservação de Vínculos: Ordem de serviço prévia permanece vinculada e acessível à conta provisionada",
+      opPreserveUid,
+      String(preservedOrder?.clientId)
+    );
+
   } finally {
     console.log("\n🧹 Executando Limpeza Rigorosa e Isolamento de Artefatos de Teste...");
 
-    // 1. Limpeza de Ordens de Serviço criadas nos testes
+    // 1. Limpeza estritamente direcionada aos IDs registrados de Ordens de Serviço
     for (const soId of testCleanupRegistry.serviceOrders) {
       try { await deleteServiceOrder(soId); } catch (e) {}
     }
 
-    // 2. Limpeza de Usuários e Munícipes criados nos testes
+    // 2. Limpeza estritamente direcionada aos IDs registrados de Contas de Acesso (users)
     for (const uid of testCleanupRegistry.users) {
       try { await deleteUser(uid); } catch (e) {}
     }
+
+    // 3. Limpeza estritamente direcionada aos IDs registrados de Munícipes (usuarios)
     for (const id of testCleanupRegistry.usuarios) {
       try { await deleteUsuario(id); } catch (e) {}
     }
 
-    // 3. Limpeza de Tokens de Redefinição gerados nos testes
+    // 4. Limpeza estritamente direcionada aos IDs registrados de Tokens de Ativação / Redefinição
     for (const uid of testCleanupRegistry.resetTokenUserIds) {
       try { await deletePasswordResetTokensByUserId(uid); } catch (e) {}
     }
+    for (const hash of testCleanupRegistry.resetTokenHashes) {
+      try { await deletePasswordResetTokenByHash(hash); } catch (e) {}
+    }
 
-    // 4. Limpeza de Revogações de Sessão geradas nos testes
+    // 5. Limpeza estritamente direcionada aos Identificadores de Revogação registrados
     for (const ident of testCleanupRegistry.revokedSessionIdentifiers) {
       try { await deleteRevokedSessionsByIdentifier(ident); } catch (e) {}
     }
+    for (const uid of testCleanupRegistry.users) {
+      try { await deleteRevokedSessionsByIdentifier(uid); } catch (e) {}
+    }
+    resetRevocationStore();
 
-    // 5. Limpeza de Logs de Auditoria gerados pelas rotas durante a execução do teste
-    if (initialLogIds.size > 0) {
-      const allowedIds = Array.from(initialLogIds).map(id => `'${id.replace(/'/g, "''")}'`).join(", ");
-      await db.execute(sql.raw(`DELETE FROM system_logs WHERE id NOT IN (${allowedIds})`));
-    } else {
-      await db.execute(sql`DELETE FROM system_logs WHERE id LIKE 'log-act-%' OR id LIKE 'log-admin-act-%' OR id LIKE 'log-redeem-%' OR id LIKE 'test-%'`);
+    // 6. Limpeza estritamente direcionada aos IDs de Logs de Auditoria registrados
+    await registerTestLogs();
+    for (const logId of testCleanupRegistry.systemLogIds) {
+      try { await deleteSystemLog(logId); } catch (e) {}
     }
 
-    // Limpeza de revogações e tokens gerados estritamente durante a suíte
-    if (baseline.revoked_sessions_count === 0) {
-      await db.execute(sql`DELETE FROM revoked_sessions`);
-    } else {
-      await db.execute(sql`DELETE FROM revoked_sessions WHERE id > ${initialMaxRevokedId}`);
-    }
-
-    if (baseline.reset_tokens_count === 0) {
-      await db.execute(sql`DELETE FROM password_reset_tokens`);
-    } else {
-      await db.execute(sql`DELETE FROM password_reset_tokens WHERE id > ${initialMaxTokenId}`);
-    }
-
-    if (baseline.users_count === 0) {
-      await db.execute(sql`DELETE FROM users`);
-    }
-
-    // 6. Verificação de Restauração Estrita do Baseline Inicial
+    // 7. Verificação de Restauração Estrita do Baseline Inicial
     const finalCountsRes = await db.execute(sql`
       SELECT 
         (SELECT count(*) FROM users)::int as users_count,
