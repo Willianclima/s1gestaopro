@@ -123,21 +123,29 @@ async function runSecurityTestSuite() {
     } catch {}
   }
 
-  try {
-    // -------------------------------------------------------------
-    // Preflight Mandatório: Confirmação de Ambiente Isolado de Teste
-    // -------------------------------------------------------------
+  // -------------------------------------------------------------
+  // Preflight Mandatório: Confirmação de Ambiente Isolado de Teste
+  // -------------------------------------------------------------
     console.log("📌 Preflight: Validando se a conexão aponta para um banco de teste explicitamente isolado...");
     const isolationCheck = isIsolatedTestEnvironment();
     assert(
       isolationCheck.isIsolated,
-      "Preflight de Segurança: Conexão aponta para banco explicitamente isolado de desenvolvimento/teste",
+      "Preflight de Segurança: Conexão aponta para banco explicitamente isolado e autorizado de teste",
       "true",
       String(isolationCheck.isIsolated),
       isolationCheck.reason
     );
     if (!isolationCheck.isIsolated) {
-      throw new Error(`ABORTANDO: Execução recusada. O banco de dados configurado não foi comprovado como ambiente isolado: ${isolationCheck.reason}`);
+      console.error("\n🛑 =====================================================");
+      console.error("🛑 EXECUÇÃO DE ESCRITA RECUSADA PELO PREFLIGHT DE SEGURANÇA");
+      console.error("🛑 =====================================================");
+      console.error(`Motivo: ${isolationCheck.reason}\n`);
+      console.error("Para executar testes com escrita no banco de dados, configure:");
+      console.error("  1. TEST_DATABASE_NAME=<nome_do_banco_autorizado>");
+      console.error("  2. Certifique-se de que o cliente PostgreSQL conecte ao mesmo banco (SQL_DB_NAME ou DATABASE_URL).");
+      console.error("  3. Certifique-se de que o banco não contenha terminologia produtiva e conste na allowlist autorizada.\n");
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      process.exit(1);
     }
 
     // -------------------------------------------------------------
@@ -175,6 +183,57 @@ async function runSecurityTestSuite() {
 
     console.log(`📊 Baseline inicial do banco PostgreSQL de teste:`);
     console.log(`   users: ${baseline.users_count}, usuarios: ${baseline.usuarios_count}, service_orders: ${baseline.service_orders_count}, system_logs: ${baseline.system_logs_count}, revoked_sessions: ${baseline.revoked_sessions_count}, reset_tokens: ${baseline.reset_tokens_count}\n`);
+
+    // -------------------------------------------------------------
+    // Registros de Controle Concorrente (Simulação de Segunda Execução Externa)
+    // -------------------------------------------------------------
+    const concurrentControl = {
+      usuarioId: `ctrl-concurrent-cit-${Date.now()}`,
+      orderId: `ctrl-concurrent-ord-${Date.now()}`,
+      userId: `ctrl-concurrent-usr-${Date.now()}`
+    };
+
+    try {
+      // 1. Criação dos registros de controle externos fora do testCleanupRegistry
+      await upsertUsuario({
+        id: concurrentControl.usuarioId,
+        name: "Munícipe Controle Externo Concorrente",
+        document: "67890123469",
+        phone: "(18) 3644-8888",
+        email: "ctrl.concorrente@s1gestao.local",
+        address: "Rua Controle, 100",
+        notes: "Registro de controle externo simulando processo concorrente",
+        status: "ativo",
+        userType: "requisitante",
+        createdAt: new Date().toISOString()
+      });
+      await upsertServiceOrder({
+        id: concurrentControl.orderId,
+        title: "OS de Controle Concorrente",
+        clientId: concurrentControl.usuarioId,
+        assignedTo: "Carlos Henrique",
+        category: "Elétrica",
+        status: "aberto",
+        priority: "medium",
+        startDate: new Date().toISOString(),
+        endDate: new Date().toISOString(),
+        notes: "Controle externo",
+        description: "Controle externo",
+        history: [],
+        createdAt: new Date().toISOString()
+      });
+      await createUserAccount({
+        uid: concurrentControl.userId,
+        email: "ctrl.account@s1gestao.local",
+        name: "Conta de Controle Concorrente",
+        userType: "requisitante",
+        status: "ativo"
+      });
+
+      // NOTA: concurrentControl NÃO é adicionado ao testCleanupRegistry da suíte!
+      // Ele representa dados de outra execução concorrente/simultânea.
+
+      try {
 
     // -------------------------------------------------------------
     // Geração de Tokens de Teste (Criptograficamente assinados)
@@ -2348,64 +2407,113 @@ async function runSecurityTestSuite() {
     // =========================================================================
     console.log("\n📌 Grupo 15: Regressão e Validações Finais da Fase 2.3");
 
-    // 15.1 Validação de Ambiente Isolado — Rejeição de Configuração de Produção
-    const fakeProdEnv = isIsolatedTestEnvironment({ NODE_ENV: "production", SQL_DB_NAME: "s1_gestao_production" });
+    // 15.1 NODE_ENV=test sozinho é rejeitado
+    const checkNodeEnvTest = isIsolatedTestEnvironment({ NODE_ENV: "test" });
     assert(
-      fakeProdEnv.isIsolated === false,
-      "Preflight: Ambiente de teste recusa execução quando detecta configuração/banco de produção",
+      checkNodeEnvTest.isIsolated === false,
+      "Preflight: NODE_ENV=test sozinho é rejeitado",
       "false",
-      String(fakeProdEnv.isIsolated)
+      String(checkNodeEnvTest.isIsolated)
     );
 
-    // 15.2 Validação de Ambiente Isolado — Aprovação de Ambiente Isolado de Teste
-    const testDevEnv = isIsolatedTestEnvironment({ NODE_ENV: "test", SQL_DB_NAME: "cloud_sql_development_database" });
+    // 15.2 NODE_ENV=development sozinho é rejeitado
+    const checkNodeEnvDev = isIsolatedTestEnvironment({ NODE_ENV: "development" });
     assert(
-      testDevEnv.isIsolated === true,
-      "Preflight: Ambiente de teste aprova execução quando explicitamente isolado (dev/test)",
-      "true",
-      String(testDevEnv.isIsolated)
+      checkNodeEnvDev.isIsolated === false,
+      "Preflight: NODE_ENV=development sozinho é rejeitado",
+      "false",
+      String(checkNodeEnvDev.isIsolated)
     );
 
-    // 15.3 Preservação de Registros Preexistentes e de Controle Criados por Outra Execução
-    const ctrlCitId = `ctrl-cit-${Date.now()}`;
-    const ctrlOrderId = `ctrl-ord-${Date.now()}`;
-    const ctrlUserId = `ctrl-usr-${Date.now()}`;
-    await upsertUsuario({
-      id: ctrlCitId,
-      name: "Munícipe Controle Concorrente",
-      document: "67890123469",
-      phone: "(18) 3644-8888",
-      email: "ctrl.concorrente@s1gestao.local",
-      address: "Rua Controle, 100",
-      notes: "Registro de controle",
-      status: "ativo",
-      userType: "requisitante",
-      createdAt: new Date().toISOString()
-    });
-    await upsertServiceOrder({
-      id: ctrlOrderId,
-      title: "OS de Controle Concorrente",
-      clientId: ctrlCitId,
-      assignedTo: "Carlos Henrique",
-      category: "Elétrica",
-      status: "aberto",
-      priority: "medium",
-      startDate: new Date().toISOString(),
-      endDate: new Date().toISOString(),
-      notes: "Controle",
-      description: "Controle",
-      history: [],
-      createdAt: new Date().toISOString()
-    });
-    await createUserAccount({
-      uid: ctrlUserId,
-      email: "ctrl.account@s1gestao.local",
-      name: "Conta de Controle",
-      userType: "requisitante",
-      status: "ativo"
-    });
+    // 15.3 Host localhost sozinho é rejeitado
+    const checkHostLocalhost = isIsolatedTestEnvironment({ SQL_HOST: "localhost" });
+    assert(
+      checkHostLocalhost.isIsolated === false,
+      "Preflight: Host localhost sozinho é rejeitado",
+      "false",
+      String(checkHostLocalhost.isIsolated)
+    );
 
-    // Simula um teste que cria seu próprio artefato e limpa estritamente apenas ele
+    // 15.4 Host cloudsql sozinho é rejeitado
+    const checkHostCloudSql = isIsolatedTestEnvironment({ SQL_HOST: "/app/cloudsql/instance-id" });
+    assert(
+      checkHostCloudSql.isIsolated === false,
+      "Preflight: Host cloudsql sozinho é rejeitado",
+      "false",
+      String(checkHostCloudSql.isIsolated)
+    );
+
+    // 15.5 Banco ou URL explicitamente identificados como produção são rejeitados
+    const checkProdDb = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1_production",
+      SQL_DB_NAME: "s1_production",
+      NODE_ENV: "production"
+    });
+    assert(
+      checkProdDb.isIsolated === false,
+      "Preflight: Banco explicitamente identificado como produção é rejeitado",
+      "false",
+      String(checkProdDb.isIsolated)
+    );
+
+    const checkProdUrl = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      DATABASE_URL: "postgresql://usr:pass@prod-db.internal:5432/s1gestao_test"
+    });
+    assert(
+      checkProdUrl.isIsolated === false,
+      "Preflight: URL apontando para host de produção é rejeitada",
+      "false",
+      String(checkProdUrl.isIsolated)
+    );
+
+    // 15.6 Configuração dedicada e completa de banco de teste é aceita
+    const checkCompleteConfig = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      SQL_DB_NAME: "s1gestao_test",
+      SQL_HOST: "127.0.0.1",
+      SQL_USER: "test_user"
+    });
+    assert(
+      checkCompleteConfig.isIsolated === true,
+      "Preflight: Configuração dedicada e completa de banco de teste é aceita",
+      "true",
+      String(checkCompleteConfig.isIsolated)
+    );
+
+    const checkCompleteUrl = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      DATABASE_URL: "postgresql://test_user:test_pass@127.0.0.1:5432/s1gestao_test"
+    });
+    assert(
+      checkCompleteUrl.isIsolated === true,
+      "Preflight: DATABASE_URL dedicada de banco de teste autorizado é aceita",
+      "true",
+      String(checkCompleteUrl.isIsolated)
+    );
+
+    // 15.7 Divergência entre nome declarado de teste e banco configurado é rejeitada
+    const checkDivergence = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      SQL_DB_NAME: "banco_operacional_divergente",
+      SQL_HOST: "127.0.0.1"
+    });
+    assert(
+      checkDivergence.isIsolated === false,
+      "Preflight: Divergência entre nome declarado de teste e banco configurado é rejeitada",
+      "false",
+      String(checkDivergence.isIsolated)
+    );
+
+    // 15.8 Nenhuma conexão ou escrita real é necessária para testar a função de preflight
+    assert(
+      typeof checkCompleteConfig.reason === "string" && !checkCompleteConfig.reason.includes("password"),
+      "Preflight: Execução unitária do preflight não exige conexão real e não vaza segredos",
+      "true",
+      String(!checkCompleteConfig.reason.includes("password"))
+    );
+
+    // 15.9 Isolamento em Nível de Teste: Remoção cirúrgica de artefato próprio sem tocar registros de controle
     const isolatedSubTestId = `subtest-cit-${Date.now()}`;
     await upsertUsuario({
       id: isolatedSubTestId,
@@ -2422,21 +2530,16 @@ async function runSecurityTestSuite() {
     await deleteUsuario(isolatedSubTestId);
 
     const subCheck = await getUsuarioById(isolatedSubTestId);
-    const ctrlCitCheck = await getUsuarioById(ctrlCitId);
-    const ctrlOrderCheck = await getServiceOrderById(ctrlOrderId);
-    const ctrlUserCheck = await getUserByUid(ctrlUserId);
+    const ctrlCitCheckInTest = await getUsuarioById(concurrentControl.usuarioId);
+    const ctrlOrderCheckInTest = await getServiceOrderById(concurrentControl.orderId);
+    const ctrlUserCheckInTest = await getUserByUid(concurrentControl.userId);
 
     assert(
-      subCheck === null && ctrlCitCheck !== null && ctrlOrderCheck !== null && ctrlUserCheck !== null,
+      subCheck === null && ctrlCitCheckInTest !== null && ctrlOrderCheckInTest !== null && ctrlUserCheckInTest !== null,
       "Isolamento de Limpeza: Artefatos próprios são removidos e registros preexistentes de outra execução permanecem intactos",
       "true",
-      String(subCheck === null && ctrlCitCheck !== null && ctrlOrderCheck !== null && ctrlUserCheck !== null)
+      String(subCheck === null && ctrlCitCheckInTest !== null && ctrlOrderCheckInTest !== null && ctrlUserCheckInTest !== null)
     );
-
-    // Registra registros de controle para limpeza segura ao final da suíte
-    testCleanupRegistry.usuarios.add(ctrlCitId);
-    testCleanupRegistry.serviceOrders.add(ctrlOrderId);
-    testCleanupRegistry.users.add(ctrlUserId);
 
     // 15.4 Garantia de Limpeza Segura em Caso de Falha de Teste (try ... finally)
     const failSimUid = `fail-sim-${Date.now()}`;
@@ -2665,30 +2768,22 @@ async function runSecurityTestSuite() {
   } finally {
     console.log("\n🧹 Executando Limpeza Rigorosa e Isolamento de Artefatos de Teste...");
 
-    // 1. Limpeza estritamente direcionada aos IDs registrados de Ordens de Serviço
+    // 1. Limpeza estritamente direcionada aos IDs registrados em testCleanupRegistry
     for (const soId of testCleanupRegistry.serviceOrders) {
       try { await deleteServiceOrder(soId); } catch (e) {}
     }
-
-    // 2. Limpeza estritamente direcionada aos IDs registrados de Contas de Acesso (users)
     for (const uid of testCleanupRegistry.users) {
       try { await deleteUser(uid); } catch (e) {}
     }
-
-    // 3. Limpeza estritamente direcionada aos IDs registrados de Munícipes (usuarios)
     for (const id of testCleanupRegistry.usuarios) {
       try { await deleteUsuario(id); } catch (e) {}
     }
-
-    // 4. Limpeza estritamente direcionada aos IDs registrados de Tokens de Ativação / Redefinição
     for (const uid of testCleanupRegistry.resetTokenUserIds) {
       try { await deletePasswordResetTokensByUserId(uid); } catch (e) {}
     }
     for (const hash of testCleanupRegistry.resetTokenHashes) {
       try { await deletePasswordResetTokenByHash(hash); } catch (e) {}
     }
-
-    // 5. Limpeza estritamente direcionada aos Identificadores de Revogação registrados
     for (const ident of testCleanupRegistry.revokedSessionIdentifiers) {
       try { await deleteRevokedSessionsByIdentifier(ident); } catch (e) {}
     }
@@ -2697,42 +2792,104 @@ async function runSecurityTestSuite() {
     }
     resetRevocationStore();
 
-    // 6. Limpeza estritamente direcionada aos IDs de Logs de Auditoria registrados
     await registerTestLogs();
     for (const logId of testCleanupRegistry.systemLogIds) {
       try { await deleteSystemLog(logId); } catch (e) {}
     }
 
-    // 7. Verificação de Restauração Estrita do Baseline Inicial
-    const finalCountsRes = await db.execute(sql`
-      SELECT 
-        (SELECT count(*) FROM users)::int as users_count,
-        (SELECT count(*) FROM usuarios)::int as usuarios_count,
-        (SELECT count(*) FROM service_orders)::int as service_orders_count,
-        (SELECT count(*) FROM system_logs)::int as system_logs_count,
-        (SELECT count(*) FROM revoked_sessions)::int as revoked_sessions_count,
-        (SELECT count(*) FROM password_reset_tokens)::int as reset_tokens_count;
-    `);
-    const finalCounts = finalCountsRes[0] as any;
-    console.log(`📊 Contagens finais do banco PostgreSQL após limpeza completa:`);
-    console.log(`   users: ${finalCounts.users_count}, usuarios: ${finalCounts.usuarios_count}, service_orders: ${finalCounts.service_orders_count}, system_logs: ${finalCounts.system_logs_count}, revoked_sessions: ${finalCounts.revoked_sessions_count}, reset_tokens: ${finalCounts.reset_tokens_count}\n`);
+    // Validação Direta: Confirma que todos os IDs registrados pela suíte foram removidos
+    let anySuiteArtifactRemaining = false;
+    for (const uid of testCleanupRegistry.users) {
+      const u = await getUserByUid(uid);
+      if (u !== null) anySuiteArtifactRemaining = true;
+    }
+    for (const id of testCleanupRegistry.usuarios) {
+      const c = await getUsuarioById(id);
+      if (c !== null) anySuiteArtifactRemaining = true;
+    }
+    for (const soId of testCleanupRegistry.serviceOrders) {
+      const so = await getServiceOrderById(soId);
+      if (so !== null) anySuiteArtifactRemaining = true;
+    }
 
     assert(
-      Number(finalCounts.users_count) === Number(baseline.users_count) &&
-      Number(finalCounts.usuarios_count) === Number(baseline.usuarios_count) &&
-      Number(finalCounts.service_orders_count) === Number(baseline.service_orders_count) &&
-      Number(finalCounts.system_logs_count) === Number(baseline.system_logs_count) &&
-      Number(finalCounts.revoked_sessions_count) === Number(baseline.revoked_sessions_count) &&
-      Number(finalCounts.reset_tokens_count) === Number(baseline.reset_tokens_count),
-      "Isolamento e Limpeza de Testes: Zero dados órfãos residuais e contagens restauradas ao baseline",
-      `users:${baseline.users_count}, usuarios:${baseline.usuarios_count}, orders:${baseline.service_orders_count}, logs:${baseline.system_logs_count}, revoked:${baseline.revoked_sessions_count}, tokens:${baseline.reset_tokens_count}`,
-      `users:${finalCounts.users_count}, usuarios:${finalCounts.usuarios_count}, orders:${finalCounts.service_orders_count}, logs:${finalCounts.system_logs_count}, revoked:${finalCounts.revoked_sessions_count}, tokens:${finalCounts.reset_tokens_count}`
+      anySuiteArtifactRemaining === false,
+      "Limpeza de Artefatos Próprios: Todos os IDs registrados da suíte foram excluídos com sucesso",
+      "false",
+      String(anySuiteArtifactRemaining)
     );
 
-    // Encerra servidor de teste
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    console.log("Servidor de testes encerrado com sucesso.");
+    // Validação Direta: Confirma que os registros de controle concorrente SOBREVIVERAM à limpeza da suíte
+    const survivedCit = await getUsuarioById(concurrentControl.usuarioId);
+    const survivedOrder = await getServiceOrderById(concurrentControl.orderId);
+    const survivedUser = await getUserByUid(concurrentControl.userId);
+
+    assert(
+      survivedCit !== null && survivedOrder !== null && survivedUser !== null,
+      "Preservação Concorrente no Finally: Registros de controle externos sobreviveram intactos à limpeza da suíte",
+      "true",
+      String(survivedCit !== null && survivedOrder !== null && survivedUser !== null)
+    );
+
+    // Validação Direta: Confirma que os registros preexistentes do sistema permanecem intactos
+    const baseClient1 = await getUsuarioById("cli-1");
+    const baseOrder1 = await getServiceOrderById("req-1001");
+    assert(
+      baseClient1 !== null && baseOrder1 !== null,
+      "Preservação Pré-existente: Registros pré-existentes do sistema permanecem intactos após a limpeza",
+      "true",
+      String(baseClient1 !== null && baseOrder1 !== null)
+    );
   }
+} finally {
+  // Limpeza isolada e explícita dos registros de controle criados para simular outra execução
+  console.log("\n🧹 Removendo Registros de Controle Concorrente por IDs Exatos...");
+  try { await deleteServiceOrder(concurrentControl.orderId); } catch (e) {}
+  try { await deleteUser(concurrentControl.userId); } catch (e) {}
+  try { await deleteUsuario(concurrentControl.usuarioId); } catch (e) {}
+
+  // Validação Direta: Confirma que os controles foram removidos pontualmente por ID exato
+  const postCtrlCit = await getUsuarioById(concurrentControl.usuarioId);
+  const postCtrlOrder = await getServiceOrderById(concurrentControl.orderId);
+  const postCtrlUser = await getUserByUid(concurrentControl.userId);
+
+  assert(
+    postCtrlCit === null && postCtrlOrder === null && postCtrlUser === null,
+    "Limpeza de Controle: Registros de controle concorrente foram removidos pontualmente por ID exato",
+    "true",
+    String(postCtrlCit === null && postCtrlOrder === null && postCtrlUser === null)
+  );
+
+  // Verificação de Restauração Estrita do Baseline Inicial
+  const finalCountsRes = await db.execute(sql`
+    SELECT 
+      (SELECT count(*) FROM users)::int as users_count,
+      (SELECT count(*) FROM usuarios)::int as usuarios_count,
+      (SELECT count(*) FROM service_orders)::int as service_orders_count,
+      (SELECT count(*) FROM system_logs)::int as system_logs_count,
+      (SELECT count(*) FROM revoked_sessions)::int as revoked_sessions_count,
+      (SELECT count(*) FROM password_reset_tokens)::int as reset_tokens_count;
+  `);
+  const finalCounts = finalCountsRes[0] as any;
+  console.log(`📊 Contagens finais do banco PostgreSQL após limpeza completa:`);
+  console.log(`   users: ${finalCounts.users_count}, usuarios: ${finalCounts.usuarios_count}, service_orders: ${finalCounts.service_orders_count}, system_logs: ${finalCounts.system_logs_count}, revoked_sessions: ${finalCounts.revoked_sessions_count}, reset_tokens: ${finalCounts.reset_tokens_count}\n`);
+
+  assert(
+    Number(finalCounts.users_count) === Number(baseline.users_count) &&
+    Number(finalCounts.usuarios_count) === Number(baseline.usuarios_count) &&
+    Number(finalCounts.service_orders_count) === Number(baseline.service_orders_count) &&
+    Number(finalCounts.system_logs_count) === Number(baseline.system_logs_count) &&
+    Number(finalCounts.revoked_sessions_count) === Number(baseline.revoked_sessions_count) &&
+    Number(finalCounts.reset_tokens_count) === Number(baseline.reset_tokens_count),
+    "Isolamento e Limpeza de Testes: Zero dados órfãos residuais e contagens restauradas ao baseline",
+    `users:${baseline.users_count}, usuarios:${baseline.usuarios_count}, orders:${baseline.service_orders_count}, logs:${baseline.system_logs_count}, revoked:${baseline.revoked_sessions_count}, tokens:${baseline.reset_tokens_count}`,
+    `users:${finalCounts.users_count}, usuarios:${finalCounts.usuarios_count}, orders:${finalCounts.service_orders_count}, logs:${finalCounts.system_logs_count}, revoked:${finalCounts.revoked_sessions_count}, tokens:${finalCounts.reset_tokens_count}`
+  );
+
+  // Encerra servidor de teste
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  console.log("Servidor de testes encerrado com sucesso.");
+}
 
   // -------------------------------------------------------------
   // Relatório Final

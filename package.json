@@ -16,7 +16,7 @@
     "clean": "rm -rf dist server.js",
     "firestore:indexes": "tsx scripts/manage-firestore-indexes.ts",
     "lint": "tsc --noEmit",
-    "test:security": "tsx tests/security-auth.test.ts"
+    "test:security": "TEST_DATABASE_NAME=cloud_sql_development_database tsx tests/security-auth.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

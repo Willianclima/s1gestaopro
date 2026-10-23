@@ -62,52 +62,216 @@ import {
 } from "./src/middleware/auth.ts";
 
 /**
- * Verificação mandatória de ambiente isolado de desenvolvimento/teste:
- * Assegura que nenhuma operação de escrita seja executada caso o banco
- * de dados aponte para produção ou não possua identificação explícita de ambiente isolado.
+ * Allowlist de bancos de dados autorizados para a suíte de testes automatizados.
+ * Previne que qualquer banco não expressamente aprovado sofra escritas durante os testes.
  */
-export function isIsolatedTestEnvironment(overrideEnv?: Record<string, string | undefined>): { isIsolated: boolean; reason: string } {
-  const env = overrideEnv || process.env;
-  const dbName = (env.SQL_DB_NAME || env.PGDATABASE || "").toLowerCase();
-  const nodeEnv = (env.NODE_ENV || "").toLowerCase();
-  const host = (env.SQL_HOST || env.PGHOST || "").toLowerCase();
-  const dbUrl = (env.DATABASE_URL || "").toLowerCase();
+export const AUTHORIZED_TEST_DATABASES: readonly string[] = [
+  "cloud_sql_development_database",
+  "s1gestao_test",
+  "s1_gestaopro_test",
+  "test_db",
+  "s1gestaopro_testing_isolated"
+];
 
-  const isProduction = 
-    nodeEnv === "production" || 
-    dbName.includes("prod") || 
-    host.includes("prod") || 
-    dbUrl.includes("production") || 
-    dbUrl.includes("prod");
+/**
+ * Extrai a configuração efetiva que o cliente postgres-js / Drizzle utiliza
+ * a partir das variáveis de conexão (DATABASE_URL, POSTGRES_URL ou SQL_* / PG*).
+ * NUNCA expõe senhas ou strings brutas de conexão.
+ */
+export function getEffectivePostgresConfig(env: Record<string, string | undefined>): {
+  database: string;
+  host: string;
+  port: number;
+  username: string;
+  hasUrl: boolean;
+  isConfigured: boolean;
+} {
+  const urlStr = (
+    env.DATABASE_URL ||
+    env.POSTGRES_URL ||
+    env.DATABASE_CONNECTION_STRING ||
+    ""
+  ).trim();
+
+  if (urlStr) {
+    if (urlStr.includes("@/")) {
+      // Formato Unix Socket do Cloud SQL:
+      // postgres://USER:PASS@/cloudsql/PROJECT:REGION:INSTANCE/DBNAME
+      const atIdx = urlStr.indexOf("@/");
+      const userInfoStr = urlStr.substring(0, atIdx).replace(/^postgres(?:ql)?:\/\//, "");
+      const rest = urlStr.substring(atIdx + 2);
+
+      const colonIdx = userInfoStr.indexOf(":");
+      const username = colonIdx !== -1 ? decodeURIComponent(userInfoStr.substring(0, colonIdx)) : "postgres";
+
+      const lastSlashIdx = rest.lastIndexOf("/");
+      const socketAndPort = "/" + (lastSlashIdx !== -1 ? rest.substring(0, lastSlashIdx) : rest);
+      const database = lastSlashIdx !== -1 ? rest.substring(lastSlashIdx + 1) : "postgres";
+
+      let host = socketAndPort;
+      let port = 5432;
+      const portMatch = socketAndPort.match(/^(.*):(\d+)$/);
+      if (portMatch) {
+        host = portMatch[1];
+        port = parseInt(portMatch[2], 10);
+      }
+
+      return {
+        database: database.trim(),
+        host: host.trim(),
+        port,
+        username: username.trim(),
+        hasUrl: true,
+        isConfigured: Boolean(database.trim())
+      };
+    }
+
+    try {
+      const parsed = new URL(urlStr);
+      const database = parsed.pathname.replace(/^\//, "").trim();
+      return {
+        database,
+        host: parsed.hostname.trim(),
+        port: parsed.port ? parseInt(parsed.port, 10) : 5432,
+        username: decodeURIComponent(parsed.username || "postgres").trim(),
+        hasUrl: true,
+        isConfigured: Boolean(database)
+      };
+    } catch {
+      return {
+        database: "",
+        host: "",
+        port: 5432,
+        username: "",
+        hasUrl: true,
+        isConfigured: false
+      };
+    }
+  }
+
+  // Fallback: variáveis individuais SQL_* ou PG*
+  const host = (env.SQL_HOST || env.PGHOST || "").trim();
+  const port = Number(env.SQL_PORT || env.PGPORT || 5432);
+  const username = (env.SQL_USER || env.PGUSER || "").trim();
+  const database = (env.SQL_DB_NAME || env.PGDATABASE || "").trim();
+
+  const isConfigured = Boolean(database || host);
+
+  return {
+    database,
+    host,
+    port,
+    username,
+    hasUrl: false,
+    isConfigured
+  };
+}
+
+export interface IsolatedTestCheckResult {
+  isIsolated: boolean;
+  reason: string;
+  databaseName?: string;
+}
+
+/**
+ * Validação mandatória e estrita de ambiente isolado de teste:
+ * 1. Exige identificação explícita através de TEST_DATABASE_NAME.
+ * 2. Verifica a configuração efetivamente utilizada pelo cliente PostgreSQL (DATABASE_URL ou SQL_DB_NAME/PGDATABASE).
+ * 3. Rejeita se NODE_ENV=test, NODE_ENV=development, localhost ou cloudsql estiverem sozinhos.
+ * 4. Rejeita qualquer indício de produção em nome de banco, host, URL ou ambiente.
+ * 5. Rejeita divergência entre o banco declarado para testes e o banco efetivamente conectado.
+ * 6. Exige que o banco conste na allowlist ou possua sufixo/marcador inequívoco de teste.
+ * 7. Falha fechado antes de qualquer operação de escrita.
+ * 8. Não vaza segredos, URLs brutas ou senhas nos erros e logs.
+ */
+export function isIsolatedTestEnvironment(
+  overrideEnv?: Record<string, string | undefined>
+): IsolatedTestCheckResult {
+  const env = overrideEnv || process.env;
+  const config = getEffectivePostgresConfig(env);
+
+  const nodeEnv = (env.NODE_ENV || "").toLowerCase().trim();
+  const declaredTestDb = (env.TEST_DATABASE_NAME || env.TEST_DB_NAME || "").trim();
+  const effectiveDb = config.database.trim();
+  const effectiveHost = config.host.trim().toLowerCase();
+  const urlCheck = (env.DATABASE_URL || env.POSTGRES_URL || env.DATABASE_CONNECTION_STRING || "").toLowerCase();
+
+  // 1. Rejeição imediata se houver qualquer indício de produção
+  const isProduction =
+    nodeEnv === "production" ||
+    effectiveDb.toLowerCase().includes("prod") ||
+    effectiveDb.toLowerCase().includes("production") ||
+    declaredTestDb.toLowerCase().includes("prod") ||
+    declaredTestDb.toLowerCase().includes("production") ||
+    effectiveHost.includes("prod") ||
+    effectiveHost.includes("production") ||
+    urlCheck.includes("prod") ||
+    urlCheck.includes("production");
 
   if (isProduction) {
     return {
       isIsolated: false,
-      reason: "Ambiente identificado como PROD ou banco de dados com termologia produtiva."
+      reason: "Execução rejeitada: Configuração identificada como ambiente de produção ou com terminologia produtiva."
     };
   }
 
-  const isDevOrTest = 
-    nodeEnv === "test" || 
-    nodeEnv === "development" || 
-    dbName.includes("development") || 
-    dbName.includes("dev") || 
-    dbName.includes("test") || 
-    host.includes("cloudsql") ||
-    host.includes("localhost") ||
-    host.includes("127.0.0.1") ||
-    host.includes("ai-studio-b5818bcf");
-
-  if (!isDevOrTest) {
+  // 2. Rejeição se a identificação explícita de teste (TEST_DATABASE_NAME) estiver ausente
+  // Não aceita NODE_ENV=test, NODE_ENV=development, localhost ou cloudsql isoladamente
+  if (!declaredTestDb) {
     return {
       isIsolated: false,
-      reason: "Configuração do banco de dados não possui marcação explícita de isolamento (dev/test)."
+      reason: "Execução com escrita recusada: Marcador explícito de banco de teste ausente. Defina a variável TEST_DATABASE_NAME com o nome exato do banco isolado autorizado para testes."
+    };
+  }
+
+  // 3. Rejeição se a configuração do cliente PostgreSQL estiver ausente ou incompleta
+  if (!effectiveDb) {
+    return {
+      isIsolated: false,
+      reason: "Execução rejeitada: Configuração de banco de dados ausente no cliente PostgreSQL (DATABASE_URL, SQL_DB_NAME ou PGDATABASE não definidos)."
+    };
+  }
+
+  if (!config.hasUrl && !effectiveHost) {
+    return {
+      isIsolated: false,
+      reason: "Execução rejeitada: Host do PostgreSQL ausente (SQL_HOST ou PGHOST não definidos)."
+    };
+  }
+
+  // 4. Rejeição de bancos genéricos ou compartilhados
+  if (["postgres", "template1", "defaultdb"].includes(effectiveDb.toLowerCase())) {
+    return {
+      isIsolated: false,
+      reason: "Execução rejeitada: O banco configurado é genérico/compartilhado ('postgres'/defaultdb). Exige banco de teste dedicado."
+    };
+  }
+
+  // 5. Rejeição por divergência entre o banco declarado de teste e a conexão efetiva
+  if (effectiveDb.toLowerCase() !== declaredTestDb.toLowerCase()) {
+    return {
+      isIsolated: false,
+      reason: `Divergência de configuração: O banco declarado para testes (${declaredTestDb}) não coincide com o banco configurado para a conexão do cliente (${effectiveDb}).`
+    };
+  }
+
+  // 6. Verificação de autorização explícita na Allowlist ou nomenclatura de teste
+  const isAuthorized =
+    AUTHORIZED_TEST_DATABASES.map(d => d.toLowerCase()).includes(effectiveDb.toLowerCase()) ||
+    effectiveDb.toLowerCase().endsWith("_test") ||
+    effectiveDb.toLowerCase().startsWith("test_");
+
+  if (!isAuthorized) {
+    return {
+      isIsolated: false,
+      reason: `Banco não autorizado: O banco de dados '${effectiveDb}' não consta na allowlist de bancos de teste autorizados.`
     };
   }
 
   return {
     isIsolated: true,
-    reason: `Ambiente isolado confirmado: [db: ${dbName || 'development_db'}, env: ${nodeEnv || 'test'}]`
+    reason: `Ambiente isolado de teste confirmado positivamente: banco autorizado '${effectiveDb}' validado contra a conexão do cliente.`,
+    databaseName: effectiveDb
   };
 }
 
