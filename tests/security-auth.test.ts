@@ -2489,6 +2489,8 @@ async function runSecurityTestSuite() {
     // 15.6 Configuração dedicada e completa de banco de teste é aceita
     const checkCompleteConfig = isIsolatedTestEnvironment({
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "test_user",
+      TEST_INSTANCE_ID: "127.0.0.1",
       SQL_DB_NAME: "s1gestao_test",
       SQL_HOST: "127.0.0.1",
       SQL_USER: "test_user"
@@ -2502,6 +2504,8 @@ async function runSecurityTestSuite() {
 
     const checkCompleteUrl = isIsolatedTestEnvironment({
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "test_user",
+      TEST_INSTANCE_ID: "127.0.0.1",
       DATABASE_URL: "postgresql://test_user:test_pass@127.0.0.1:5432/s1gestao_test"
     });
     assert(
@@ -2514,7 +2518,10 @@ async function runSecurityTestSuite() {
     // 15.7 Divergência entre nome declarado de teste e banco configurado é rejeitada
     const checkDivergence = isIsolatedTestEnvironment({
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "test_user",
+      TEST_INSTANCE_ID: "127.0.0.1",
       SQL_DB_NAME: "banco_operacional_divergente",
+      SQL_USER: "test_user",
       SQL_HOST: "127.0.0.1"
     });
     assert(
@@ -2535,6 +2542,8 @@ async function runSecurityTestSuite() {
     // 15.9 Rejeição de banco da allowlist conectado a uma instância não verificada
     const checkUnverifiedHost = isIsolatedTestEnvironment({
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "test_user",
+      TEST_INSTANCE_ID: "unverified-db.company.internal",
       SQL_DB_NAME: "s1gestao_test",
       SQL_HOST: "unverified-db.company.internal",
       SQL_USER: "test_user"
@@ -2550,8 +2559,11 @@ async function runSecurityTestSuite() {
     // 15.10 Rejeição de socket Cloud SQL sem projeto/instância autorizados
     const checkUnauthorizedCloudSql = isIsolatedTestEnvironment({
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "test_user",
+      TEST_INSTANCE_ID: "corp-cloud:us-east1:corp-database",
       SQL_DB_NAME: "s1gestao_test",
-      SQL_HOST: "/app/cloudsql/corp-prod:us-east1:prod-database"
+      SQL_USER: "test_user",
+      SQL_HOST: "/app/cloudsql/corp-cloud:us-east1:corp-database"
     });
     assert(
       checkUnauthorizedCloudSql.isIsolated === false,
@@ -2564,6 +2576,8 @@ async function runSecurityTestSuite() {
     // 15.11 Rejeição de usuário de banco sem identidade de teste confirmada (ex: root/admin)
     const checkDangerousUser = isIsolatedTestEnvironment({
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "root",
+      TEST_INSTANCE_ID: "127.0.0.1",
       SQL_DB_NAME: "s1gestao_test",
       SQL_HOST: "127.0.0.1",
       SQL_USER: "root"
@@ -2579,11 +2593,13 @@ async function runSecurityTestSuite() {
     // 15.12 Rejeição de divergência de conexão real via verifyLiveTestConnection
     const mockLiveDivergence = {
       execute: async () => [
-        { current_db: "banco_divergente_real", current_usr: "test_user", is_superuser: "off", can_connect: true }
+        { current_db: "banco_divergente_real", current_usr: "test_user", session_usr: "test_user", is_superuser: "off", can_connect: true, can_usage_schema: true }
       ]
     };
     const liveDivResult = await verifyLiveTestConnection(mockLiveDivergence, () => ({}), {
       TEST_DATABASE_NAME: "s1gestao_test",
+      TEST_DB_USER: "test_user",
+      TEST_INSTANCE_ID: "127.0.0.1",
       SQL_DB_NAME: "s1gestao_test",
       SQL_HOST: "127.0.0.1",
       SQL_USER: "test_user"
