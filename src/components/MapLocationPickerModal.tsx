@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { reverseGeocodeCoordinates } from '../services/addressValidation';
+import { createDefaultTileLayer, MapTileProviderKey } from '../utils/mapTiles';
 import { MapPin, Search, CheckCircle2, X, RefreshCw, Navigation, Globe, Compass } from 'lucide-react';
 
 interface MapLocationPickerModalProps {
@@ -29,7 +30,9 @@ export default function MapLocationPickerModal({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerInstanceRef = useRef<L.Marker | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
 
+  const [mapStyle, setMapStyle] = useState<MapTileProviderKey>('voyager');
   const [selectedLat, setSelectedLat] = useState<number>(initialLat || DEFAULT_LAT);
   const [selectedLng, setSelectedLng] = useState<number>(initialLng || DEFAULT_LNG);
   const [resolvedAddress, setResolvedAddress] = useState<string>(initialAddress || '');
@@ -91,9 +94,8 @@ export default function MapLocationPickerModal({
         attributionControl: false
       });
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19
-      }).addTo(map);
+      const tile = createDefaultTileLayer(L, mapStyle).addTo(map);
+      tileLayerRef.current = tile;
 
       const pinIcon = L.divIcon({
         className: 'custom-map-picker-pin',
@@ -155,8 +157,21 @@ export default function MapLocationPickerModal({
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      tileLayerRef.current = null;
     };
   }, [isOpen]);
+
+  // Update map tile style (Street / Satellite)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+    const tile = createDefaultTileLayer(L, mapStyle).addTo(map);
+    tile.bringToBack();
+    tileLayerRef.current = tile;
+  }, [mapStyle]);
 
   const handleReverseGeocode = async (lat: number, lng: number) => {
     setIsResolving(true);
@@ -183,7 +198,7 @@ export default function MapLocationPickerModal({
 
       const osmUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=br&limit=1`;
       const res = await fetch(osmUrl, {
-        headers: { 'User-Agent': 'AracatubaServicosManager/1.0' }
+        headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
       });
 
       if (res.ok) {
@@ -277,6 +292,34 @@ export default function MapLocationPickerModal({
           <div className="relative flex-1 min-h-[300px] w-full rounded-xl overflow-hidden border border-slate-800 shadow-inner z-0">
             <div ref={mapContainerRef} className="w-full h-full min-h-[300px]" />
             
+            {/* Map Style Selector Overlay */}
+            <div className="absolute top-3 left-3 bg-slate-950/90 backdrop-blur-md p-1 rounded-xl border border-slate-700 text-[10px] shadow-lg z-[1000] flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setMapStyle('voyager')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  mapStyle === 'voyager'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+                title="Mapa Urbano (CARTO Voyager)"
+              >
+                🗺️ Mapa
+              </button>
+              <button
+                type="button"
+                onClick={() => setMapStyle('satellite')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  mapStyle === 'satellite'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+                title="Satélite (Esri World Imagery)"
+              >
+                🛰️ Satélite
+              </button>
+            </div>
+
             {/* Live Coordinate Badge Overlay */}
             <div className="absolute top-3 right-3 bg-slate-950/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700 text-[10px] font-mono text-slate-200 shadow-lg z-[1000] flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />

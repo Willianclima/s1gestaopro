@@ -16,7 +16,9 @@
     "clean": "rm -rf dist server.js",
     "firestore:indexes": "tsx scripts/manage-firestore-indexes.ts",
     "lint": "tsc --noEmit",
-    "test:security": "TEST_DATABASE_NAME=cloud_sql_development_database tsx tests/security-auth.test.ts"
+    "test:unit": "cross-env tsx tests/preflight-isolation.unit.test.ts",
+    "test:security": "cross-env tsx tests/security-auth.test.ts",
+    "test": "npm run test:unit && npm run test:security"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -53,6 +55,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^10.1.0",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

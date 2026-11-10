@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { validateAddressWithGoogleMaps, AddressValidationResult, fetchAddressFromCep } from '../services/addressValidation';
+import { createDefaultTileLayer } from '../utils/mapTiles';
 import { MapPin, CheckCircle2, AlertTriangle, XCircle, Search, Sparkles, Navigation, Globe, ExternalLink, Zap } from 'lucide-react';
 
 interface AddressValidationWidgetProps {
@@ -135,9 +136,7 @@ export default function AddressValidationWidget({
       attributionControl: false
     });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19
-    }).addTo(map);
+    createDefaultTileLayer(L, 'voyager').addTo(map);
 
     const customIcon = L.divIcon({
       className: 'custom-widget-pin',

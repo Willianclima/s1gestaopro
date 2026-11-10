@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import L from 'leaflet';
 import { ServiceOrder, Client } from '../types';
+import { createDefaultTileLayer, MapTileProviderKey } from '../utils/mapTiles';
 import { MapPin, Navigation, Eye, Filter, CheckCircle2, Clock, AlertTriangle, Layers, Building2, User, RefreshCw, CheckCheck, Compass, Target, Locate, LocateFixed } from 'lucide-react';
 
 interface ServiceOrdersMapProps {
@@ -77,9 +78,13 @@ export default function ServiceOrdersMap({
 }: ServiceOrdersMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
   const userRadiusCircleRef = useRef<L.Circle | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
+
+  // Map Tile Style ('voyager' for street view, 'satellite' for aerial view)
+  const [mapStyle, setMapStyle] = useState<MapTileProviderKey>('voyager');
 
   // Lazy loading state: defer heavy Leaflet initialization until after initial Dashboard render
   const [isMapLoaded, setIsMapLoaded] = useState<boolean>(false);
@@ -270,7 +275,7 @@ export default function ServiceOrdersMap({
 
           const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchAddr)}&countrycodes=br&limit=1`;
           const response = await fetch(url, {
-            headers: { 'User-Agent': 'AracatubaServicosManagerApp/1.0' }
+            headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
           });
 
           if (response.ok) {
@@ -401,10 +406,8 @@ export default function ServiceOrdersMap({
       attributionControl: false
     });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
+    const tile = createDefaultTileLayer(L, mapStyle).addTo(map);
+    tileLayerRef.current = tile;
 
     markersGroupRef.current = L.layerGroup().addTo(map);
     mapInstanceRef.current = map;
@@ -414,8 +417,21 @@ export default function ServiceOrdersMap({
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      tileLayerRef.current = null;
     };
   }, [isMapLoaded]);
+
+  // Sync map tile style change (Street vs Satellite)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+    const tile = createDefaultTileLayer(L, mapStyle).addTo(map);
+    tile.bringToBack();
+    tileLayerRef.current = tile;
+  }, [mapStyle]);
 
   // Render User Location 5km Radius Circle and User Marker
   useEffect(() => {
@@ -937,6 +953,36 @@ export default function ServiceOrdersMap({
             </div>
           ) : (
             <div id="map-container" ref={mapContainerRef} className="w-full h-full" />
+          )}
+
+          {/* Map Style Selector Overlay */}
+          {isMapLoaded && (
+            <div className="absolute top-3 right-3 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-200 shadow-md text-[10px] font-bold text-slate-700 z-[1000] flex items-center gap-1 pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => setMapStyle('voyager')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  mapStyle === 'voyager'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+                title="Mapa Urbano Detalhado (CARTO Voyager - 100% livre de bloqueios)"
+              >
+                🗺️ Mapa
+              </button>
+              <button
+                type="button"
+                onClick={() => setMapStyle('satellite')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  mapStyle === 'satellite'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+                title="Imagens Aéreas e de Satélite (Esri World Imagery)"
+              >
+                🛰️ Satélite
+              </button>
+            </div>
           )}
 
           {/* Map Floating Legend */}

@@ -163,7 +163,7 @@ export async function validateAddressWithGoogleMaps(
   try {
     const osmUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchAddress)}&countrycodes=br&addressdetails=1&limit=1`;
     const res = await fetch(osmUrl, {
-      headers: { 'User-Agent': 'AracatubaServicosManager/1.0' }
+      headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
     });
 
     if (res.ok) {
@@ -231,7 +231,7 @@ export async function reverseGeocodeCoordinates(lat: number, lng: number): Promi
   try {
     const osmUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`;
     const res = await fetch(osmUrl, {
-      headers: { 'User-Agent': 'AracatubaServicosManager/1.0' }
+      headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
     });
 
     if (res.ok) {

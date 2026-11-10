@@ -15,7 +15,7 @@
 
 import http from "http";
 import crypto from "crypto";
-import { app, isIsolatedTestEnvironment } from "../server.ts";
+import { app, isIsolatedTestEnvironment, verifyLiveTestConnection } from "../server.ts";
 import {
   signServerSessionToken,
   getSessionSecret,
@@ -126,27 +126,46 @@ async function runSecurityTestSuite() {
   // -------------------------------------------------------------
   // Preflight Mandatório: Confirmação de Ambiente Isolado de Teste
   // -------------------------------------------------------------
-    console.log("📌 Preflight: Validando se a conexão aponta para um banco de teste explicitamente isolado...");
-    const isolationCheck = isIsolatedTestEnvironment();
-    assert(
-      isolationCheck.isIsolated,
-      "Preflight de Segurança: Conexão aponta para banco explicitamente isolado e autorizado de teste",
-      "true",
-      String(isolationCheck.isIsolated),
-      isolationCheck.reason
-    );
-    if (!isolationCheck.isIsolated) {
-      console.error("\n🛑 =====================================================");
-      console.error("🛑 EXECUÇÃO DE ESCRITA RECUSADA PELO PREFLIGHT DE SEGURANÇA");
-      console.error("🛑 =====================================================");
-      console.error(`Motivo: ${isolationCheck.reason}\n`);
-      console.error("Para executar testes com escrita no banco de dados, configure:");
-      console.error("  1. TEST_DATABASE_NAME=<nome_do_banco_autorizado>");
-      console.error("  2. Certifique-se de que o cliente PostgreSQL conecte ao mesmo banco (SQL_DB_NAME ou DATABASE_URL).");
-      console.error("  3. Certifique-se de que o banco não contenha terminologia produtiva e conste na allowlist autorizada.\n");
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      process.exit(1);
-    }
+  console.log("📌 Preflight: Validando se a conexão aponta para um banco de teste explicitamente isolado...");
+  const isolationCheck = isIsolatedTestEnvironment();
+  assert(
+    isolationCheck.isIsolated,
+    "Preflight de Segurança: Conexão aponta para banco explicitamente isolado e autorizado de teste",
+    "true",
+    String(isolationCheck.isIsolated),
+    isolationCheck.reason
+  );
+  if (!isolationCheck.isIsolated) {
+    console.error("\n🛑 =====================================================");
+    console.error("🛑 EXECUÇÃO DE ESCRITA RECUSADA PELO PREFLIGHT DE SEGURANÇA");
+    console.error("🛑 =====================================================");
+    console.error(`Motivo: ${isolationCheck.reason}\n`);
+    console.error("Para executar testes com escrita no banco de dados, configure:");
+    console.error("  1. TEST_DATABASE_NAME=<nome_do_banco_autorizado>");
+    console.error("  2. Certifique-se de que o cliente PostgreSQL conecte ao mesmo banco (SQL_DB_NAME ou DATABASE_URL).");
+    console.error("  3. Certifique-se de que o banco não contenha terminologia produtiva e conste na allowlist autorizada.\n");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    process.exit(1);
+  }
+
+  // Preflight ao Vivo: Consulta direta no PostgreSQL antes de qualquer escrita
+  console.log("📌 Preflight ao Vivo: Verificando identidade da conexão PostgreSQL ativa e privilégios limitados...");
+  const liveCheck = await verifyLiveTestConnection(db, sql);
+  assert(
+    liveCheck.isIsolated,
+    "Preflight ao Vivo: Conexão real validada no PostgreSQL (banco, usuário e privilégios limitados confirmados)",
+    "true",
+    String(liveCheck.isIsolated),
+    liveCheck.reason
+  );
+  if (!liveCheck.isIsolated) {
+    console.error("\n🛑 =====================================================");
+    console.error("🛑 EXECUÇÃO RECUSADA: CONEXÃO REAL NÃO VALIDADA COMO ISOLADA");
+    console.error("🛑 =====================================================");
+    console.error(`Motivo: ${liveCheck.reason}\n`);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    process.exit(1);
+  }
 
     // -------------------------------------------------------------
     // Preflight Somente-Leitura: Integridade e Vínculos Órfãos
@@ -2513,7 +2532,71 @@ async function runSecurityTestSuite() {
       String(!checkCompleteConfig.reason.includes("password"))
     );
 
-    // 15.9 Isolamento em Nível de Teste: Remoção cirúrgica de artefato próprio sem tocar registros de controle
+    // 15.9 Rejeição de banco da allowlist conectado a uma instância não verificada
+    const checkUnverifiedHost = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      SQL_DB_NAME: "s1gestao_test",
+      SQL_HOST: "unverified-db.company.internal",
+      SQL_USER: "test_user"
+    });
+    assert(
+      checkUnverifiedHost.isIsolated === false,
+      "Preflight: Banco da allowlist conectado a uma instância não verificada é rejeitado",
+      "false",
+      String(checkUnverifiedHost.isIsolated),
+      checkUnverifiedHost.reason
+    );
+
+    // 15.10 Rejeição de socket Cloud SQL sem projeto/instância autorizados
+    const checkUnauthorizedCloudSql = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      SQL_DB_NAME: "s1gestao_test",
+      SQL_HOST: "/app/cloudsql/corp-prod:us-east1:prod-database"
+    });
+    assert(
+      checkUnauthorizedCloudSql.isIsolated === false,
+      "Preflight: Socket Cloud SQL sem projeto/instância autorizados é rejeitado",
+      "false",
+      String(checkUnauthorizedCloudSql.isIsolated),
+      checkUnauthorizedCloudSql.reason
+    );
+
+    // 15.11 Rejeição de usuário de banco sem identidade de teste confirmada (ex: root/admin)
+    const checkDangerousUser = isIsolatedTestEnvironment({
+      TEST_DATABASE_NAME: "s1gestao_test",
+      SQL_DB_NAME: "s1gestao_test",
+      SQL_HOST: "127.0.0.1",
+      SQL_USER: "root"
+    });
+    assert(
+      checkDangerousUser.isIsolated === false,
+      "Preflight: Usuário de banco com privilégios administrativos (root) é rejeitado",
+      "false",
+      String(checkDangerousUser.isIsolated),
+      checkDangerousUser.reason
+    );
+
+    // 15.12 Rejeição de divergência de conexão real via verifyLiveTestConnection
+    const mockLiveDivergence = {
+      execute: async () => [
+        { current_db: "banco_divergente_real", current_usr: "test_user", is_superuser: "off", can_connect: true }
+      ]
+    };
+    const liveDivResult = await verifyLiveTestConnection(mockLiveDivergence, () => ({}), {
+      TEST_DATABASE_NAME: "s1gestao_test",
+      SQL_DB_NAME: "s1gestao_test",
+      SQL_HOST: "127.0.0.1",
+      SQL_USER: "test_user"
+    });
+    assert(
+      liveDivResult.isIsolated === false,
+      "Preflight: Divergência entre configuração declarada e conexão real no PostgreSQL é rejeitada",
+      "false",
+      String(liveDivResult.isIsolated),
+      liveDivResult.reason
+    );
+
+    // 15.13 Isolamento em Nível de Teste: Remoção cirúrgica de artefato próprio sem tocar registros de controle
     const isolatedSubTestId = `subtest-cit-${Date.now()}`;
     await upsertUsuario({
       id: isolatedSubTestId,
