@@ -125,11 +125,14 @@ const app = express();
 // Configura 'trust proxy' para 1 salto de proxy reverso (Cloud Run / Nginx)
 app.set("trust proxy", 1);
 
-// 1. Proteção de Cabeçalhos HTTP com Helmet
+// 1. Proteção de Cabeçalhos HTTP com Helmet (compatível com o ambiente de iFrame do AI Studio)
 app.use(
   helmet({
-    contentSecurityPolicy: false, // Mantém compatibilidade com o ambiente de iFrame e scripts do Vite
-    crossOriginEmbedderPolicy: false
+    contentSecurityPolicy: false, // Mantém compatibilidade com scripts do Vite
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    crossOriginResourcePolicy: false,
+    frameguard: false // Permite renderização dentro do iFrame do Google AI Studio
   })
 );
 
@@ -189,7 +192,16 @@ const userLoginRateLimiter = rateLimit({
 app.use("/api/", apiRateLimiter);
 app.use("/api/auth/", authRateLimiter);
 
-const PORT = 3000;
+function getPort(): number {
+  const portArgIdx = process.argv.indexOf("--port");
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    const parsed = parseInt(process.argv[portArgIdx + 1], 10);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return Number(process.env.PORT) || 3000;
+}
+
+const PORT = getPort();
 
 // Lazy initialize Gemini client to prevent startup crash if GEMINI_API_KEY is missing
 let aiClient: GoogleGenAI | null = null;
