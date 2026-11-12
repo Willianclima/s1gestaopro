@@ -35,17 +35,29 @@ function createMockDbExecutor(config: {
   identityRow?: any;
   roleRows?: any[];
   otherDbRows?: any[];
+  roleError?: Error;
+  databaseError?: Error;
+  identityError?: Error;
 }) {
   return {
     execute: async (queryObj: any) => {
       const sqlText = queryObj?.sql || queryObj?.text || String(queryObj);
       if (sqlText.includes("pg_roles")) {
-        return config.roleRows || [
+        if (config.roleError) {
+          throw config.roleError;
+        }
+        return config.roleRows !== undefined ? config.roleRows : [
           { is_super: false, can_create_role: false, can_create_db: false, can_replicate: false }
         ];
       }
       if (sqlText.includes("pg_database")) {
-        return config.otherDbRows || [];
+        if (config.databaseError) {
+          throw config.databaseError;
+        }
+        return config.otherDbRows !== undefined ? config.otherDbRows : [];
+      }
+      if (config.identityError) {
+        throw config.identityError;
       }
       return [
         config.identityRow || {
@@ -537,6 +549,62 @@ async function runUnitTests() {
     checkLiveClusterAdmin.reason
   );
 
+  // 8.6b Rejeição de rolcreatedb = true
+  const mockCreateDbRole = createMockDbExecutor({
+    roleRows: [
+      { is_super: false, can_create_role: false, can_create_db: true, can_replicate: false }
+    ]
+  });
+  const checkLiveCreateDb = await verifyLiveTestConnection(mockCreateDbRole, mockSqlTag, validEnv);
+  assert(
+    checkLiveCreateDb.isIsolated === false && checkLiveCreateDb.reason.includes("rolcreatedb"),
+    "Live Mock: Privilégio rolcreatedb = true é rejeitado",
+    "false",
+    String(checkLiveCreateDb.isIsolated),
+    checkLiveCreateDb.reason
+  );
+
+  // 8.6c Consulta a pg_roles rejeitada (lança erro / permissão negada)
+  const mockRolesError = createMockDbExecutor({
+    roleError: new Error("permission denied for table pg_roles")
+  });
+  const checkLiveRolesError = await verifyLiveTestConnection(mockRolesError, mockSqlTag, validEnv);
+  assert(
+    checkLiveRolesError.isIsolated === false && checkLiveRolesError.reason.includes("Falha ao verificar privilégios em pg_roles"),
+    "Live Mock: Consulta a pg_roles que falha/gera exceção é rejeitada (fail-closed)",
+    "false",
+    String(checkLiveRolesError.isIsolated),
+    checkLiveRolesError.reason
+  );
+
+  // 8.6d Consulta a pg_roles vazia ([])
+  const mockRolesEmpty = createMockDbExecutor({
+    roleRows: []
+  });
+  const checkLiveRolesEmpty = await verifyLiveTestConnection(mockRolesEmpty, mockSqlTag, validEnv);
+  assert(
+    checkLiveRolesEmpty.isIsolated === false && checkLiveRolesEmpty.reason.includes("vazia ou incompleta"),
+    "Live Mock: Consulta a pg_roles vazia é rejeitada (fail-closed)",
+    "false",
+    String(checkLiveRolesEmpty.isIsolated),
+    checkLiveRolesEmpty.reason
+  );
+
+  // 8.6e Consulta a pg_roles incompleta / tipos inválidos
+  const mockRolesIncomplete = createMockDbExecutor({
+    roleRows: [
+      { is_super: false, can_create_role: false, can_create_db: null, can_replicate: false }
+    ]
+  });
+  const checkLiveRolesIncomplete = await verifyLiveTestConnection(mockRolesIncomplete, mockSqlTag, validEnv);
+  assert(
+    checkLiveRolesIncomplete.isIsolated === false && checkLiveRolesIncomplete.reason.includes("incompleto, ausente ou com tipos inválidos"),
+    "Live Mock: Consulta a pg_roles com campos ausentes ou tipos inválidos é rejeitada",
+    "false",
+    String(checkLiveRolesIncomplete.isIsolated),
+    checkLiveRolesIncomplete.reason
+  );
+
   // 8.7 Rejeição quando a conta tem acesso de conexão a banco de produção no cluster
   const mockProdAccess = createMockDbExecutor({
     identityRow: {
@@ -560,6 +628,49 @@ async function runUnitTests() {
     checkLiveProdAccess.reason
   );
 
+  // 8.7b Consulta a pg_database rejeitada (lança erro / exceção)
+  const mockDatabaseError = createMockDbExecutor({
+    databaseError: new Error("permission denied for relation pg_database")
+  });
+  const checkLiveDatabaseError = await verifyLiveTestConnection(mockDatabaseError, mockSqlTag, validEnv);
+  assert(
+    checkLiveDatabaseError.isIsolated === false && checkLiveDatabaseError.reason.includes("Falha ao inspecionar bancos de dados"),
+    "Live Mock: Consulta a pg_database que falha/gera exceção é rejeitada (fail-closed)",
+    "false",
+    String(checkLiveDatabaseError.isIsolated),
+    checkLiveDatabaseError.reason
+  );
+
+  // 8.7c Consulta a pg_database incompleta / estrutura inesperada
+  const mockDatabaseIncomplete = createMockDbExecutor({
+    otherDbRows: [
+      { datname: "banco_desconhecido", can_connect_other: null, can_create_other: false }
+    ]
+  });
+  const checkLiveDatabaseIncomplete = await verifyLiveTestConnection(mockDatabaseIncomplete, mockSqlTag, validEnv);
+  assert(
+    checkLiveDatabaseIncomplete.isIsolated === false && checkLiveDatabaseIncomplete.reason.includes("incompleto ou ambíguo"),
+    "Live Mock: Consulta a pg_database com campos ausentes/inválidos é rejeitada",
+    "false",
+    String(checkLiveDatabaseIncomplete.isIsolated),
+    checkLiveDatabaseIncomplete.reason
+  );
+
+  // 8.7d Acesso a banco adicional não autorizado (fora da allowlist de testes)
+  const mockUnauthorizedExtraDb = createMockDbExecutor({
+    otherDbRows: [
+      { datname: "financeiro_operacional_db", can_connect_other: true, can_create_other: false }
+    ]
+  });
+  const checkLiveExtraDb = await verifyLiveTestConnection(mockUnauthorizedExtraDb, mockSqlTag, validEnv);
+  assert(
+    checkLiveExtraDb.isIsolated === false && checkLiveExtraDb.reason.includes("Acesso a banco adicional não autorizado"),
+    "Live Mock: Conta com privilégio CONNECT em banco adicional fora da allowlist é rejeitada",
+    "false",
+    String(checkLiveExtraDb.isIsolated),
+    checkLiveExtraDb.reason
+  );
+
   // 8.8 Rejeição quando a conta não tem privilégio de USAGE no schema public do banco de teste
   const mockMissingUsage = createMockDbExecutor({
     identityRow: {
@@ -578,6 +689,38 @@ async function runUnitTests() {
     "false",
     String(checkLiveMissingUsage.isIsolated),
     checkLiveMissingUsage.reason
+  );
+
+  // 8.8b Erro ou resultado ambíguo na verificação de identidade/privilégios
+  const mockIdentityAmbiguous = createMockDbExecutor({
+    identityRow: {
+      current_db: "s1gestao_test",
+      current_usr: "test_user",
+      session_usr: "test_user",
+      is_superuser: "off",
+      can_connect: true,
+      can_usage_schema: null // Ambíguo / não booleano
+    }
+  });
+  const checkLiveIdentityAmbiguous = await verifyLiveTestConnection(mockIdentityAmbiguous, mockSqlTag, validEnv);
+  assert(
+    checkLiveIdentityAmbiguous.isIsolated === false && checkLiveIdentityAmbiguous.reason.includes("Estrutura incompleta ou tipos inválidos"),
+    "Live Mock: Identidade com campos ausentes ou tipos não-booleanos é rejeitada",
+    "false",
+    String(checkLiveIdentityAmbiguous.isIsolated),
+    checkLiveIdentityAmbiguous.reason
+  );
+
+  const mockIdentityError = createMockDbExecutor({
+    identityError: new Error("connection terminated unexpectedly")
+  });
+  const checkLiveIdentityError = await verifyLiveTestConnection(mockIdentityError, mockSqlTag, validEnv);
+  assert(
+    checkLiveIdentityError.isIsolated === false && checkLiveIdentityError.reason.includes("Falha ao consultar identidade ou privilégios"),
+    "Live Mock: Exceção durante consulta de identidade é capturada com mensagem segura e bloqueia",
+    "false",
+    String(checkLiveIdentityError.isIsolated),
+    checkLiveIdentityError.reason
   );
 
   // 8.9 Conexão real válida com conta isolada e privilégios mínimos confirmados

@@ -427,13 +427,35 @@ export async function verifyLiveTestConnection(
         has_schema_privilege(current_user, 'public', 'USAGE') as can_usage_schema;
     `);
 
+    if (!Array.isArray(identityResult) || identityResult.length === 0) {
+      return {
+        isIsolated: false,
+        reason: "Consulta de identidade no PostgreSQL retornou vazia. Impossível determinar o banco e o usuário conectados."
+      };
+    }
+
     const row = identityResult[0] as any;
-    const currentDb = String(row?.current_db || "").trim();
-    const currentUsr = String(row?.current_usr || "").trim();
-    const sessionUsr = String(row?.session_usr || "").trim();
-    const isSuperuser = String(row?.is_superuser || "").trim().toLowerCase();
-    const canConnect = Boolean(row?.can_connect);
-    const canUsageSchema = Boolean(row?.can_usage_schema);
+    if (
+      !row ||
+      typeof row.current_db !== "string" ||
+      typeof row.current_usr !== "string" ||
+      typeof row.session_usr !== "string" ||
+      typeof row.is_superuser !== "string" ||
+      typeof row.can_connect !== "boolean" ||
+      typeof row.can_usage_schema !== "boolean"
+    ) {
+      return {
+        isIsolated: false,
+        reason: "Estrutura incompleta ou tipos inválidos na consulta de identidade do PostgreSQL. Impossível comprovar isolamento."
+      };
+    }
+
+    const currentDb = row.current_db.trim();
+    const currentUsr = row.current_usr.trim();
+    const sessionUsr = row.session_usr.trim();
+    const isSuperuser = row.is_superuser.trim().toLowerCase();
+    const canConnect = row.can_connect;
+    const canUsageSchema = row.can_usage_schema;
 
     // Validação 1: Banco real conectado deve coincidir estritamente com TEST_DATABASE_NAME
     if (currentDb.toLowerCase() !== declaredDb.toLowerCase()) {
@@ -490,9 +512,10 @@ export async function verifyLiveTestConnection(
       };
     }
 
-    // Validação 7: Verificação de papéis e privilégios elevados de cluster
+    // Validação 7: Verificação obrigatória de papéis e privilégios de cluster em pg_roles (Fail-Closed)
+    let roleResult: any[];
     try {
-      const roleResult = await dbExecutor.execute(sqlTag`
+      roleResult = await dbExecutor.execute(sqlTag`
         SELECT 
           rolsuper as is_super,
           rolcreaterole as can_create_role,
@@ -501,23 +524,51 @@ export async function verifyLiveTestConnection(
         FROM pg_roles 
         WHERE rolname = current_user;
       `);
-
-      if (roleResult && roleResult.length > 0) {
-        const roleRow = roleResult[0] as any;
-        if (roleRow.is_super || roleRow.can_create_role || roleRow.can_replicate) {
-          return {
-            isIsolated: false,
-            reason: `Privilégios cluster excessivos: A conta '${currentUsr}' possui privilégios de administração de cluster (rolsuper, rolcreaterole ou rolreplication). A conta de teste deve ter escopo estritamente local.`
-          };
-        }
-      }
     } catch {
-      // Caso pg_roles não seja legível para usuários restritos, prossegue para verificação de bancos
+      return {
+        isIsolated: false,
+        reason: "Falha ao verificar privilégios em pg_roles: acesso negado ou erro ao consultar privilégios de cluster da conta. A ausência de comprovação impede a execução."
+      };
     }
 
-    // Validação 8: Verificação estrita de AUSÊNCIA de permissão em bancos de produção no mesmo cluster
+    if (!Array.isArray(roleResult) || roleResult.length === 0) {
+      return {
+        isIsolated: false,
+        reason: "Consulta a pg_roles retornou vazia ou incompleta. Não foi possível comprovar os privilégios da conta de teste."
+      };
+    }
+
+    const roleRow = roleResult[0] as any;
+    if (
+      !roleRow ||
+      typeof roleRow.is_super !== "boolean" ||
+      typeof roleRow.can_create_role !== "boolean" ||
+      typeof roleRow.can_create_db !== "boolean" ||
+      typeof roleRow.can_replicate !== "boolean"
+    ) {
+      return {
+        isIsolated: false,
+        reason: "Resultado de pg_roles incompleto, ausente ou com tipos inválidos. Privilégios da conta de teste não puderam ser comprovados."
+      };
+    }
+
+    if (roleRow.is_super || roleRow.can_create_role || roleRow.can_create_db || roleRow.can_replicate) {
+      const activePrivs = [
+        roleRow.is_super ? "rolsuper" : "",
+        roleRow.can_create_role ? "rolcreaterole" : "",
+        roleRow.can_create_db ? "rolcreatedb" : "",
+        roleRow.can_replicate ? "rolreplication" : ""
+      ].filter(Boolean).join(", ");
+      return {
+        isIsolated: false,
+        reason: `Privilégios cluster excessivos: A conta '${currentUsr}' possui privilégios administrativos (${activePrivs}). A conta de teste deve ter privilégios estritamente mínimos.`
+      };
+    }
+
+    // Validação 8: Verificação obrigatória de isolamento contra outros bancos em pg_database (Fail-Closed)
+    let otherDbsResult: any[];
     try {
-      const otherDbsResult = await dbExecutor.execute(sqlTag`
+      otherDbsResult = await dbExecutor.execute(sqlTag`
         SELECT 
           d.datname,
           has_database_privilege(current_user, d.datname, 'CONNECT') as can_connect_other,
@@ -526,32 +577,63 @@ export async function verifyLiveTestConnection(
         WHERE d.datistemplate = false 
           AND d.datname != current_database();
       `);
-
-      for (const otherDb of otherDbsResult) {
-        const otherName = String(otherDb.datname || "").toLowerCase();
-        const canConnectOther = Boolean(otherDb.can_connect_other);
-        const canCreateOther = Boolean(otherDb.can_create_other);
-
-        // Se houver qualquer banco com terminologia de produção
-        const isProdName = otherName.includes("prod") || otherName.includes("production");
-
-        if (isProdName && (canConnectOther || canCreateOther)) {
-          return {
-            isIsolated: false,
-            reason: `Violação de isolamento: A conta '${currentUsr}' possui acesso de conexão/escrita ao banco de produção '${otherDb.datname}' na mesma instância. A conta de teste não pode ter permissões em produção.`
-          };
-        }
-
-        // Não pode ter privilégio de CREATE em outros bancos do cluster
-        if (canCreateOther) {
-          return {
-            isIsolated: false,
-            reason: `Privilégios mais amplos que o necessário: A conta '${currentUsr}' possui privilégio de escrita/criação em outro banco de dados ('${otherDb.datname}').`
-          };
-        }
-      }
     } catch {
-      // Prossegue se pg_database não puder ser enumerado por falta de privilégio
+      return {
+        isIsolated: false,
+        reason: "Falha ao inspecionar bancos de dados na instância (pg_database): acesso negado ou erro ao consultar isolamento. A falta de evidência impede a execução."
+      };
+    }
+
+    if (!Array.isArray(otherDbsResult)) {
+      return {
+        isIsolated: false,
+        reason: "Consulta a pg_database retornou formato inválido. Impossível comprovar isolamento da conta de teste."
+      };
+    }
+
+    for (const otherDb of otherDbsResult) {
+      if (
+        !otherDb ||
+        typeof otherDb.datname !== "string" ||
+        typeof otherDb.can_connect_other !== "boolean" ||
+        typeof otherDb.can_create_other !== "boolean"
+      ) {
+        return {
+          isIsolated: false,
+          reason: "Resultado de pg_database incompleto ou ambíguo. Não foi possível verificar todos os bancos da instância."
+        };
+      }
+
+      const otherName = otherDb.datname.trim().toLowerCase();
+      const canConnectOther = otherDb.can_connect_other;
+      const canCreateOther = otherDb.can_create_other;
+
+      const isProdName = otherName.includes("prod") || otherName.includes("production");
+      const isAuthorizedTestDb = AUTHORIZED_TEST_DATABASES.map(d => d.toLowerCase()).includes(otherName);
+
+      // Rejeita acesso a qualquer banco com identificação de produção
+      if (isProdName && (canConnectOther || canCreateOther)) {
+        return {
+          isIsolated: false,
+          reason: `Violação de isolamento: A conta '${currentUsr}' possui acesso de conexão/escrita ao banco de produção '${otherDb.datname}' na mesma instância. A conta de teste não pode ter permissões em produção.`
+        };
+      }
+
+      // Rejeita privilégio de criação em outros bancos
+      if (canCreateOther) {
+        return {
+          isIsolated: false,
+          reason: `Privilégios mais amplos que o necessário: A conta '${currentUsr}' possui privilégio de escrita/criação em outro banco de dados ('${otherDb.datname}').`
+        };
+      }
+
+      // Rejeita acesso de conexão a qualquer banco adicional que não esteja na allowlist autorizada de testes
+      if (!isAuthorizedTestDb && canConnectOther) {
+        return {
+          isIsolated: false,
+          reason: `Acesso a banco adicional não autorizado: A conta '${currentUsr}' possui privilégio CONNECT no banco '${otherDb.datname}', que não consta na allowlist de bancos de teste autorizados.`
+        };
+      }
     }
 
     return {
@@ -561,10 +643,10 @@ export async function verifyLiveTestConnection(
       username: currentUsr,
       sessionUser: sessionUsr
     };
-  } catch (err: any) {
+  } catch {
     return {
       isIsolated: false,
-      reason: `Falha ao consultar identidade da conexão real com o PostgreSQL: ${err?.message || "Erro desconhecido"}`
+      reason: "Falha ao consultar identidade ou privilégios da conexão com o PostgreSQL: erro de comunicação ou permissão no servidor."
     };
   }
 }
