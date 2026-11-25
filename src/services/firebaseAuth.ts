@@ -1,5 +1,4 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
 import { 
   getAuth, 
   signInWithPopup, 
@@ -16,7 +15,6 @@ import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 // Ensure persistent session in browser storage via Firebase Auth
 setPersistence(auth, browserLocalPersistence).catch(err => {

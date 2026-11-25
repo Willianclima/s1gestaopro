@@ -164,7 +164,6 @@ export default function Usuarios({
   const [isAddressValidated, setIsAddressValidated] = useState<boolean>(false);
   const [notes, setNotes] = useState("");
   const [userType, setUserType] = useState<"requisitante" | "gestor" | "gestor_servicos" | "admin">("requisitante");
-  const [password, setPassword] = useState("");
   const [workLocation, setWorkLocation] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   
@@ -217,7 +216,6 @@ export default function Usuarios({
       setIsAddressValidated(client.isAddressValidated || false);
       setNotes(client.notes);
       setUserType(client.userType || "requisitante");
-      setPassword(client.password || "123");
       setWorkLocation(client.workLocation || "");
       setWarehouseId(client.warehouseId || "");
       setIsTechnician(client.isTechnician || false);
@@ -240,7 +238,6 @@ export default function Usuarios({
       setIsAddressValidated(false);
       setNotes("");
       setUserType("requisitante");
-      setPassword("123");
       setWorkLocation("");
       setWarehouseId("");
       setIsTechnician(false);
@@ -272,7 +269,6 @@ export default function Usuarios({
         isAddressValidated,
         notes,
         userType,
-        password: password || "123",
         workLocation: workLocation || undefined,
         warehouseId: warehouseId || undefined,
         isTechnician,
@@ -298,7 +294,6 @@ export default function Usuarios({
         notes,
         createdAt: new Date().toISOString(),
         userType,
-        password: password || "123",
         status: "ativo",
         workLocation: workLocation || undefined,
         warehouseId: warehouseId || undefined,
@@ -1071,18 +1066,6 @@ export default function Usuarios({
                     placeholder="Ex: anasilveira@gmail.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-705 uppercase tracking-wider mb-1.5">Senha de Acesso *</label>
-                  <input
-                    type="text"
-                    required
-                    className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-slate-500/10 focus:border-slate-800 bg-slate-50/50 transition-all font-medium text-slate-700"
-                    placeholder="Ex: 123"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
                   />
                 </div>
 

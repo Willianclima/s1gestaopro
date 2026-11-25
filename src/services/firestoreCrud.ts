@@ -12,7 +12,9 @@ import {
   getDocFromServer,
   Unsubscribe 
 } from 'firebase/firestore';
-import { db, auth } from './firebaseAuth';
+import { auth } from './firebaseAuth';
+// Deprecated: Firestore is completely deactivated in favor of PostgreSQL exclusive persistence.
+const db: any = null;
 import type { 
   UserDb, 
   NewUserDb, 

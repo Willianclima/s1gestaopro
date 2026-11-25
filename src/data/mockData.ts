@@ -36,7 +36,6 @@ export const INITIAL_USUARIOS: Client[] = [
     notes: "Cliente preferencial. Sempre avisar antes de vir.",
     createdAt: "2026-05-10T10:00:00Z",
     userType: "requisitante",
-    password: "123",
     status: "ativo"
   },
   {
@@ -49,7 +48,6 @@ export const INITIAL_USUARIOS: Client[] = [
     notes: "Acesso ao servidor deve ser supervisionado pela equipe de segurança cibernética.",
     createdAt: "2026-05-15T14:30:00Z",
     userType: "gestor",
-    password: "123",
     status: "ativo"
   },
   {
@@ -62,7 +60,6 @@ export const INITIAL_USUARIOS: Client[] = [
     notes: "Atendimento preferencialmente fora do horário comercial (após as 18h) para não atrapalhar atendimentos.",
     createdAt: "2026-05-25T11:45:00Z",
     userType: "requisitante",
-    password: "123",
     status: "ativo"
   }
 ];

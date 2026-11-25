@@ -12,7 +12,6 @@ export interface Client {
   notes: string;
   createdAt: string;
   userType?: "requisitante" | "gestor" | "gestor_servicos" | "admin";
-  password?: string;
   status?: "ativo" | "pendente_autorizacao";
   failedAttempts?: number;
   blocked?: boolean;
@@ -116,7 +115,6 @@ export interface Professional {
   specialty: string; // matches ServiceCategory.name
   specialties?: string[]; // Multiple technical categories if userType is "profissional"
   userType?: "profissional" | "requisitante" | "gestor";
-  password?: string;
   failedAttempts?: number;
   blocked?: boolean;
   workLocation?: string; // Local de trabalho
