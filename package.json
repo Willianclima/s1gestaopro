@@ -16,7 +16,7 @@
     "clean": "rm -rf dist server.js",
     "firestore:indexes": "tsx scripts/manage-firestore-indexes.ts",
     "lint": "tsc --noEmit",
-    "test:unit": "cross-env tsx tests/preflight-isolation.unit.test.ts",
+    "test:unit": "cross-env tsx tests/preflight-isolation.unit.test.ts && cross-env NODE_ENV=test tsx tests/firestore-migration-block.unit.test.ts",
     "test:security": "cross-env tsx tests/security-auth.test.ts",
     "test": "npm run test:unit && npm run test:security"
   },

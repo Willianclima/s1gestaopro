@@ -202,11 +202,3 @@ export async function deletePostgresServiceCategory(id: string): Promise<{ succe
   return res.json();
 }
 
-export async function triggerFirestoreToPostgresMigration() {
-  const res = await fetch("/api/postgres/migrate-from-firestore", {
-    method: "POST",
-    headers: getApiAuthHeaders(),
-  });
-  if (!res.ok) throw new Error("Erro ao acionar migração ETL do Firestore para o PostgreSQL");
-  return res.json();
-}

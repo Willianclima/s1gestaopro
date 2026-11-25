@@ -660,9 +660,9 @@ async function runSecurityTestSuite() {
     assert(resReqAiLogs.status === 403, "Requisitante impedido de executar auditoria de logs com IA", "403", String(resReqAiLogs.status));
 
     // =============================================================
-    // GRUPO 5: Rota de migração recusada para não administradores (403)
+    // GRUPO 5: Rota de migração bloqueada permanentemente (403 não-admin / 410 admin)
     // =============================================================
-    console.log("\n📌 Grupo 5: Rota de migração recusada para não administradores (403)");
+    console.log("\n📌 Grupo 5: Rota de migração recusada para não administradores (403) e desativada para admin (410)");
 
     const resMigrateReq = await fetch(`${baseUrl}/api/postgres/migrate-from-firestore`, {
       method: "POST",
@@ -681,6 +681,18 @@ async function runSecurityTestSuite() {
       headers: { "Authorization": `Bearer ${gestorToken}` }
     });
     assert(resMigrateGestor.status === 403, "Gestor bloqueado na rota de migração (apenas Administrador)", "403", String(resMigrateGestor.status));
+
+    const resMigrateAdmin = await fetch(`${baseUrl}/api/postgres/migrate-from-firestore`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${adminToken}` }
+    });
+    const migrateAdminBody = await resMigrateAdmin.json().catch(() => ({}));
+    assert(
+      resMigrateAdmin.status === 410 && migrateAdminBody?.success === false,
+      "Administrador também recebe 410 Gone na rota desativada de migração Firestore",
+      "410 (success: false)",
+      `${resMigrateAdmin.status} (success: ${String(migrateAdminBody?.success)})`
+    );
 
     // =============================================================
     // GRUPO 6: Usuário comum não acessa registros fora do seu escopo (403 / Isolamento)

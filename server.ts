@@ -44,7 +44,6 @@ import {
   createUserAccount
 } from "./src/db/repository.ts";
 import argon2 from "argon2";
-import { runFirestoreToPostgresMigration } from "./scripts/migrate-firestore-to-postgres.ts";
 import { validateCPFAlgorithm } from "./src/utils/cpfValidator.ts";
 import type { Client } from "./src/types.ts";
 import type { UsuarioDb } from "./src/db/schema.ts";
@@ -1742,15 +1741,12 @@ app.delete("/api/postgres/service-categories/:id", requireAuth as any, requireGe
   }
 });
 
-// POST /api/postgres/migrate-from-firestore (Trigger ETL Migration - Restrito estritamente a Administradores)
-app.post("/api/postgres/migrate-from-firestore", requireAuth as any, requireAdmin as any, async (req: AuthRequest, res) => {
-  try {
-    const result = await runFirestoreToPostgresMigration();
-    res.json(result);
-  } catch (error: any) {
-    console.error("Erro ao executar migração ETL:", error);
-    res.status(500).json({ error: "Erro interno ao executar migração ETL do Firestore para o PostgreSQL." });
-  }
+// ALL /api/postgres/migrate-from-firestore (Bloqueado permanentemente — PostgreSQL é a única fonte de persistência)
+app.all("/api/postgres/migrate-from-firestore", requireAuth as any, requireAdmin as any, (_req: AuthRequest, res) => {
+  return res.status(410).json({
+    success: false,
+    error: "Endpoint desativado permanentemente (410 Gone): a migração Firestore -> PostgreSQL foi bloqueada. O PostgreSQL é a única fonte de persistência operacional."
+  });
 });
 
 // Proxy route for secure WhatsApp API calls (Restrito a Gestores e Administradores)
